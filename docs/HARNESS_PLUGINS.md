@@ -153,6 +153,12 @@ Every harness runs inside a Linux Landlock ABI 6+ kernel sandbox:
 4. **Read-Only System & Checkouts**: All system directories (`/usr`, `/lib`, `/bin`) and main project git checkouts (`~/code`) are strictly read-only.
 5. **Secrets & Network Isolation**: Secrets outside `pass_env` and network interfaces outside allowed ports are blocked at the kernel level.
 
+### Headless Context Isolation (`CONTEXT_FILE_NAMES`)
+
+When running agent CLIs unattended in ephemeral worktrees, tools like Goose default to scanning parent and working directories for context files (`AGENTS.md`, `.goosecontext`, `CONVENTIONS.md`). In multi-agent or developer workspaces, these files frequently contain human-in-the-loop guidelines (e.g. "ask the user before destructive ops", "prompt the operator for interactive choices").
+
+In unattended headless worker runs, ingesting interactive guidelines causes models to stall, prompt non-existent operators, or output markdown proposals instead of executing tool calls. To prevent this, the Goose harness enforces `CONTEXT_FILE_NAMES="[]"` in headless execution when `profile` is not set, ensuring the task prompt is the sole, unambiguous directive. Custom conventions can be provided directly in the task contract or by specifying a named profile (`profile = "my-profile"` in `fleet.toml`).
+
 ---
 
 ## 5. Packaging and Entry Point Registration
