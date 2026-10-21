@@ -368,6 +368,12 @@ ruff check --select F,E9,B src tests
 
 `AGENTS.md` is the contract for agents working on this repository.
 
+## Community & Support
+
+* **Nostr:** Reach the operator via [`cipherfox@sovgrid.org`](https://njump.me/cipherfox@sovgrid.org) or follow the grid at [`@sovgrid`](https://njump.me/blog@sovgrid.org).
+* **Matrix:** Real-time grid alerts and approvals via Matrix (configured in `fleet.toml`).
+* **Value-for-Value:** Independent open-source development funded directly by operators without venture capital. Support the stack via Bitcoin Lightning or grants at [sovgrid.org/support](https://sovgrid.org/support/).
+
 ## License
 
 [MIT](LICENSE)
