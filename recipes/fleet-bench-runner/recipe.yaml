@@ -1,0 +1,86 @@
+version: 1.0.0
+title: Sovereign Fleet Benchmark Suite Runner
+description: Executes reproducible coding benchmarks across agent harnesses (Goose, Aider, OpenCode, Pi, Claude Code) and models using Sovereign Fleet MCP tools and sandbox environments.
+instructions: |
+  You are an automated benchmark runner for Sovereign Fleet.
+
+  Workflow:
+  1. Setup & Environment:
+     - Verify test environment, scratch directories, and target benchmark fixtures.
+     - Inspect available harnesses and models via `fleet harnesses list` or `fleet roster`.
+  2. Task Dispatch:
+     - Dispatch benchmark tasks through the Sovereign Fleet MCP server (`fleet_dispatch_task`) or directly via CLI.
+     - Specify target harness (`{{ harness }}`) and model (`{{ model }}`).
+  3. Monitoring & Completion:
+     - Monitor running tasks using `fleet_get_task_status`.
+     - Await completion of all benchmark tasks up to the timeout.
+  4. Receipt Collection & Scoring:
+     - Retrieve execution receipts (`fleet_get_task_receipt`).
+     - Check exit codes, changed files, and GateGuard verification status.
+     - Calculate aggregate metrics: pass rate (landed / total), first-try pass rate, and median duration.
+  5. Report Generation:
+     - Output a structured Markdown report summarizing benchmark results.
+prompt: |
+  Run the Sovereign Fleet benchmark suite:
+  - Benchmark Tier: {{ tier }}
+  - Harness: {{ harness }}
+  - Model: {{ model }}
+  - Output Report: {{ output_report }}
+
+  Steps:
+  1. Check harness and model status:
+     `fleet harnesses list`
+  2. Run the benchmark suite:
+     `python3 {{ bench_script }} --tier {{ tier }} --lanes {{ model }}`
+  3. Save benchmark summary to {{ output_report }}.
+extensions:
+- type: builtin
+  name: developer
+  description: Executes commands and collects benchmark metrics
+  display_name: Developer
+  timeout: 600
+  bundled: true
+- type: stdio
+  name: fleet
+  description: Sovereign Fleet MCP server for task dispatch and monitoring
+  cmd: python3
+  args:
+  - -m
+  - fleet.api.mcp_server
+  envs: {}
+  env_keys: []
+  timeout: 300
+  cwd: null
+  bundled: null
+activities:
+- Verify harness and model connectivity
+- Dispatch benchmark tasks across test fixtures
+- Collect execution receipts and gate verification logs
+- Compute aggregate pass rates and duration metrics
+- Generate benchmark comparison report
+parameters:
+- key: tier
+  input_type: string
+  requirement: optional
+  description: Benchmark tier level (1 for quick smoke, 2 for full suite)
+  default: '1'
+- key: bench_script
+  input_type: string
+  requirement: optional
+  description: Path to the benchmark runner script
+  default: scripts/bench.py
+- key: harness
+  input_type: string
+  requirement: optional
+  description: Harness to evaluate (e.g. goose, aider, opencode, pi, claude-code)
+  default: goose
+- key: model
+  input_type: string
+  requirement: optional
+  description: Model endpoint identifier (e.g. local_qwen, claude-3.7-sonnet)
+  default: local_qwen
+- key: output_report
+  input_type: string
+  requirement: optional
+  description: Path to save the benchmark markdown report
+  default: ~/.fleet/state/benchmark-report.md

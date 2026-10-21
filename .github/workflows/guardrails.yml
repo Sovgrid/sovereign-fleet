@@ -1,0 +1,27 @@
+name: PR Guardrails
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  guardrails:
+    name: Scope & Gate Guardrails
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Guardrail Checks
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_REF: origin/${{ github.base_ref }}
+        run: |
+          python3 scripts/check_pr_guardrails.py --pr-body "$PR_BODY" --base-ref "$BASE_REF"

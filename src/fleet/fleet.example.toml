@@ -1,0 +1,146 @@
+# Sovereign Fleet configuration
+#
+# Location: $FLEET_CONFIG, else ~/.config/sovereign-fleet/fleet.toml. Every value is optional;
+# what is left out takes the default shown here. Environment variables override the file
+# (named next to each value). Check the result with `fleet config show` and `fleet config check`.
+
+[fleet]
+root = "~/.fleet"                 # task spool and worktrees            (FLEET_ROOT)
+coordinator = "unset"             # name shown in the dashboard         (FLEET_COORDINATOR)
+
+[daemon]
+host = "127.0.0.1"                # loopback; a VPN address to reach it from your phone
+port = 8444
+tls_cert = ""                     # e.g. the machine's Tailscale certificate
+tls_key = ""
+token_file = ""                   # default ~/.config/sovereign-fleet/api_token (FLEET_TOKEN_FILE)
+
+[backend]
+kind = "local"                    # "local", or "grid" to front an existing grid runner (FLEET_BACKEND)
+grid_runner_dir = ""              # the grid runner's dispatcher.py (FLEET_GRID_RUNNER_DIR)
+max_concurrent = 1                # tasks the daemon's executor runs at once
+
+[sandbox]
+# Agents may always connect to 443, 80 and 53. Add your local model servers here
+# (vLLM, Ollama on 11434, ...).                                          (FLEET_SANDBOX_PORTS adds)
+ports = []
+read_only = []                    # extra paths agents may read, e.g. your other repositories
+writable = []                     # extra paths agents may write; keep this short
+gate_writable = []                # extra paths gates may write (tool caches); gates run sandboxed too
+# Switching the sandbox off is not a config value: only FLEET_SANDBOX=0 in the environment.
+
+[secrets]
+dir = ""                          # key files the roster looks for (existence only, never read);
+                                  # default ~/.config/sovereign-fleet/secrets (SOVEREIGN_SECRETS)
+
+[grid_status]
+url = ""                          # optional API that reports quota-blocked lanes (FLEET_GRID_STATUS_URL)
+token_file = ""                   # its bearer token                    (FLEET_GRID_TOKEN_FILE)
+
+[gitea]
+url = ""                          # your Gitea: pull requests and issue intake on it
+token_file = ""                   # a token with repository write access (issues: read and comment)
+
+[plugins]
+# A credential plugin supplies lanes' provider keys (a vault, a key manager): "package.module:Class",
+# or "entrypoint" for the class registered as "credentials" in the entry point group "fleet.plugins".
+# It is used only while the dashboard setting "Credential plugin" is on.
+credentials = ""                  # (FLEET_PLUGINS_CREDENTIALS)
+
+[routing]
+max_lanes = 3                     # lanes tried per task before it fails
+repair = true                     # one repair pass with the failure, on the same lane
+history = ""                      # optional: a grid runner's tasks.json to learn pass rates from
+history_exclude = []              # projects not to learn from, e.g. ["fleetbench"] for benchmark tasks
+switch_command = []               # loads a local lane's model: argv with "{model}" for its switch_to
+switch_local = false              # let the engine run switch_command; only if nothing else uses the model
+health_hour = 6                   # daily lane health check (local time); dead lanes leave the ranking
+catalog = "https://models.dev/api.json"   # model families and deprecations; "" switches it off
+discover = false                  # true: free tool-calling models no lane uses become auto_* lanes
+
+# Models: endpoints decoupled from harnesses. Compatibility is computed from declared
+# capabilities (tool calling, API kinds, privacy, context window, subscription/own-login).
+# Any compatible harness can run against any model endpoint.
+#
+# [models.qwen]
+# provider = "openai_compatible"    # openai_compatible | anthropic | google | mistral | groq | nvidia
+# base_url = "http://127.0.0.1:8000/v1"
+# model_id = "qwen3.6-35b"
+# cost = "local"                    # local | free | paid
+# private = true                    # sensitive tasks only go to private models
+# probe_url = "http://127.0.0.1:8000/v1"
+# max_parallel = 2                  # max parallel tasks on this model (0: unlimited)
+# context = 262144                  # context window in tokens
+# tool_calling = true               # whether model reliably supports tool calls
+#
+# [models.claude]
+# provider = "subscription"
+# own_login = true                  # subscription CLI manages login and authentication
+# model_fixed = true                # model is bundled with subscription login
+# cost = "paid"
+# private = false
+
+# Lanes: how to run a task. The router prefers the lane with the best measured pass rate for the
+# task's category divided by its cost (local and free 1, paid 3), and escalates in that order.
+
+# Example 1: Local model served by an OpenAI-compatible server (vLLM, Ollama, llama.cpp).
+# Steps try harnesses in order (for example goose, then aider if goose fails).
+# [lanes.local]
+# cost = "local"                  # local | free | paid
+# private = true                  # sensitive tasks only go to private lanes
+# max_parallel = 1                # tasks at once; a full lane goes behind lanes with room (0: no limit)
+# probe_url = "http://127.0.0.1:8000/v1"   # runs only while <probe_url>/models answers
+# switch_to = "qwen2.5-coder-32b" # the {model} for routing.switch_command
+# [[lanes.local.steps]]
+# harness = "goose"               # claude-code | opencode | goose | pi | aider
+# model = "openai/qwen2.5-coder-32b"
+# args = ["--openai-base-url", "http://127.0.0.1:8000/v1"]
+# [[lanes.local.steps]]           # tried when the step before failed or changed nothing
+# harness = "aider"
+# model = "openai/qwen2.5-coder-32b"
+# args = ["--openai-api-base", "http://127.0.0.1:8000/v1"]
+
+# Example 2: Free cloud model through opencode.
+# [lanes.free]
+# cost = "free"
+# provider = "groq"               # the key's name for a credential plugin
+# key_env = "GROQ_API_KEY"        # where the CLI reads the key; the only credential it sees
+# key_file = "groq_api.key"       # in [secrets] dir; used when no credential plugin supplies one
+# pass_env = []                   # further variables of the daemon this CLI may see
+# [[lanes.free.steps]]
+# harness = "opencode"
+# model = "groq/llama-3.3-70b-versatile-free"
+
+# Example 3: Paid commercial model provider lane with key_env and key_file.
+# [lanes.anthropic]
+# cost = "paid"
+# provider = "anthropic"
+# key_env = "ANTHROPIC_API_KEY"
+# key_file = "anthropic_api.key"
+# [[lanes.anthropic.steps]]
+# harness = "claude-code"
+# model = "claude-3-7-sonnet"
+
+# The repositories the fleet works on: `fleet run --project <name>` and task intents name them.
+# [projects.example]
+# path = "~/code/example"
+# aliases = ["demo"]
+# default_branch = "main"
+# gate = ["scripts/verify.sh"]    # the repo's own check; default: scripts/verify.sh, verify.sh or pytest
+# gate_timeout = 900
+# link_dirs = [".venv", "node_modules"]   # default: found automatically
+# landing = "branch"              # "branch" (keep for review), "merge" (fast-forward + push),
+#                                 # or "pull_request" (push + open a PR)
+# backend = "local"               # optional override: "local" or "grid" (strangler migration)
+# remote = "origin"
+# provider = "auto"               # "auto", "github" (gh CLI), "gitea" ([gitea] above) or "none"
+#
+# Tasks from this project's issues. Only an issue of a listed author with a valid ```fleet```
+# block runs unattended; every other issue waits for an approval in the dashboard.
+# [projects.example.intake]
+# enabled = true
+# provider = "auto"               # gitea / github / auto (from the remote)
+# repo = ""                       # "owner/name"; default: from the remote
+# label = "fleet"                 # only issues with this label; "" for every open issue
+# authors = ["your-login"]        # who may queue unattended tasks; empty: approval for all
+# interval_min = 5

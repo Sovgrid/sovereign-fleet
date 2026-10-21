@@ -1,0 +1,88 @@
+version: 1.0.0
+title: Sovereign Fleet Autonomous Self-Improvement Loop
+description: Analyzes failure autopsies from fleet task spools, drafts targeted AGENTS.md and lane prompt proposals, evaluates them via A/B benchmarks, and applies only proven improvements.
+instructions: |
+  You are an autonomous self-improvement agent for Sovereign Fleet.
+
+  Workflow:
+  1. Spool Ingestion & Autopsy Analysis:
+     - Run `python3 {{ lessons_script }}` to ingest failed task autopsies from the configured fleet spool (`{{ spool_path }}`).
+     - Identify recurrent failure clusters (such as test gate failures, scope creep, or clean-exit without changes).
+  2. Proposal Generation:
+     - Review generated candidate proposals in `{{ proposals_dir }}/agents-md-proposals/` and `{{ proposals_dir }}/lane-prompt-proposals/`.
+     - Select the newest or most impactful candidate proposal.
+  3. Strict A/B Evaluation:
+     - Execute the A/B evaluation using `python3 {{ eval_script }} --proposal <path>`.
+     - Enforce the strict proof rule: accept ONLY if landed tasks increase or execution is measurably faster with equal landed tasks.
+  4. Reporting & Merging:
+     - If rejected: log autopsy reason and mark proposal as discarded.
+     - If accepted with proof: prepare git commit or PR applying the rule to the target repository's `AGENTS.md` or lane prompt.
+prompt: |
+  Execute the Sovereign Fleet self-improvement cycle:
+  - Spool Path: {{ spool_path }}
+  - Proposals Directory: {{ proposals_dir }}
+  - Target Repo: {{ target_repo }}
+  - Dry Run: {{ dry_run }}
+
+  Steps:
+  1. Analyze spool autopsies:
+     `python3 {{ lessons_script }}`
+  2. Locate the latest generated proposal in `{{ proposals_dir }}/agents-md-proposals/` or `{{ proposals_dir }}/lane-prompt-proposals/`.
+  3. Run the evaluation driver:
+     `python3 {{ eval_script }} --proposal <latest_proposal> {% if dry_run == "true" %}--dry-run{% endif %}`
+  4. Output a summary of findings and the proof verdict.
+extensions:
+- type: builtin
+  name: developer
+  description: Executes scripts and git commands
+  display_name: Developer
+  timeout: 600
+  bundled: true
+- type: stdio
+  name: fleet
+  description: Sovereign Fleet MCP server
+  cmd: python3
+  args:
+  - -m
+  - fleet.api.mcp_server
+  envs: {}
+  env_keys: []
+  timeout: 300
+  cwd: null
+  bundled: null
+activities:
+- Ingest task autopsies and categorize error classes
+- Draft targeted rule or prompt directives
+- Execute A/B benchmark evaluation
+- Verify strict proof rule and document verdict
+parameters:
+- key: spool_path
+  input_type: string
+  requirement: optional
+  description: Spool directory or tasks file to analyze
+  default: ~/.fleet/spool/tasks.json
+- key: proposals_dir
+  input_type: string
+  requirement: optional
+  description: Directory containing generated candidate proposals
+  default: ~/.fleet/state/proposals
+- key: lessons_script
+  input_type: string
+  requirement: optional
+  description: Path to the autopsy analysis and proposal generator script
+  default: scripts/fleet-lessons.py
+- key: eval_script
+  input_type: string
+  requirement: optional
+  description: Path to the A/B proposal evaluation script
+  default: scripts/ab_proposal.py
+- key: target_repo
+  input_type: string
+  requirement: optional
+  description: Target project repository (e.g. sovereign-fleet)
+  default: sovereign-fleet
+- key: dry_run
+  input_type: string
+  requirement: optional
+  description: Run dry-run verification without GPU tasks (true or false)
+  default: 'true'

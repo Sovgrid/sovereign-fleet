@@ -1,0 +1,32 @@
+name: Bug Report
+description: Create a report to help us fix a bug in Sovereign Fleet
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for reporting an issue! Please verify your environment and include actionable logs.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the problem clearly.
+    validations:
+      required: true
+  - type: textarea
+    id: steps-to-reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands or configuration to reproduce the issue.
+      placeholder: |
+        1. Run `fleet ...`
+        2. Dispatch task ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS version, kernel (`uname -r`), Python version (`python3 --version`), and agent CLI versions.
+      render: shell
+    validations:
+      required: true

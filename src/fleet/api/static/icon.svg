@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="96" fill="#090a0f"/>
+  <rect x="16" y="16" width="480" height="480" rx="80" fill="none" stroke="#212638" stroke-width="4"/>
+  <!-- Matrix Grid Nodes -->
+  <g stroke="#06b6d4" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" fill="none">
+    <path d="M256 96 L384 192 L384 320 L256 416 L128 320 L128 192 Z"/>
+    <path d="M256 96 L256 416"/>
+    <path d="M128 192 L384 320"/>
+    <path d="M384 192 L128 320"/>
+  </g>
+  <!-- Center Core -->
+  <circle cx="256" cy="256" r="36" fill="#06b6d4"/>
+  <circle cx="256" cy="256" r="18" fill="#090a0f"/>
+  <!-- Satellite Nodes -->
+  <circle cx="256" cy="96" r="16" fill="#10b981"/>
+  <circle cx="384" cy="192" r="16" fill="#38bdf8"/>
+  <circle cx="384" cy="320" r="16" fill="#a855f7"/>
+  <circle cx="256" cy="416" r="16" fill="#f59e0b"/>
+  <circle cx="128" cy="320" r="16" fill="#a855f7"/>
+  <circle cx="128" cy="192" r="16" fill="#38bdf8"/>
+</svg>

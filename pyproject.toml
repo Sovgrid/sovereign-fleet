@@ -1,0 +1,61 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sovereign-fleet"
+version = "0.6.0"
+description = "Task queue, Landlock sandbox and dashboard for running coding-agent CLIs on your own machine"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Cipher Fox" }
+]
+urls = { Homepage = "https://sovgrid.org/fleet/", Repository = "https://github.com/sovgrid/sovereign-fleet", Issues = "https://github.com/sovgrid/sovereign-fleet/issues" }
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+    "httpx>=0.27.0",
+]
+
+[project.optional-dependencies]
+audio = [
+    "openai-whisper>=20231117",
+]
+matrix = [
+    "matrix-nio>=0.24.0",
+]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pyyaml>=6.0",
+    "ruff>=0.7.0",
+]
+
+[project.scripts]
+fleet = "fleet.api.cli:main"
+fleet-mcp = "fleet.api.mcp_server:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fleet"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

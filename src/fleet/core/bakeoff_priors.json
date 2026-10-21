@@ -1,0 +1,22 @@
+{
+  "goose": {
+    "alpha": 38.0,
+    "beta": 10.0,
+    "avg_duration_min": 1.27
+  },
+  "aider": {
+    "alpha": 39.0,
+    "beta": 9.0,
+    "avg_duration_min": 2.44
+  },
+  "pi": {
+    "alpha": 28.0,
+    "beta": 20.0,
+    "avg_duration_min": 2.92
+  },
+  "opencode": {
+    "alpha": 2.0,
+    "beta": 46.0,
+    "avg_duration_min": 0.27
+  }
+}

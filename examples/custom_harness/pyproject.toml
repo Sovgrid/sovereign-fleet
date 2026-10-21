@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sovereign-fleet-echo-agent"
+version = "0.1.0"
+description = "EchoAgent custom harness plugin for Sovereign Fleet"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "sovereign-fleet",
+]
+
+[project.scripts]
+echo-agent = "echo_agent.cli:main"
+
+[project.entry-points."fleet.harnesses"]
+echo-agent = "echo_agent.harness:EchoAgentHarness"
+
+[tool.hatch.build.targets.wheel]
+packages = ["echo_agent"]

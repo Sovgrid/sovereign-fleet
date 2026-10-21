@@ -1,0 +1,86 @@
+version: 1.0.0
+title: Sovereign Fleet A/B Proposal Evaluation
+description: Evaluates self-improvement proposals (AGENTS.md rules, lane prompts) by running benchmark A/B tests and enforcing the strict proof rule (kept only if better).
+instructions: |
+  You are an automated A/B evaluation driver for Sovereign Fleet improvement proposals.
+
+  Your objective:
+  1. Inspect the proposal at `{{ proposal_path }}`.
+  2. Parse the target type (`agents_md`, `lane_prompt`, or `kb`), target ID, failure class, and proposed addition.
+  3. Execute the benchmark evaluation in baseline (control) mode and variant (treatment with proposal applied) mode.
+     - If `{{ dry_run }}` is "true", run dry-run validation using fixture building and simulated metrics.
+     - Otherwise, run the real benchmark tasks using the specified harness (`{{ harness }}`) and model (`{{ model }}`).
+  4. Compare baseline vs variant metrics:
+     - Total tasks
+     - Landed tasks (clean exit with all verification gates green)
+     - First-try landed rate
+     - Median execution duration in minutes
+  5. Enforce the strict proof rule:
+     - REJECT immediately if variant landed tasks < baseline landed tasks.
+     - REJECT if equal landed tasks but first-try rate regressed.
+     - REJECT if performance is equal with no measurable speedup.
+     - ACCEPT ONLY IF landed tasks increased, or equal landed tasks with measurably faster median execution time.
+  6. Output a structured Markdown evaluation report with comparison table and final verdict ([ACCEPTED: PROVEN BETTER] or [REJECTED: NO IMPROVEMENT]).
+prompt: |
+  Evaluate the Sovereign Fleet improvement proposal:
+  - Proposal File: {{ proposal_path }}
+  - Target Harness: {{ harness }}
+  - Target Model: {{ model }}
+  - Dry Run: {{ dry_run }}
+
+  Steps:
+  1. Read the proposal file: `cat {{ proposal_path }}`
+  2. Run the evaluation driver:
+     `python3 {{ eval_script }} --proposal {{ proposal_path }} {% if dry_run == "true" %}--dry-run{% endif %}`
+  3. Format the comparison report with the strict proof rule verdict.
+  4. If accepted, indicate whether the proposal is ready to merge or land into production.
+extensions:
+- type: builtin
+  name: developer
+  description: Executes local scripts, shell commands, and reads benchmark files
+  display_name: Developer
+  timeout: 600
+  bundled: true
+- type: stdio
+  name: fleet
+  description: Sovereign Fleet MCP server for dispatching and monitoring background tasks
+  cmd: python3
+  args:
+  - -m
+  - fleet.api.mcp_server
+  envs: {}
+  env_keys: []
+  timeout: 300
+  cwd: null
+  bundled: null
+activities:
+- Parse proposal file and extract target directives
+- Run baseline benchmark evaluation
+- Run variant benchmark evaluation with proposal applied
+- Enforce strict proof rule comparison
+- Generate structured Markdown evaluation report
+parameters:
+- key: proposal_path
+  input_type: string
+  requirement: required
+  description: Path to the proposal markdown file to evaluate
+- key: eval_script
+  input_type: string
+  requirement: optional
+  description: Path to the A/B proposal evaluation script
+  default: scripts/ab_proposal.py
+- key: harness
+  input_type: string
+  requirement: optional
+  description: Harness to evaluate (e.g. goose, aider, opencode, pi)
+  default: goose
+- key: model
+  input_type: string
+  requirement: optional
+  description: Model endpoint identifier (e.g. local_qwen, claude-3.7-sonnet)
+  default: local_qwen
+- key: dry_run
+  input_type: string
+  requirement: optional
+  description: Whether to run dry-run validation (true or false)
+  default: 'true'
