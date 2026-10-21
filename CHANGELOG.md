@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it, instead of the "auto" the task was dispatched with.
 
 ### Fixed
+- Goose recipes: the script parameters (`eval_script`, `lessons_script`, `bench_script`)
+  defaulted to files this repository does not ship; they are required now, and each recipe's
+  README says what the script is called with and what it must print.
 - Pair routing without a `[models]` section: models derived from lanes kept each lane's
   CLI-specific id, so goose got aider's `openai/qwen3.6-35b` (HTTP 404) and could pair with
   `opencode/...` ids it cannot reach; one local model counted as several, and retired or

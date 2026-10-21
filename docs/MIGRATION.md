@@ -113,7 +113,7 @@ intake plugins          core (fleet.core)                         output plugins
      `cancelled`.
    - **6d autopsy and receipt:** done (2026-10-20). Every failed task gets the runner's autopsy
      (root cause, blocker, suggested action), stored on the task object for the KB learning
-     loop (ops/fleet-lessons.py); every finished task gets an atomic receipt in
+     loop (an installation's own lessons script, see `recipes/fleet-self-improvement`); every finished task gets an atomic receipt in
      `<spool>/receipts/<task_id>.json`.
    - **6e review loop:** done (2026-10-20). A landed feature gets a cross-lane review report
      (`reviews/<project>/<task_id>.md`) from an alternative lane; report gate validates length,

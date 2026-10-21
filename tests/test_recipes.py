@@ -115,9 +115,21 @@ def test_goose_recipe_render_cli(tmp_path: Path):
         str(eval_recipe),
         "--params",
         "proposal_path=/tmp/test-proposal.md",
+        "--params",
+        "eval_script=/tmp/ab_eval.py",
         "--render-recipe",
     ]
     res = subprocess.run(cmd, env=_isolated_goose_env(tmp_path), capture_output=True, text=True, check=False)
     assert res.returncode == 0, f"goose run --render-recipe failed: {res.stderr}"
     assert "/tmp/test-proposal.md" in res.stdout
+    assert "/tmp/ab_eval.py" in res.stdout
     assert "Sovereign Fleet A/B Proposal Evaluation" in res.stdout
+
+
+def test_script_parameters_have_no_default_pointing_at_unshipped_files():
+    """The repo ships no evaluation, lessons or benchmark script: their parameters are required."""
+    import yaml
+    for recipe in sorted(RECIPES_DIR.glob("*/recipe.yaml")):
+        for param in yaml.safe_load(recipe.read_text())["parameters"]:
+            if param["key"].endswith("_script"):
+                assert param["requirement"] == "required" and "default" not in param, (recipe, param)

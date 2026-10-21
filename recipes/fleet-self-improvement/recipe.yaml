@@ -68,14 +68,12 @@ parameters:
   default: ~/.fleet/state/proposals
 - key: lessons_script
   input_type: string
-  requirement: optional
-  description: Path to the autopsy analysis and proposal generator script
-  default: scripts/fleet-lessons.py
+  requirement: required
+  description: Path to your autopsy analysis script that writes proposals (see README)
 - key: eval_script
   input_type: string
-  requirement: optional
-  description: Path to the A/B proposal evaluation script
-  default: scripts/ab_proposal.py
+  requirement: required
+  description: Path to your A/B evaluation script (called with --proposal <file> [--dry-run]; see README)
 - key: target_repo
   input_type: string
   requirement: optional

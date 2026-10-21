@@ -66,9 +66,8 @@ parameters:
   description: Path to the proposal markdown file to evaluate
 - key: eval_script
   input_type: string
-  requirement: optional
-  description: Path to the A/B proposal evaluation script
-  default: scripts/ab_proposal.py
+  requirement: required
+  description: Path to your A/B evaluation script (called with --proposal <file> [--dry-run]; see README)
 - key: harness
   input_type: string
   requirement: optional
@@ -77,7 +76,7 @@ parameters:
 - key: model
   input_type: string
   requirement: optional
-  description: Model endpoint identifier (e.g. local_qwen, claude-3.7-sonnet)
+  description: Model endpoint identifier (a model name from `fleet models`, e.g. local_qwen)
   default: local_qwen
 - key: dry_run
   input_type: string
