@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 ### Changed
+- GitHub: issues and pull requests from outside the project get a check against the templates
+  (`.github/workflows/contribution-check.yml`, no LLM, no checkout of contributed code): one
+  comment that lists what is missing and the label `needs info`, updated when the author edits.
 - Goose recipes live in `recipes/<slug>/recipe.yaml` (one directory per recipe, the layout goose reads from a recipe repository), each with a README.
 
 ### Added
