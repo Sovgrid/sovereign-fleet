@@ -2,6 +2,8 @@
 reviewer selection, review task generation, and auto-fix loop termination.
 """
 
+from dataclasses import dataclass
+
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -304,3 +306,233 @@ async def test_engine_review_loop_full_cycle(tmp_path):
         engine._handle_review_loop(queued_fix, fix_result)
         assert "review_task_id" not in fix_result
         assert len(store.load_tasks()) == tasks_before  # No new task added! Loop stopped cleanly.
+
+
+# ── 5. Pair routing project & model exclusion tests ──────────────────────────
+
+
+@dataclass
+class _MockStep:
+    harness: str = ""
+    model: str = ""
+
+
+@dataclass
+class _MockLane:
+    steps: list = None
+
+    def __post_init__(self):
+        if self.steps is None:
+            self.steps = []
+
+
+def test_pick_reviewer_skips_author_model():
+    """pick_reviewer skips a lane whose step model matches the author's model id (stripping
+    provider prefixes like ``openai/``)."""
+    author_model = "qwen3.6-35b"
+    lanes = {
+        "qwen-lane": _MockLane(steps=[_MockStep(model="openai/qwen3.6-35b")]),
+        "claude-lane": _MockLane(steps=[_MockStep(model="claude-sonnet")]),
+    }
+    # qwen-lane should be skipped because its step model matches author_model
+    result = review.pick_reviewer("other-lane", list(lanes.keys()), author_model=author_model, lanes=lanes)
+    assert result == "claude-lane"
+
+
+def test_pick_reviewer_returns_none_when_all_same_model():
+    """With only same-model lanes, pick_reviewer returns None."""
+    lanes = {
+        "qwen-lane": _MockLane(steps=[_MockStep(model="openai/qwen3.6-35b")]),
+        "another-qwen": _MockLane(steps=[_MockStep(model="qwen3.6-35b")]),
+    }
+    result = review.pick_reviewer("other", list(lanes.keys()), author_model="qwen3.6-35b", lanes=lanes)
+    assert result is None
+
+
+def test_build_review_task_includes_project():
+    """build_review_task puts the project name into metadata so the daemon can resolve it."""
+    task = FleetTask(
+        id="task-99",
+        text="do stuff",
+        lane="some-lane",
+        metadata={"category": "feature"},
+    )
+    rev_task = review.build_review_task(task, commit="aaa", reviewer_lane="reviewer-lane", project_name="myproj")
+    assert rev_task.metadata["project"] == "myproj"
+    assert rev_task.metadata["review_target"]["project"] == "myproj"
+    assert rev_task.metadata["allowed_paths"] == ["reviews/myproj/task-99.md"]
+
+
+@pytest.mark.asyncio
+async def test_pair_routed_feature_queues_review_with_project_metadata(tmp_path):
+    """A pair-routed feature task (no lane, metadata.project, resolved_model) queues a review
+    task whose metadata has project, correct allowed_paths, and a reviewer lane not using the
+    author's model."""
+    spool = tmp_path / "spool"
+    store = TaskStore(spool_dir=str(spool))
+
+    engine = FleetEngine(repo_path=str(tmp_path), task_store=store)
+    engine.lanes = {
+        "claude-lane": _MockLane(steps=[_MockStep(model="openai/sonnet")]),
+        "qwen-lane": _MockLane(steps=[_MockStep(model="openai/qwen3.6-35b")]),
+    }
+    engine.models = {}
+
+    # Pair-routed feature: no lane, but has resolved_model (model id) and metadata.project
+    feat_task = FleetTask(
+        id="task-1792617241276-c94344",
+        text="Add auth endpoint",
+        lane=None,
+        metadata={
+            "category": "feature",
+            "project": "fleet",
+            "resolved_harness": "goose",
+            "resolved_model": "qwen3.6-35b",
+        },
+    )
+    result = {"commit": "abc123", "lane": None}
+
+    with patch("fleet.core.engine.load_settings") as mock_settings:
+        mock_settings.return_value = FleetSettings(auto_review="features", review_autofix="high")
+
+        engine._handle_review_loop(feat_task, result)
+        assert "review_task_id" in result
+        rev_id = result["review_task_id"]
+        assert rev_id == "task-rev-task-1792617241276-c94344"
+
+        queued_rev = store.get_task(rev_id)
+        assert queued_rev is not None
+        assert queued_rev.metadata["project"] == "fleet"
+        assert queued_rev.metadata["review_target"]["project"] == "fleet"
+        assert queued_rev.metadata["allowed_paths"] == ["reviews/fleet/task-1792617241276-c94344.md"]
+        # The reviewer must not be a qwen3.6-35b lane (author's model)
+        assert queued_rev.lane == "claude-lane"  # not the same model as author
+
+
+@pytest.mark.asyncio
+async def test_pair_routed_no_reviewer_available_skips_review(tmp_path):
+    """When all lanes use the author's model, pick_reviewer returns None and no review task
+    is queued."""
+    spool = tmp_path / "spool"
+    store = TaskStore(spool_dir=str(spool))
+
+    engine = FleetEngine(repo_path=str(tmp_path), task_store=store)
+    engine.lanes = {
+        "qwen-lane": _MockLane(steps=[_MockStep(model="openai/qwen3.6-35b")]),
+        "another-qwen": _MockLane(steps=[_MockStep(model="qwen3.6-35b")]),
+    }
+    engine.models = {}
+
+    feat_task = FleetTask(
+        id="task-1792617241276-pair",
+        text="Add auth endpoint",
+        lane=None,
+        metadata={
+            "category": "feature",
+            "project": "myproj",
+            "resolved_harness": "goose",
+            "resolved_model": "qwen3.6-35b",
+        },
+    )
+    result = {"commit": "def456", "lane": None}
+
+    with patch("fleet.core.engine.load_settings") as mock_settings:
+        mock_settings.return_value = FleetSettings(auto_review="features", review_autofix="high")
+
+        engine._handle_review_loop(feat_task, result)
+        # No reviewer lane available: no review task queued
+        assert "review_task_id" not in result
+
+
+def test_build_autofix_task_from_pair_routed_review_has_project_and_no_lane():
+    """An autofix task built from a review of a pair-routed task has metadata['project']
+    == 'fleet' and lane is None (the author lane is empty for pair-routed tasks)."""
+    review_task = FleetTask(
+        id="task-rev-task-pair-routed",
+        text="Review prompt",
+        lane="reviewer-lane",
+        metadata={
+            "category": "review",
+            "source": "fleet_review",
+            "review_of": "task-pair-routed",
+            "review_author_lane": "",
+            "review_target": {"project": "fleet", "commit": "abc123"},
+            "project": "fleet",
+            "allowed_paths": ["reviews/fleet/task-pair-routed.md"],
+        },
+    )
+
+    findings = [
+        {"id": "F-1", "severity": "high", "file": "src/auth.py", "title": "Missing check", "fix": "Add check"},
+    ]
+    fix_task = review.build_autofix_task(
+        review_task, findings, project_name="fleet", lanes=list()
+    )
+    assert fix_task is not None
+    assert fix_task.metadata["project"] == "fleet"
+    assert fix_task.lane is None
+
+
+def test_build_autofix_task_keeps_author_lane_when_in_lanes():
+    """With a real author lane present in lanes, the autofix task keeps that lane."""
+    review_task = FleetTask(
+        id="task-rev-task-feat",
+        text="Review prompt",
+        lane="reviewer-lane",
+        metadata={
+            "category": "review",
+            "source": "fleet_review",
+            "review_of": "task-feat",
+            "review_author_lane": "claude-lane",
+            "review_target": {"project": "fleet", "commit": "abc123"},
+            "project": "fleet",
+            "allowed_paths": ["reviews/fleet/task-feat.md"],
+        },
+    )
+
+    findings = [
+        {"id": "F-1", "severity": "critical", "file": "src/auth.py", "title": "Auth bypass", "fix": "Fix auth"},
+    ]
+    fix_task = review.build_autofix_task(
+        review_task, findings, project_name="fleet", lanes=["claude-lane", "qwen-lane"]
+    )
+    assert fix_task is not None
+    assert fix_task.lane == "claude-lane"
+
+
+def test_build_review_task_pair_routed_names_harness_model(tmp_path):
+    """The review prompt of a pair-routed task names goose/qwen3.6-35b (from
+    resolved_harness and resolved_model, not from a lane)."""
+    task = FleetTask(
+        id="task-1792617241276-c94344",
+        text="Add auth endpoint",
+        lane=None,
+        metadata={
+            "category": "feature",
+            "project": "fleet",
+            "resolved_harness": "goose",
+            "resolved_model": "qwen3.6-35b",
+        },
+    )
+    rev_task = review.build_review_task(
+        task, commit="abc123", reviewer_lane="claude-lane", project_name="fleet"
+    )
+    assert "goose/qwen3.6-35b" in rev_task.text
+    assert "Review task task-1792617241276-c94344" in rev_task.text
+
+def test_review_of_a_lane_routed_task_names_the_lane_that_did_the_work():
+    """The router fills metadata.resolved_lane, not task.lane: the review and its autofix
+    task must go by that lane."""
+    from fleet.core import review
+    from fleet.core.taskstore import FleetTask
+
+    task = FleetTask(id="task-lane-1", text="feature", metadata={
+        "category": "feature", "project": "fleet", "resolved_lane": "local_qwen",
+        "resolved_harness": "goose", "resolved_model": "qwen3.6-35b"})
+    rev = review.build_review_task(task, "abc123", reviewer_lane="nim_glm", project_name="fleet")
+    assert rev.metadata["review_author_lane"] == "local_qwen"
+    assert "landed by local_qwen" in rev.text
+    fix = review.build_autofix_task(rev, [{"id": "F-1", "severity": "high", "file": "src/x.py",
+                                           "title": "t", "fix": "f"}],
+                                    project_name="fleet", lanes=["local_qwen", "nim_glm"])
+    assert fix is not None and fix.lane == "local_qwen" and fix.metadata["project"] == "fleet"

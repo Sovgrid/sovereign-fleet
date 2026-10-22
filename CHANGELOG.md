@@ -6,23 +6,64 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.6.1] - 2026-10-22
+### Added
+- The isolation backend is a plugin interface (`SandboxBackend`, entry point group
+  `fleet.sandboxes`, `[sandbox] backend`); Landlock stays the default and only built-in.
+- Failover logging in `fleet.core.engine`: when a lane step hands over to the next one, or
+  when lane/pair routing moves on after a failure, the engine now logs one INFO line each
+  (task id, the failed lane or pair, the error cut to 200 characters, and what comes next).
+  An operator watching `journalctl --user -u sovereign-fleet` can now see why a task moved
+  from goose to aider to the next lane.
+
 ### Changed
 - GitHub: issues and pull requests from outside the project get a check against the templates
   (`.github/workflows/contribution-check.yml`, no LLM, no checkout of contributed code): one
   comment that lists what is missing and the label `needs info`, updated when the author edits.
+- PyPI: tagged releases are published by `.github/workflows/publish-pypi.yml` (trusted
+  publishing). The README links and the logo are absolute URLs, so they work on PyPI too.
+
+### Fixed
+- Landing onto a moved main lost the task's work while reporting "pushed": cleaning the
+  repo gate's side effects after the rebase folded the rebased commits back onto the task's
+  stale start commit and checked every file out again. The worktree now records the engine's
+  own commit and the rebased head (`WorktreeManager.mark_head`), and a branch with no commit
+  beyond main fails the landing instead of reporting one.
+- The cross-lane review loop never ran in the daemon: review tasks named the project by its
+  path, had no `metadata.project` and failed at once, and the reviewer could run the author's
+  model. They carry the fleet.toml project now; `pick_reviewer` skips the author's lane and
+  lanes on the author's model, and no review is queued when none is left.
+- Autofix tasks of the review loop had no `metadata.project` either, and ran on the author's
+  "lane" even when that was a model id; they carry the project now and go to the router when
+  the author is not a configured lane. Reviews name the author as the lane that did the work
+  (`resolved_lane`) or as `harness/model`.
+- Pair routing raised `IndexError` instead of failing the task when the last ranked pair
+  failed (in the failover log line).
+- Review and audit tasks dispatched by hand failed the report gate unless their prompt
+  described the findings block; the engine now adds the format and the report path to
+  their prompt (`FleetEngine._prompt`), as the review loop already did.
+- Goose recipes: the script parameters (`eval_script`, `lessons_script`, `bench_script`)
+  defaulted to files this repository does not ship; they are required now, and each recipe's
+  README says what the script is called with and what it must print.
+- `docs/EVALS_AND_BENCHMARKS.md` and the custom harness example describe only what ships: no
+  tools the repository does not contain, the required `eval_script`, a recipe install loop that
+  keeps each recipe, and a CLI command that exists.
+
+## [0.6.0] - 2026-10-21
+The code of these entries shipped in 0.6.0; at the tag they were still listed under Unreleased.
+
+### Changed (listed late)
 - Goose recipes live in `recipes/<slug>/recipe.yaml` (one directory per recipe, the layout goose reads from a recipe repository), each with a README.
 
-### Added
+### Added (listed late)
 - The task store knows what works on a running task: the engine writes `metadata.current`
   (lane, harness, model, start) before every step or pair and `resolved_lane`,
   `resolved_harness`, `resolved_model` when one passes (`TaskStore.update_metadata`). The
   dashboard shows "AUTO > goose (running)" while it runs and the pair that did the work after
   it, instead of the "auto" the task was dispatched with.
 
-### Fixed
-- Goose recipes: the script parameters (`eval_script`, `lessons_script`, `bench_script`)
-  defaulted to files this repository does not ship; they are required now, and each recipe's
-  README says what the script is called with and what it must print.
+### Fixed (listed late)
 - Pair routing without a `[models]` section: models derived from lanes kept each lane's
   CLI-specific id, so goose got aider's `openai/qwen3.6-35b` (HTTP 404) and could pair with
   `opencode/...` ids it cannot reach; one local model counted as several, and retired or
@@ -39,8 +80,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before they matched nothing, so the scope check rejected the change and the clean-up deleted
   the agent's new files in that directory as artifacts.
 
-
-## [0.6.0] - 2026-10-21
 ### Added
 - **Stranglerswitch per-project backend migration (Phase 6g)** (`fleet.core.backends`):
   - Support `backend = "local"` override per project under `[projects.<name>]` in `fleet.toml`.

@@ -21,6 +21,8 @@ grid_runner_dir = ""              # the grid runner's dispatcher.py (FLEET_GRID_
 max_concurrent = 1                # tasks the daemon's executor runs at once
 
 [sandbox]
+# Switch the sandbox backend (built-in: landlock).
+# backend = "landlock"
 # Agents may always connect to 443, 80 and 53. Add your local model servers here
 # (vLLM, Ollama on 11434, ...).                                          (FLEET_SANDBOX_PORTS adds)
 ports = []

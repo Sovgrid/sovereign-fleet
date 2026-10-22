@@ -25,12 +25,13 @@ all of the above, the command is not run. FLEET_SANDBOX=0 is the only way to run
 from __future__ import annotations
 
 import ctypes
+import importlib.metadata
 import logging
 import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Sequence
+from typing import Dict, List, Protocol, Sequence, runtime_checkable
 
 from fleet.core.config import _expand, load_config
 
@@ -119,19 +120,6 @@ def abi_version() -> int:
                                    ctypes.c_uint32(LANDLOCK_CREATE_RULESET_VERSION)))
     except (OSError, AttributeError):
         return 0
-
-
-def status() -> Dict[str, object]:
-    """What the sandbox will do for the next run, for the dashboard and the MCP server."""
-    abi = abi_version()
-    if sandbox_disabled():
-        return {"state": "disabled", "abi": abi,
-                "detail": "FLEET_SANDBOX=0: agents run unconfined"}
-    if abi < MIN_ABI:
-        return {"state": "unavailable", "abi": abi,
-                "detail": f"kernel Landlock ABI {abi} < {MIN_ABI}: harness runs are refused"}
-    return {"state": "enforced", "abi": abi,
-            "detail": "Landlock filesystem, tcp and scope rules plus seccomp unix-socket block"}
 
 
 class _Ruleset(ctypes.Structure):
@@ -262,15 +250,58 @@ def policy_for_worktree(worktree_dir: str, state_paths: Sequence[Path] = ()) -> 
                          ports=list(DEFAULT_PORTS) + extra_ports())
 
 
+@runtime_checkable
+class SandboxBackend(Protocol):
+    """Interface for sandbox backends.
+
+    A protocol with class-level ``name`` and classmethods ``is_supported`` / ``status``,
+    plus instance methods ``wrap`` and ``build_safe_env``.
+    """
+
+    name: str
+
+    def __init__(self, policy: SandboxPolicy) -> None:  # noqa: D107
+        ...
+
+    @classmethod
+    def is_supported(cls) -> bool:  # noqa: D102
+        ...
+
+    @classmethod
+    def status(cls) -> Dict[str, object]:  # noqa: D102
+        ...
+
+    def wrap(self, cmd: Sequence[str]) -> List[str]:  # noqa: D102
+        ...
+
+    def build_safe_env(self) -> Dict[str, str]:  # noqa: D102
+        ...
+
+
 class LandlockSandbox:
     """Turns a command into its sandboxed form and cleans the environment it runs with."""
+
+    name: str = "landlock"
 
     def __init__(self, policy: SandboxPolicy):
         self.policy = policy
 
-    @staticmethod
-    def is_supported() -> bool:
+    @classmethod
+    def is_supported(cls) -> bool:  # noqa: D102
         return abi_version() >= MIN_ABI
+
+    @classmethod
+    def status(cls) -> Dict[str, object]:  # noqa: D102
+        """What the sandbox will do for the next run, for the dashboard and the MCP server."""
+        abi = abi_version()
+        if sandbox_disabled():
+            return {"state": "disabled", "abi": abi,
+                    "detail": "FLEET_SANDBOX=0: agents run unconfined"}
+        if abi < MIN_ABI:
+            return {"state": "unavailable", "abi": abi,
+                    "detail": f"kernel Landlock ABI {abi} < {MIN_ABI}: harness runs are refused"}
+        return {"state": "enforced", "abi": abi,
+                "detail": "Landlock filesystem, tcp and scope rules plus seccomp unix-socket block"}
 
     def wrap(self, cmd: Sequence[str]) -> List[str]:
         """argv that runs cmd confined. Raises SandboxUnavailable instead of running unconfined."""
@@ -296,6 +327,65 @@ class LandlockSandbox:
         src = str(Path(__file__).resolve().parents[2])  # the dir holding the fleet package
         env["PYTHONPATH"] = os.pathsep.join(p for p in (src, env.get("PYTHONPATH", "")) if p)
         return env
+
+
+# ── Backend registry ──────────────────────────────────────────────────────────
+
+BUILTIN_BACKENDS: Dict[str, type] = {"landlock": LandlockSandbox}
+
+
+def backends() -> Dict[str, type]:
+    """Available sandbox backends: built-in plus entry points from ``fleet.sandboxes``."""
+    result: Dict[str, type] = dict(BUILTIN_BACKENDS)
+    try:
+        eps = importlib.metadata.entry_points(group="fleet.sandboxes")
+    except TypeError:
+        # Older Python (< 3.10) doesn't support the group filter
+        eps = importlib.metadata.entry_points()
+        eps = [ep for ep in eps if ep.group == "fleet.sandboxes"]
+    for ep in eps:
+        try:
+            cls = ep.load()
+        except Exception as e:  # noqa: BLE001
+            logger.error("sandbox entry point %s failed to load: %s", ep.name, e)
+            continue
+        if ep.name in result:
+            logger.error("sandbox entry point %s conflicts with built-in; skipping", ep.name)
+            continue
+        result[ep.name] = cls
+    return result
+
+
+def backend_name() -> str:
+    """The configured sandbox backend name."""
+    return load_config().sandbox.backend
+
+
+def make_sandbox(policy: SandboxPolicy) -> SandboxBackend:
+    """Instantiate the configured sandbox backend."""
+    known = backends()
+    name = backend_name()
+    cls = known.get(name)
+    if cls is None:
+        raise SandboxUnavailable(
+            f"unknown sandbox backend {name!r}; known: {', '.join(sorted(known))}"
+        )
+    return cls(policy)
+
+
+def status() -> Dict[str, object]:
+    """Dashboard/MCP status: what the *configured* backend will do for the next run."""
+    known = backends()
+    name = backend_name()
+    cls = known.get(name)
+    if cls is None:
+        return {
+            "backend": name,
+            "state": "unavailable",
+            "abi": abi_version(),
+            "detail": f"unknown sandbox backend {name!r}; known: {', '.join(sorted(known))}",
+        }
+    return {"backend": name, **cls.status()}
 
 
 def main(argv: Sequence[str]) -> int:

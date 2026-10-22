@@ -56,6 +56,7 @@ class BackendSection(_Strict):
 
 
 class SandboxSection(_Strict):
+    backend: str = "landlock"                            # sandbox backend name
     ports: List[int] = Field(default_factory=list)       # besides 443, 80, 53: local model servers
     read_only: List[str] = Field(default_factory=list)   # extra paths agents may read
     writable: List[str] = Field(default_factory=list)    # extra paths agents may write
@@ -467,6 +468,17 @@ def check(cfg: FleetConfig) -> List[str]:
     for p in cfg.sandbox.writable:
         if Path(_expand(p)) in (Path.home(), Path("/")):
             problems.append(f"sandbox.writable: '{p}' would make the sandbox pointless")
+    # sandbox.backend check (avoid import cycle by importing inside the function)
+    try:
+        from fleet.core.sandbox import backends
+        known_backends = set(backends())
+        if cfg.sandbox.backend not in known_backends:
+            problems.append(
+                f"sandbox.backend: unknown backend {cfg.sandbox.backend!r}; "
+                f"known: {', '.join(sorted(known_backends))}"
+            )
+    except Exception:  # noqa: BLE001
+        pass  # a broken sandbox module should not break check
     if cfg.daemon.host in ("0.0.0.0", "::"):
         problems.append("daemon.host listens on every interface; bind loopback or a VPN address")
     if cfg.plugins.credentials:

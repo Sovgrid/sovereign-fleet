@@ -292,7 +292,7 @@ class FleetEngine:
             if findings:
                 target_commit = (meta.get("review_target") or {}).get("commit", "")
                 project_name = (meta.get("review_target") or {}).get("project", "fleet")
-                fix_task = review.build_autofix_task(task, findings, commit=target_commit, project_name=project_name)
+                fix_task = review.build_autofix_task(task, findings, commit=target_commit, project_name=project_name, lanes=list(self.lanes or {}))
                 if fix_task:
                     try:
                         self.task_store.enqueue(fix_task)
@@ -313,10 +313,14 @@ class FleetEngine:
             if not commit:
                 return
 
-            author_lane = result.get("lane") or task.lane or meta.get("resolved_model") or ""
+            author_lane = meta.get("resolved_lane") or result.get("lane") or task.lane or ""
+            author_model = meta.get("resolved_model") or ""
+            project_name = meta.get("project") or (meta.get("intent") or {}).get("project") or Path(self.repo_path).name or "fleet"
             available = list(self.lanes.keys()) if self.lanes else list(self.models.keys()) if self.models else []
-            reviewer = review.pick_reviewer(author_lane, available)
-            project_name = self.project.path if self.project else Path(self.repo_path).name or "fleet"
+            reviewer = review.pick_reviewer(author_lane, available, author_model=author_model, lanes=self.lanes)
+            if reviewer is None:
+                logger.info("No reviewer lane available for task %s (all lanes use the author's model), skipping review", task.id)
+                return
             rev_task = review.build_review_task(task, commit, reviewer_lane=reviewer, project_name=project_name)
             try:
                 self.task_store.enqueue(rev_task)
@@ -371,7 +375,7 @@ class FleetEngine:
         attempts: List[Dict[str, Any]] = []
         failure = ""
         last: Dict[str, Any] = {}
-        for pair in pairs[:self.routing.max_lanes]:
+        for idx, pair in enumerate(pairs[:self.routing.max_lanes]):
             endpoint = self.models.get(pair.model)
             model_id = endpoint.model_id if endpoint is not None else pair.model
             self._report(task, current={"harness": pair.harness, "model": pair.model,
@@ -392,6 +396,17 @@ class FleetEngine:
                 return "completed", {**last, "attempts": attempts, "ranking": ranked}
             attempts.append({**attempt, "error": str(last.get("error") or "")[:300]})
             failure = str(last.get("error") or last.get("stderr") or last.get("stdout") or "")
+            if idx + 1 < len(pairs):
+                next_model_id = self.models.get(pairs[idx+1].model)
+                if next_model_id is not None:
+                    next_model_id = next_model_id.model_id
+                else:
+                    next_model_id = pairs[idx+1].model
+                next_pair = f"{pairs[idx+1].harness}/{next_model_id}"
+            else:
+                next_pair = "none left"
+            logger.info("%s: pair %s/%s failed (%s), moving to %s",
+                        task.id, pair.harness, model_id, failure[-200:], next_pair)
         return "failed", {**last, "attempts": attempts, "ranking": ranked}
 
     async def _execute_pair(self, task: FleetTask, worktree_dir: str, harness_name: str,
@@ -463,6 +478,19 @@ class FleetEngine:
                        "and change nothing else.")
         if task.metadata.get("gateguard_pre_action", True):
             prompt = f"{prompt}\n\n{GateGuard.PRE_ACTION_DIRECTIVE}\n"
+        # Ensure review/audit tasks get the findings format rule when not already present.
+        if task.metadata.get("category") in ("review", "audit") and "```findings" not in prompt:
+            allowed: List[str] = list(task.metadata.get("allowed_paths") or [])
+            report_paths = [p for p in allowed if str(p).endswith((".md", ".json"))]
+            if report_paths:
+                path_hint = f" Write it to {', '.join(report_paths)}."
+            else:
+                path_hint = ""
+            prompt = (
+                f"{prompt}\n\n"
+                f"-{path_hint} The report needs a '## Findings' heading before the block.\n"
+                f"{review.FINDINGS_RULE}"
+            )
         return prompt
 
     def _lane_env(self, spec: LaneSpec) -> Dict[str, str]:
@@ -480,6 +508,10 @@ class FleetEngine:
         for step in spec.steps:
             if tried:  # why the step before handed over, for the attempt record
                 tried[-1]["why"] = _last_line(res.get("stderr") or res.get("stdout") or "")
+                why = tried[-1]["why"]
+                task_id = task.id if task else "-"
+                logger.info("%s: lane %s step %s/%s handed over: %s",
+                            task_id, lane, len(tried) + 1, len(spec.steps), why)
             harness = self.harnesses.get(step.harness)
             tried.append({"harness": step.harness, "model": step.model})
             if harness is None:
@@ -586,7 +618,7 @@ class FleetEngine:
         attempts: List[Dict[str, Any]] = []
         failure = ""
         last: Dict[str, Any] = {}
-        for choice in ranking:
+        for idx, choice in enumerate(ranking):
             lane = choice.lane
             why = await self._not_ready(lane)
             if why:  # not the lane's fault: no attempt is recorded against it
@@ -620,6 +652,9 @@ class FleetEngine:
                              resolved_model=m_name or None)
                 return "completed", {**last, "lane": lane, "attempts": attempts, "ranking": ranked}
             failure = last.get("error", "verification failed")
+            next_lane = ranking[idx + 1].lane if idx + 1 < len(ranking) else "none left"
+            logger.info("%s: lane %s failed (%s), moving to %s",
+                        task.id, lane, failure[-200:], next_lane)
             attempts.append({**outcome, "passed": False, "error": failure[-300:]})
         return "failed", {**{k: v for k, v in last.items() if k not in ("exit_code", "error")},
                           "error": f"{len(attempts)} lane(s) failed; last: {failure[-300:]}",

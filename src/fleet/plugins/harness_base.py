@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 from fleet.core.gates import kill_group
 from fleet.core.models import ModelAdapterResult, ModelEndpoint
 from fleet.core.quirks import resolve_opencode_model
-from fleet.core.sandbox import LandlockSandbox, SandboxUnavailable, policy_for_worktree
+from fleet.core.sandbox import SandboxUnavailable, make_sandbox, policy_for_worktree
 from fleet.plugins.base import HarnessPlugin, PluginKind, PluginMeta
 
 logger = logging.getLogger("fleet.plugins.harness")
@@ -119,7 +119,7 @@ class CliHarness(HarnessPlugin):
         section_paths = (section.state_paths or []) if section is not None else []
         effective_paths = self.state_paths + tuple(Path(p) for p in section_paths)
 
-        sandbox = LandlockSandbox(policy_for_worktree(worktree_dir, effective_paths))
+        sandbox = make_sandbox(policy_for_worktree(worktree_dir, effective_paths))
         try:
             argv = sandbox.wrap([*self.build_command(task.get("text", ""), model), *section_args, *args])
         except SandboxUnavailable as e:

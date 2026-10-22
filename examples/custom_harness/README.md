@@ -37,5 +37,6 @@ This directory contains a complete, working example of an external harness plugi
 
 4. Dispatch a task targeting the new harness:
    ```bash
-   fleet dispatch "Generate test scaffolding" --metadata '{"harness":"echo-agent"}'
+   fleet run --harness echo-agent "Generate test scaffolding"
    ```
+   A running daemon takes the same task through its API or the MCP tool `fleet_dispatch_task` with `"harness": "echo-agent"`.

@@ -166,6 +166,17 @@ class WorktreeManager:
                            worktree_dir)
             await _git("-C", worktree_dir, "reset", "-q", "--soft", base)
 
+    async def mark_head(self, worktree_dir: str) -> None:
+        """The branch's current HEAD is the engine's own: after its commit or the landing's
+        rebase. `_settle` folds only commits made after this point back into the tree; without
+        it a rebased branch was reset onto its stale start commit and the work checked out."""
+        key = str(Path(worktree_dir))
+        if key not in self._base:
+            return
+        code, head, _ = await _git("-C", worktree_dir, "rev-parse", "HEAD")
+        if code == 0:
+            self._base[key] = (head.strip(), self._base[key][1])
+
     async def tracked_changes(self, worktree_dir: str) -> List[str]:
         """Tracked files changed against HEAD, staged or not."""
         await self._settle(worktree_dir)
@@ -221,7 +232,10 @@ class WorktreeManager:
             if code != 0:
                 return False, f"git commit failed: {err.strip()}"
             code, sha, err = await _git("-C", worktree_dir, "rev-parse", "HEAD")
-            return (True, sha.strip()) if code == 0 else (False, f"git rev-parse failed: {err.strip()}")
+            if code != 0:
+                return False, f"git rev-parse failed: {err.strip()}"
+            await self.mark_head(worktree_dir)
+            return True, sha.strip()
         except OSError as e:
             return False, f"git not runnable: {e}"
 

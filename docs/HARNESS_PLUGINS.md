@@ -41,6 +41,34 @@ A task dispatches to a `(harness, model)` pair. The fleet core queries the harne
 
 ---
 
+## Isolation backends
+
+A backend turns an agent's argv into its confined form (``wrap``) and strips credentials
+from the environment (``build_safe_env``). Register under the ``fleet.sandboxes`` entry
+point group:
+
+```toml
+[project.entry-points."fleet.sandboxes"]
+my-backend = "my_sandbox:MySandboxBackend"
+```
+
+The ``SandboxBackend`` protocol (``fleet.core.sandbox``) requires:
+
+| Member | Description |
+| :--- | :--- |
+| ``name: str`` | Identifier, used in ``fleet.toml``. |
+| ``__init__(self, policy: SandboxPolicy)`` | Receives the run's paths. |
+| ``is_supported() -> bool`` | Can this backend enforce isolation? |
+| ``status() -> dict`` | Dashboard/MCP status snapshot. |
+| ``wrap(self, cmd) -> list`` | Returns confined argv; may raise ``SandboxUnavailable``. |
+| ``build_safe_env(self) -> dict`` | Credentials-stripped environment. |
+
+The configured backend is ``[sandbox] backend`` in ``fleet.toml`` (default ``"landlock"``).
+Landlock is the only built-in; conflicting entry points are skipped. Unknown or unsupported
+backends raise ``SandboxUnavailable`` and ``fleet config check`` reports the problem.
+
+---
+
 ## 2. The `CliHarness` Base Class
 
 Every CLI harness inherits from `fleet.plugins.harness_base.CliHarness` (which in turn implements `fleet.plugins.base.HarnessPlugin`).

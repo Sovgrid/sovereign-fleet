@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 from fleet.core.config import FleetConfig, HarnessSection, load_config
-from fleet.core.sandbox import MIN_ABI, LandlockSandbox, abi_version, policy_for_worktree
+from fleet.core.sandbox import MIN_ABI, abi_version, make_sandbox, policy_for_worktree
 from fleet.core.worktree import WorktreeManager
 from fleet.plugins.harness_base import CliHarness
 from fleet.plugins.registry import harness_registry
@@ -134,7 +134,7 @@ async def check_sandbox(harness: CliHarness, tmp_root: Path) -> ConformanceCheck
             message=f"Policy valid (Landlock ABI {current_abi} below enforcement threshold {MIN_ABI})",
         )
 
-    sandbox = LandlockSandbox(policy)
+    sandbox = make_sandbox(policy)
     allowed_file = wt_dir / "allowed_probe.txt"
     forbidden_file = Path.home() / f".fleet_sandbox_probe_{os.getpid()}_{time.monotonic_ns()}.tmp"
 

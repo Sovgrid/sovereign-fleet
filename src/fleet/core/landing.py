@@ -122,6 +122,7 @@ async def _merge(repo: Path, worktree: Path, branch: str, project: Project,
         if why:
             res.detail = f"does not rebase onto the moved {base}: {why}; work stays on {branch}"
             return res
+        await wt_mgr.mark_head(str(worktree))
         regate = await _regate(worktree, project)
         if regate is not None:
             regate.undone = await gates.undo_gate_side_effects(wt_mgr, worktree, set())
@@ -131,6 +132,9 @@ async def _merge(repo: Path, worktree: Path, branch: str, project: Project,
                 return res
     new = await _out("-C", str(repo), "rev-parse", branch)
     old = await _out("-C", str(repo), "rev-parse", base)
+    if (await _git("-C", str(repo), "merge-base", "--is-ancestor", branch, base))[0] == 0:
+        res.detail = f"{branch} holds no commit beyond {base}; nothing landed"
+        return res
     elsewhere = await _checked_out_elsewhere(repo, base)
     if elsewhere:
         res.detail = f"{base} is checked out in {elsewhere}; work stays on {branch}"

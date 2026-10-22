@@ -1,19 +1,19 @@
 <div align="center">
 
-<img src="src/fleet/api/static/icon.svg" width="112" height="112" alt="Sovereign Fleet Logo">
+<img src="https://raw.githubusercontent.com/Sovgrid/sovereign-fleet/main/src/fleet/api/static/icon-512.png" width="112" height="112" alt="Sovereign Fleet Logo">
 
 # Sovereign Fleet
 
 **Kernel-sandboxed task queue, Thompson-sampling `(harness × model)` router, deterministic quality gates, and mobile-first control plane for autonomous coding-agent CLIs.**
 
 [![PyPI](https://img.shields.io/pypi/v/sovereign-fleet?style=flat-square&color=06b6d4)](https://pypi.org/project/sovereign-fleet/)
-[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-38bdf8?style=flat-square)](pyproject.toml)
+[![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-38bdf8?style=flat-square)](https://github.com/Sovgrid/sovereign-fleet/blob/main/pyproject.toml)
 [![Sandbox](https://img.shields.io/badge/sandbox-Landlock%20ABI%206%2B%20%2B%20seccomp-10b981?style=flat-square)](#security-model)
-[![Harnesses](https://img.shields.io/badge/harnesses-Goose%20%C2%B7%20Claude%20%C2%B7%20OpenCode%20%C2%B7%20Aider%20%C2%B7%20Pi-a855f7?style=flat-square)](docs/HARNESS_PLUGINS.md)
+[![Harnesses](https://img.shields.io/badge/harnesses-Goose%20%C2%B7%20Claude%20%C2%B7%20OpenCode%20%C2%B7%20Aider%20%C2%B7%20Pi-a855f7?style=flat-square)](https://github.com/Sovgrid/sovereign-fleet/blob/main/docs/HARNESS_PLUGINS.md)
 [![MCP](https://img.shields.io/badge/MCP-12%20tools-f59e0b?style=flat-square)](#api-and-mcp)
-[![Goose Recipes](https://img.shields.io/badge/Goose%20recipes-3-06b6d4?style=flat-square)](docs/EVALS_AND_BENCHMARKS.md)
+[![Goose Recipes](https://img.shields.io/badge/Goose%20recipes-3-06b6d4?style=flat-square)](https://github.com/Sovgrid/sovereign-fleet/blob/main/docs/EVALS_AND_BENCHMARKS.md)
 [![CI](https://github.com/Sovgrid/sovereign-fleet/actions/workflows/ci.yml/badge.svg)](https://github.com/Sovgrid/sovereign-fleet/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-64748b?style=flat-square)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-64748b?style=flat-square)](https://github.com/Sovgrid/sovereign-fleet/blob/main/LICENSE)
 
 [**What works today**](#what-works-today) · [**Why Sovereign Fleet?**](#why-sovereign-fleet) · [**Security model**](#security-model) · [**Quick start**](#quick-start) · [**API & MCP**](#api-and-mcp) · [**Plugins**](#plugins) · [**Roadmap**](#roadmap)
 
@@ -30,7 +30,7 @@ Sovereign Fleet runs coding-agent CLIs (**Goose**, **Claude Code**, **OpenCode**
 - **Verify Before Claim (Sandboxed Quality Gates):** An agent's report is a claim, not proof. Every run must pass scope checks (`allowed_paths` + companion tests), AST syntax checks, the repository's own gate (`scripts/verify.sh` or `pytest`), and the task gate inside a credential-free sandbox before merging or opening a PR.
 - **Steer from Anywhere:** Dispatch and approve tasks from the installable mobile Web PWA (`/#token=...`), from coordinator agents via the 12-tool **MCP server**, by replying `!fleet approve <id>` in **Matrix**, or by labelling **GitHub / Gitea issues** with a ```` ```fleet ```` contract block.
 
-Status: **alpha (0.6.0)**. Read [What works today](#what-works-today) before relying on it.
+Status: **alpha (0.6.1)**. Read [What works today](#what-works-today) before relying on it.
 
 ---
 
@@ -45,11 +45,11 @@ Status: **alpha (0.6.0)**. Read [What works today](#what-works-today) before rel
 | **Landing** | Per project (`landing` in fleet.toml): `branch` keeps the work for review (default); `merge` rebases onto the default branch if it moved, runs the repo gate again, fast-forwards and pushes, never through a checkout with uncommitted changes; `pull_request` pushes the branch and opens a PR (GitHub via `gh`, Gitea via its API). Landings into one repository are serialized. |
 | **Gates** | After the agent, in this order: scope (the change stays inside `allowed_paths`; tests of allowed sources count as inside; artifacts outside are cleaned), Python syntax, the **repo gate** (`projects.<name>.gate` in fleet.toml, else `scripts/verify.sh`, `verify.sh` or pytest), the **task gate** (`pytest:<path>` or `npm:<script>`; a bugfix or feature task must change that test), claimed files. Gates run in the same sandbox as the agent, without credentials, with a timeout that ends the whole process tree; whatever a gate changes itself is undone. |
 | **Receipts, Autopsies & Review** | Every finished task writes an atomic JSON receipt in `<spool>/receipts/<task_id>.json` (`GET /api/fleet/tasks/{id}/receipt`, `fleet_get_task_receipt`). Failed tasks receive a deterministic autopsy (`root_cause`, `blocker_file`, `suggested_action`). When `auto_review` is enabled in runtime settings, landed feature tasks trigger a cross-lane review report (`reviews/<project>/<task_id>.md`) and an auto-fix task on critical/high findings. |
-| **Unattended harnesses & Conformance** | The CLIs run without asking: Claude Code with `--permission-mode acceptEdits`, OpenCode with `--auto`, Aider with `--yes-always`, Pi with `--tools read,edit,write`, as in the grid runner they come from; goose with `--no-session --no-profile --with-builtin developer --max-turns 80 --max-tool-repetitions 5` (its own tool set and stop rules, not the user's profile), retried once when it crashes at start. `fleet harnesses list` and `fleet harnesses test <name>` verify binary presence, Landlock sandbox enforcement, and process-group timeout/cancel cleanup ([docs/HARNESS_PLUGINS.md](docs/HARNESS_PLUGINS.md)). |
+| **Unattended harnesses & Conformance** | The CLIs run without asking: Claude Code with `--permission-mode acceptEdits`, OpenCode with `--auto`, Aider with `--yes-always`, Pi with `--tools read,edit,write`, as in the grid runner they come from; goose with `--no-session --no-profile --with-builtin developer --max-turns 80 --max-tool-repetitions 5` (its own tool set and stop rules, not the user's profile), retried once when it crashes at start. `fleet harnesses list` and `fleet harnesses test <name>` verify binary presence, Landlock sandbox enforcement, and process-group timeout/cancel cleanup ([docs/HARNESS_PLUGINS.md](https://github.com/Sovgrid/sovereign-fleet/blob/main/docs/HARNESS_PLUGINS.md)). |
 | **Router (Lanes & Harness × Model Pairs)** | Supports both named lanes (`[lanes.<name>]`) and decoupled `(harness, model)` pairs (`[models.<name>]` + `HarnessPlugin`). Compatibility is computed from declared capabilities; Thompson sampling ranks pairs by cost-weighted minutes per correct result (seeded from `routing.priors_file` or `bakeoff_priors.json`), while named lanes rank by measured pass rate per task category over cost; a failed attempt hands the same worktree to the next choice with one repair pass. Sensitive tasks (`is_sensitive`) stay strictly on private sovereign endpoints. A provider limit rests the lane (120 s, or until midnight US/Pacific for a daily quota); `max_parallel` keeps a full lane behind lanes with room; a local lane runs only while its model server answers and can load its model on demand. `fleet router shadow` replays a grid runner's history against its dispatcher; each pick is logged to `<root>/router_decisions.jsonl`. |
 | **Lane health** | `fleet lanes check`, and daily in the daemon (`routing.health_hour`): one tiny request per API lane with its real key, `probe_url` for local lanes, `opencode models` for opencode lanes. A dead lane (key rejected, credit used up) leaves the ranking until a check passes. A retired model (HTTP 410, or gone from the provider's list and deprecated on [models.dev](https://models.dev)) is replaced by the newest same-family successor that passes the probe; without one the lane stays out. New free models no lane uses are listed, and with `routing.discover` become lanes. The dashboard and the MCP tools `fleet_system_health` and `fleet_lane_health` show why and since when. |
 | **Issue intake & Matrix** | Per project (`[projects.<name>.intake]`): issues of Gitea (API) or GitHub (`gh`) become tasks. Only a listed author's issue with a valid ```` ```fleet ```` block runs unattended; everything else waits for an approval. One task per issue; the result (pull request with `Closes #n`, landed commit, or the failing gate) goes back to the issue. With `[matrix]` enabled in `fleet.toml`, `MatrixOutputPlugin` posts structured receipts, autopsies, and `[APPROVAL REQUIRED]` prompts to a Matrix room and polls for `!fleet approve|reject|retry|status` replies. |
-| **Goose Recipes & Evals** | Goose recipes (recipe format `1.0.0`) in `recipes/*/recipe.yaml` (`fleet-ab-proposal-eval/recipe.yaml`, `fleet-self-improvement/recipe.yaml`, `fleet-bench-runner/recipe.yaml`) for deterministic A/B proposal evaluation, self-improvement loops, and benchmark execution. Loaded on demand via `goose run --recipe` with zero context overhead on regular tasks ([docs/EVALS_AND_BENCHMARKS.md](docs/EVALS_AND_BENCHMARKS.md)). |
+| **Goose Recipes & Evals** | Goose recipes (recipe format `1.0.0`) in `recipes/*/recipe.yaml` (`fleet-ab-proposal-eval/recipe.yaml`, `fleet-self-improvement/recipe.yaml`, `fleet-bench-runner/recipe.yaml`) for deterministic A/B proposal evaluation, self-improvement loops, and benchmark execution. Loaded on demand via `goose run --recipe` with zero context overhead on regular tasks ([docs/EVALS_AND_BENCHMARKS.md](https://github.com/Sovgrid/sovereign-fleet/blob/main/docs/EVALS_AND_BENCHMARKS.md)). |
 | **Model roster** | The lanes of your fleet.toml, nothing built in (models, prices and free tiers change faster than releases). For each lane: switched off in the dashboard (the router then skips it too), dead or retired at the last health check, resting after a provider limit, CLI missing, local model not loaded, key missing, or online. Keys are only checked for presence. |
 | **Provider keys** | Per lane `key_env` + `key_file` (or a credential plugin): the key goes into that CLI run's environment only. A `CredentialPlugin` (`[plugins] credentials`) can supply keys from a vault or a key manager; the package ships none. |
 | **Dashboard & Mobile** | Three tabs, the essentials first and the rest one tap away. Tasks: a prompt with Dispatch (templates, lane, harness and dependencies under Options), a strip only when tasks wait for approval or failed, open work by default, each task with its status, lane and source issue. Agents: one lane list (online by default, details on tap) and the lane health in one line. Settings: autonomy, then groups that open on demand (limits, quality gates, keys and sandbox, issue sources, coordinator). Sign-in by link (`/#token=...`), installable PWA that loads changes on the next open. |
@@ -100,16 +100,16 @@ what it can reach instead of trusting it.
 - **Operating System:** Linux only (kernel >= 6.12 with Landlock ABI 6 for fail-closed filesystem and network isolation).
 - **Python:** >= 3.11.
 - **Prerequisites:** `git` and at least one agent CLI on `$PATH` (`claude`, `opencode`, `goose`, `pi`, or `aider`).
-- See the [Installation guide](docs/INSTALL.md) for full setup instructions and kernel verification.
+- See the [Installation guide](https://github.com/Sovgrid/sovereign-fleet/blob/main/docs/INSTALL.md) for full setup instructions and kernel verification.
 
 ## Quick start
 
-See the [Installation guide](docs/INSTALL.md) for detailed requirements, kernel Landlock checks, and first-run instructions.
+See the [Installation guide](https://github.com/Sovgrid/sovereign-fleet/blob/main/docs/INSTALL.md) for detailed requirements, kernel Landlock checks, and first-run instructions.
 
 ```bash
 git clone <this repository> sovereign-fleet && cd sovereign-fleet
 pip install -e ".[dev]"            # Python 3.11+
-pytest                             # 511+ tests; the sandbox tests need Landlock ABI 6
+pytest                             # 560+ tests; the sandbox tests need Landlock ABI 6
 
 fleet daemon                       # http://127.0.0.1:8444, prints where the API token is
 ```
@@ -340,8 +340,8 @@ its working directory and as `$PWD`; if the CLI commits on its own, the engine f
 commits back into the worktree, so gates and landing see the change.
 
 For a comprehensive guide covering class structure, model adaptation, Landlock sandbox
-enforcement, and `fleet.toml` tuning, see [docs/HARNESS_PLUGINS.md](docs/HARNESS_PLUGINS.md).
-A complete, installable reference harness package is available in [examples/custom_harness/](examples/custom_harness/).
+enforcement, and `fleet.toml` tuning, see [docs/HARNESS_PLUGINS.md](https://github.com/Sovgrid/sovereign-fleet/blob/main/docs/HARNESS_PLUGINS.md).
+A complete, installable reference harness package is available in [examples/custom_harness/](https://github.com/Sovgrid/sovereign-fleet/tree/main/examples/custom_harness/).
 
 The issue intake (`fleet.plugins.intake`) is an `InputPlugin` too; its trackers (`GiteaTracker`,
 `GitHubTracker`) implement `IssueTracker` (`list_open`, `comment`, `close`) if you need another
@@ -351,12 +351,12 @@ one. Matrix output notifications and interactive approvals-by-reply live in `fle
 
 ## Roadmap
 
-The package is meant to replace the grid runner it came from ([docs/MIGRATION.md](docs/MIGRATION.md)). The `grid` backend is the
+The package is meant to replace the grid runner it came from ([docs/MIGRATION.md](https://github.com/Sovgrid/sovereign-fleet/blob/main/docs/MIGRATION.md)). The `grid` backend is the
 migration path: the app fronts the old runner today, and its parts move into the package one
 by one (router, gates, landing, intake), each generic and tested, until the bridge is empty.
 
 1. Phase 5: intake. Issue intake (Gitea, GitHub) works; Matrix notifications and approvals-by-reply (`[matrix]`) work.
-2. Phase 6: local execution and runner parity ([docs/MIGRATION.md](docs/MIGRATION.md)).
+2. Phase 6: local execution and runner parity ([docs/MIGRATION.md](https://github.com/Sovgrid/sovereign-fleet/blob/main/docs/MIGRATION.md)).
    - Steps 6a to 6g implemented: daemon executor loop, crash safety and recovery at start, cancel killing agent and gate process groups, failure autopsies and atomic receipts, cross-lane review loop, Matrix output and approvals, and per-project `backend = "local"` strangler migration (`CompositeBackend`).
 
 ## Development
@@ -376,4 +376,4 @@ ruff check --select F,E9,B src tests
 
 ## License
 
-[MIT](LICENSE)
+[MIT](https://github.com/Sovgrid/sovereign-fleet/blob/main/LICENSE)

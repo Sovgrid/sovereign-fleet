@@ -274,3 +274,40 @@ def test_a_run_that_leaves_no_change_does_not_pass(tmp_path, repo):
     res, status = _run(_engine(tmp_path, repo, {}, landing="merge"), "t-nochange")
     assert status == "failed" and res["error"] == "No change left in the worktree after verification"
     assert "landing" not in res
+
+
+def test_a_passing_regate_after_the_rebase_keeps_the_work(tmp_path, repo):
+    """main moved, the rebased branch passes the repo gate again: the task's commit and the
+    commit that moved main both land. Before the fix, cleaning the gate's side effects folded
+    the rebased commits back onto the stale base and checked every file out again: main stayed
+    where it was, the work was lost, and the landing still said "pushed" (2026-10-22)."""
+    (repo / "check.sh").write_text("#!/bin/sh\nexit 0\n")
+    (repo / "check.sh").chmod(0o755)
+    _git(repo, "add", "check.sh")
+    _git(repo, "commit", "-q", "-m", "gate")
+    engine = _engine(tmp_path, repo, {"a.py": "a = 2\n"}, gate=["check.sh"])
+    real_land = engine._land
+
+    async def land_after_main_moved(task, worktree, branch):
+        (repo / "b.py").write_text("b = 2\n")
+        _git(repo, "commit", "-q", "-am", "parallel change")
+        return await real_land(task, worktree, branch)
+
+    engine._land = land_after_main_moved
+    res, status = _run(engine, "t-regate-pass")
+    assert res["landing"]["status"] == "pushed", res["landing"]
+    assert _git(repo, "show", "main:a.py") == "a = 2", "the task's work was dropped"
+    assert _git(repo, "show", "main:b.py") == "b = 2"
+    assert _git(repo, "rev-parse", "main") == _git(repo, "rev-parse", "origin/main")
+    assert res["landing"]["gates"][0]["undone"] == []
+
+
+def test_landing_nothing_new_is_a_failure_not_a_push(tmp_path, repo):
+    """A branch that holds no commit beyond main must not report a landing."""
+    from fleet.core import landing
+
+    _git(repo, "branch", "fleet/t-empty")
+    project = Project(path=str(repo), landing="merge", link_dirs=[], gate=[], gate_timeout=60)
+    wt_mgr = WorktreeManager(str(repo), str(tmp_path / "wt-empty"))
+    res = asyncio.run(landing.land(repo, repo, "fleet/t-empty", "t-empty", "empty", project, wt_mgr))
+    assert res.status == "failed" and "no commit" in res.detail, res

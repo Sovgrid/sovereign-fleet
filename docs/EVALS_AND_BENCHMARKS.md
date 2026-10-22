@@ -1,4 +1,4 @@
-# Sovereign Fleet Evals & Benchmarks: Open-Source Best-in-Class Architecture
+# Sovereign Fleet: evals and benchmarks
 
 This document describes how Sovereign Fleet approaches evaluation, A/B testing of autonomous self-improvement proposals, and alignment with open-source agent workflow standards.
 
@@ -6,7 +6,7 @@ This document describes how Sovereign Fleet approaches evaluation, A/B testing o
 
 ## 1. Core Evaluation Principle: Strict Proof Rule
 
-Sovereign Fleet improves its own configuration (repo rules in `AGENTS.md`, lane prompt directives, and harness parameters) autonomously, but enforces a strict invariant:
+Sovereign Fleet improves its own configuration (repo rules in `AGENTS.md`, lane prompt directives, and harness parameters) autonomously; the self-improvement recipes and the user's evaluation script (the `eval_script` parameter) apply this invariant:
 
 > **"Kept only if better"**  
 > A proposed change is accepted and landed **only** if an A/B benchmark evaluation demonstrates:
@@ -17,22 +17,19 @@ Sovereign Fleet improves its own configuration (repo rules in `AGENTS.md`, lane 
 
 ---
 
-## 2. Open-Source Ecosystem & Best-in-Class Tooling
+## 2. What Ships
 
-Rather than reinventing evaluation pipelines in isolation, Sovereign Fleet integrates with leading open-source frameworks:
-
-| Framework | Role in Sovereign Fleet | Why Best-in-Class |
+| Component | What it is | Where it lives |
 |---|---|---|
-| **Goose Recipes** (`goose-docs.ai/recipes`) | Primary agentic evaluation format (`recipes/*.yaml`) | Declarative, reusable task definitions; native MCP support; official AAIF standard for self-flying agents. |
-| **Fleet Proof Engine** (`ab_proposal.py`) | Strict proof gatekeeper & statistical comparator | Computes delta metrics (landed tasks, first-try rate, median duration); validates fixtures against isolated worktrees. |
-| **Promptfoo** | Matrix assertion testing for prompts & models | Fast CI/CD prompt regression testing with deterministic regex and AST checks. |
-| **Agent-Bench Fixtures** | Isolated repository test environments | Multi-tier coding fixtures with compiler gates, strict scope checks, and Landlock sandboxing. |
+| **Goose recipes** | Declarative agent task definitions, one directory per recipe | `recipes/<slug>/recipe.yaml`, documented at [goose-docs.ai/recipes](https://goose-docs.ai/recipes) |
+| **Fleet MCP server** | Tools that dispatch a task and follow it | `fleet_dispatch_task`, `fleet_get_task_status`, `fleet_get_task_receipt` |
+| **Evaluation script** | The A/B evaluation the user brings; this repository ships its contract, not the script itself | `recipes/fleet-ab-proposal-eval/README.md` |
 
 ---
 
 ## 3. Goose Recipes Integration
 
-Sovereign Fleet packages official Goose Recipes in the `recipes/` directory. Each recipe conforms to the **Goose Recipe 1.0.0 specification** and can be run unattended via `goose run`.
+Sovereign Fleet ships three goose recipes, one directory each (`recipes/<slug>/recipe.yaml`). Each one passes `goose recipe validate` (checked by `tests/test_recipes.py`) and runs unattended with `goose run --recipe`.
 
 ### Packaged Recipes
 
@@ -66,29 +63,21 @@ Render recipe prompt with parameters without executing:
 ```bash
 goose run --recipe recipes/fleet-ab-proposal-eval/recipe.yaml \
   --params proposal_path=~/.fleet/state/proposals/agents-md-proposals/2026-10-20-fleet-gates.md \
+  --params eval_script=path/to/your_eval.py \
   --params dry_run=true \
   --render-recipe
 ```
 
-Execute unattended with the official Goose recipe:
+Execute unattended:
 ```bash
 goose run --recipe recipes/fleet-ab-proposal-eval/recipe.yaml \
   --params proposal_path=~/.fleet/state/proposals/agents-md-proposals/2026-10-20-fleet-gates.md \
+  --params eval_script=path/to/your_eval.py \
   --params dry_run=true
 ```
 
 Installing recipes to user config:
 ```bash
-cp recipes/*/recipe.yaml ~/.config/goose/recipes/
+for d in recipes/*/; do cp "$d/recipe.yaml" ~/.config/goose/recipes/"$(basename "$d")".yaml; done
 goose recipe list
 ```
-
----
-
-## 4. Alignment with the Agentic AI Foundation (AAIF) Goose Grant
-
-The Agentic AI Foundation (AAIF) Goose Grant ($100k, 12 months) prioritizes two key themes:
-- **Self-flying agents**: Agents that operate reliably in the background without human babysitting.
-- **Self-improving agents**: Agents that continuously learn from operational failures, propose targeted fixes, and verify improvements before landing.
-
-By packaging Sovereign Fleet's A/B evaluation and self-improvement loops as standard Goose Recipes and extending Goose via the `fleet` MCP server, Sovereign Fleet delivers a turnkey reference architecture for autonomous, self-improving agent grids.
