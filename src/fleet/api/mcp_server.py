@@ -296,6 +296,9 @@ def tool_status(args: Dict[str, Any]) -> str:
     if r.get("harness_output"):
         lines.append("Output (start):\n" + str(r["harness_output"])[:1200])
     if t.get("status") == "awaiting_approval":
+        risk = (t.get("metadata") or {}).get("risk") or {}
+        if risk.get("level"):
+            lines.append(f"Risk: {risk['level']}, {risk.get('reason', '')} ({risk.get('model', '?')}).")
         lines.append("Waits for an approval: fleet_approve_task or fleet_reject_task.")
     return "\n".join(lines)
 

@@ -1,6 +1,7 @@
 """Harness plugins: one agent CLI each, always run inside the Landlock sandbox."""
 
 import asyncio
+from collections import deque
 import hashlib
 import logging
 import os
@@ -8,7 +9,7 @@ import re
 import shutil
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Deque, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from fleet.core.config import load_config
 from fleet.core.gates import kill_group
@@ -23,6 +24,7 @@ logger = logging.getLogger("fleet.plugins.harness")
 _HOME = Path.home()
 DEFAULT_TIMEOUT_SECONDS = 600
 STALL_CHECK_SECONDS = 30
+LOOP_MAX_LINES = 2000   # loop detection keeps at most this many recent lines
 DEFAULT_STALL_SECONDS = 480
 
 
@@ -32,6 +34,14 @@ class _Stalled(Exception):
     def __init__(self, stall_seconds: int) -> None:
         self.stall_seconds = stall_seconds
         super().__init__(f"stalled after {stall_seconds}s")
+
+
+class _Looping(Exception):
+    """Raised by _communicate_with_stall when the same output repeats for loop_seconds."""
+
+    def __init__(self, loop_seconds: int) -> None:
+        self.loop_seconds = loop_seconds
+        super().__init__(f"looping after {loop_seconds}s")
 
 
 def start_crash(result: Dict[str, Any], seconds: float) -> bool:
@@ -75,6 +85,9 @@ class CliHarness(HarnessPlugin):
     # Stall detection default for this CLI (`[harnesses.<name>.options] stall_seconds`
     # overrides it). 0 for CLIs that print nothing until they finish.
     default_stall_seconds: int = DEFAULT_STALL_SECONDS
+    # Loop detection default: same output repeating without worktree change.
+    # 0 switches it off. Default 300 s, capped at the run timeout.
+    default_loop_seconds: int = 300
 
     def __init__(self, _section=None) -> None:  # noqa: ANN001 - HarnessSection, injected by registry
         self._section = _section
@@ -146,6 +159,17 @@ class CliHarness(HarnessPlugin):
             stall = self.default_stall_seconds
         if stall > timeout:
             stall = timeout
+        # Loop detection: [harnesses.<name>.options] loop_seconds. 0 switches it off,
+        # capped at the run timeout. Same per-harness default pattern as stall_seconds.
+        loop = (section.options.get("loop_seconds")
+                if section is not None and section.options.get("loop_seconds") is not None
+                else self.default_loop_seconds)
+        try:
+            loop = int(loop)
+        except (TypeError, ValueError):
+            loop = self.default_loop_seconds
+        if loop > timeout:
+            loop = timeout
 
         sandbox = make_sandbox(policy_for_worktree(worktree_dir, effective_paths))
         try:
@@ -180,21 +204,28 @@ class CliHarness(HarnessPlugin):
         watch = GroupWatch(process.pid, memory_max)
         watch.start()
         try:
-            result = await self._finish(process, worktree_dir, timeout, stall)
+            result = await self._finish(process, worktree_dir, timeout, stall, loop)
         finally:
             await watch.stop()
         if watch.fired:
             return self._result(137, result["stdout"], watch.message())
         return result
 
-    async def _finish(self, process, worktree_dir: str, timeout: int, stall: int) -> Dict[str, Any]:
+    async def _finish(self, process, worktree_dir: str, timeout: int, stall: int,
+                       loop: int) -> Dict[str, Any]:
         """Wait for the agent: its result, or 124 after a stall or the timeout."""
         try:
-            stdout, stderr = await self._communicate_with_stall(process, worktree_dir, timeout, stall)
+            stdout, stderr = await self._communicate_with_stall(
+                process, worktree_dir, timeout, stall, loop)
         except _Stalled as e:
             stdout = await kill_group(process)
             return self._result(124, _decode(stdout),
                                 f"stalled: no output and no worktree change for {e.stall_seconds}s")
+        except _Looping as e:
+            stdout = await kill_group(process)
+            return self._result(124, _decode(stdout),
+                                f"looping: the same output repeated for {e.loop_seconds}s "
+                                f"without a worktree change")
         except asyncio.CancelledError:
             await kill_group(process)
             raise
@@ -204,18 +235,29 @@ class CliHarness(HarnessPlugin):
         return self._result(process.returncode, _decode(stdout), _decode(stderr))
 
     async def _communicate_with_stall(self, process, worktree_dir: str, timeout: int,
-                                      stall_seconds: int) -> Tuple[bytes, bytes]:
+                                      stall_seconds: int, loop_seconds: int) -> Tuple[bytes, bytes]:
         """Read stdout and stderr incrementally like communicate(), but end early on a stall.
 
         A stall means no new bytes on either stream and no worktree change for
         stall_seconds; then _Stalled is raised so execute_task kills the group like a
         timeout. After timeout, asyncio.TimeoutError is raised for the same handling.
         The worktree is fingerprinted every STALL_CHECK_SECONDS.
+
+        Loop detection (when loop_seconds > 0): if the same output repeats without a
+        worktree change for loop_seconds, raises _Looping.
         """
         start = time.monotonic()
         last_activity = start
         last_fingerprint: Optional[str] = None
         next_check = start
+
+        # Loop detection: the output lines of the last loop_seconds as (time, line), how often
+        # each line occurs in that window, and when the worktree last changed.
+        loop_events: Deque[Tuple[float, str]] = deque()
+        loop_counts: Dict[str, int] = {}
+        loop_tail = {0: b"", 1: b""}       # an unfinished last line per stream
+        loop_read = {0: 0, 1: 0}           # bytes of each buffer already split into lines
+        last_change = start
 
         stdout_buf = bytearray()
         stderr_buf = bytearray()
@@ -262,12 +304,36 @@ class CliHarness(HarnessPlugin):
                 activity.clear()
                 if activity_set:
                     last_activity = time.monotonic()
+                if loop_seconds > 0:
+                    now_ts = time.monotonic()
+                    for idx, buf in enumerate((stdout_buf, stderr_buf)):
+                        chunk = loop_tail[idx] + bytes(buf[loop_read[idx]:])
+                        loop_read[idx] = len(buf)
+                        *lines, loop_tail[idx] = chunk.split(b"\n")
+                        for raw in lines:
+                            line = raw.decode(errors="replace").strip()
+                            if len(line) >= 8:
+                                loop_events.append((now_ts, line))
+                                loop_counts[line] = loop_counts.get(line, 0) + 1
+                    cutoff = now_ts - loop_seconds
+                    while loop_events and (loop_events[0][0] < cutoff or len(loop_events) > LOOP_MAX_LINES):
+                        _, old = loop_events.popleft()
+                        loop_counts[old] -= 1
+                        if not loop_counts[old]:
+                            del loop_counts[old]
                 now = time.monotonic()
                 if now >= next_check:
                     fp = await asyncio.to_thread(_worktree_fingerprint, worktree_dir)
                     if last_fingerprint is not None and fp != last_fingerprint:
                         last_activity = now
+                        last_change = now
                     last_fingerprint = fp
+                    # Looping: no worktree change for loop_seconds, and at least 40 lines in that
+                    # window of which 90 % repeat a line seen earlier in it.
+                    total = len(loop_events)
+                    if (loop_seconds > 0 and now - last_change >= loop_seconds and total >= 40
+                            and (total - len(loop_counts)) / total >= 0.9):
+                        raise _Looping(loop_seconds)
                     next_check = now + STALL_CHECK_SECONDS
         finally:
             for task in (*pump_tasks, exit_task):

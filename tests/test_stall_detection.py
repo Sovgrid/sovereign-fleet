@@ -109,3 +109,91 @@ def test_print_at_end_clis_do_not_stall_by_default():
     assert ClaudeCodeHarness.default_stall_seconds == 0
     assert AgyHarness.default_stall_seconds == 0
     assert GooseHarness.default_stall_seconds == 480
+
+
+@pytest.mark.asyncio
+async def test_looping_output_is_detected(tmp_path, monkeypatch):
+    """A command that prints the same line every 0.02 s (about 100 lines per 2 s window, the
+    detector needs at least 40) is killed after loop_seconds=2."""
+    monkeypatch.setenv("FLEET_SANDBOX", "0")
+    monkeypatch.setattr("fleet.plugins.harness_base.STALL_CHECK_SECONDS", 1)
+    section = HarnessSection(options={"loop_seconds": 2})
+    harness = _ShHarness(_section=section)
+    started = time.monotonic()
+    res = await harness.execute_task(
+        {"text": "while true; do echo same_line; sleep 0.02; done"},
+        str(tmp_path), timeout=60,
+    )
+    elapsed = time.monotonic() - started
+    assert res["exit_code"] == 124
+    assert "looping" in res["stderr"]
+    assert "without a worktree change" in res["stderr"]
+    assert elapsed < 10
+
+
+@pytest.mark.asyncio
+async def test_different_lines_are_not_looping(tmp_path, monkeypatch):
+    """A command printing different lines for 4 s with loop_seconds=2 exits 0."""
+    monkeypatch.setenv("FLEET_SANDBOX", "0")
+    monkeypatch.setattr("fleet.plugins.harness_base.STALL_CHECK_SECONDS", 1)
+    section = HarnessSection(options={"loop_seconds": 2})
+    harness = _ShHarness(_section=section)
+    started = time.monotonic()
+    res = await harness.execute_task(
+        {"text": "for i in $(seq 1 40); do echo line$i; sleep 0.1; done"},
+        str(tmp_path), timeout=30,
+    )
+    assert res["exit_code"] == 0
+    assert time.monotonic() - started < 10
+
+
+@pytest.mark.asyncio
+async def test_looping_with_worktree_change_is_not_detected(tmp_path, monkeypatch):
+    """A looping command that touches a file every second keeps the worktree changing."""
+    monkeypatch.setenv("FLEET_SANDBOX", "0")
+    monkeypatch.setattr("fleet.plugins.harness_base.STALL_CHECK_SECONDS", 1)
+    section = HarnessSection(options={"loop_seconds": 2})
+    harness = _ShHarness(_section=section)
+    started = time.monotonic()
+    res = await harness.execute_task(
+        {"text": "for i in $(seq 1 20); do echo same; touch worktree_change; sleep 1; done"},
+        str(tmp_path), timeout=30,
+    )
+    assert res["exit_code"] == 0
+    assert time.monotonic() - started < 25
+    assert (tmp_path / "worktree_change").exists()
+
+
+@pytest.mark.asyncio
+async def test_loop_seconds_zero_never_detects_loop(tmp_path, monkeypatch):
+    """loop_seconds=0 switches loop detection off; a looping command completes."""
+    monkeypatch.setenv("FLEET_SANDBOX", "0")
+    section = HarnessSection(options={"loop_seconds": 0})
+    harness = _ShHarness(_section=section)
+    started = time.monotonic()
+    res = await harness.execute_task(
+        {"text": "echo same_line; sleep 3; echo same_line"},
+        str(tmp_path), timeout=10,
+    )
+    assert res["exit_code"] == 0
+    assert time.monotonic() - started < 6
+
+
+@pytest.mark.asyncio
+async def test_a_recent_worktree_change_keeps_a_chatty_run_alive(tmp_path, monkeypatch):
+    """Repeating output is only a loop when the worktree has not changed for loop_seconds:
+    a run that wrote a file a moment ago is still working (the first version checked only the
+    last fingerprint interval)."""
+    monkeypatch.setenv("FLEET_SANDBOX", "0")
+    monkeypatch.setattr("fleet.plugins.harness_base.STALL_CHECK_SECONDS", 1)
+    harness = _ShHarness(_section=HarnessSection(options={"loop_seconds": 3, "stall_seconds": 0}))
+    script = ("i=0; while [ $i -lt 250 ]; do echo same_line; i=$((i+1)); "
+              "[ $((i % 50)) -eq 0 ] && echo $i > progress.txt; sleep 0.02; done")
+    res = await harness.execute_task({"text": script}, str(tmp_path), timeout=60)
+    assert res["exit_code"] == 0, res["stderr"]
+
+
+def test_loop_window_is_bounded():
+    from fleet.plugins.harness_base import LOOP_MAX_LINES
+
+    assert 1000 <= LOOP_MAX_LINES <= 10000

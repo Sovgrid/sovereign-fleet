@@ -4216,6 +4216,14 @@
         .replace(/'/g, '&#39;');
     }
 
+    function riskLine(t) {
+      const r = (t.metadata && t.metadata.risk) || null;
+      if (!r) return '';
+      var colorMap = { low: 'var(--emerald)', medium: 'var(--amber)', high: 'var(--rose)' };
+      var color = colorMap[r.level] || 'var(--text-muted)';
+      return '<div style="margin-top: 0.35rem; font-size: 0.8rem; color: ' + color + '; font-family: var(--font), monospace;">Risk: ' + r.level + ', ' + escapeHtml(r.reason) + ' (' + escapeHtml(r.model || '?') + ')</div>';
+    }
+
     // Tab Navigation
     function switchTab(tab) {
       currentTab = tab;
@@ -4744,6 +4752,7 @@
               ` : ''}
             </div>
           </div>
+          ${t.status === 'awaiting_approval' ? riskLine(t) : ''}
         </div>
 
         ${isExpanded ? `
@@ -6272,10 +6281,10 @@
         id: "faq-run-limits",
         category: "tasks",
         categoryLabel: "WORKING WITH TASKS",
-        question: "What ends an agent run early: timeout, stall or memory limit?",
+        question: "What ends an agent run early: timeout, stall, loop or memory limit?",
         tags: ["timeout", "stall", "stall_seconds", "memory", "137", "124", "failover", "limits"],
-        answer: "Three limits end a run, and each one counts as a failed attempt, so the task moves on to the next lane. The task timeout (Settings, default 600 s) ends a run with exit code 124. A stall ends it earlier with 124: no output and no change in the worktree for stall_seconds (default 480, capped at the timeout; off for Claude Code and the Antigravity CLI, which print nothing until they finish). The memory limit ends it with 137 when the run's processes together use more than [sandbox] memory_max (default 8G). Each process group is killed whole, children included.",
-        snippet: "[harnesses.goose.options]\nstall_seconds = 300   # 0 switches stall detection off\n\n[sandbox]\nmemory_max = \"8G\"     # \"\" or \"0\" switches the limit off",
+        answer: "Three limits end a run, and each one counts as a failed attempt, so the task moves on to the next lane. The task timeout (Settings, default 600 s) ends a run with exit code 124. A stall ends it earlier with 124: no output and no change in the worktree for stall_seconds (default 480, capped at the timeout; off for Claude Code and the Antigravity CLI, which print nothing until they finish). A loop ends it with 124 too: the same output keeps repeating while the worktree does not change for loop_seconds (default 300). The memory limit ends it with 137 when the run's processes together use more than [sandbox] memory_max (default 8G). Each process group is killed whole, children included.",
+        snippet: "[harnesses.goose.options]\nstall_seconds = 300   # 0 switches stall detection off\nloop_seconds = 300    # 0 switches loop detection off\n\n[sandbox]\nmemory_max = \"8G\"     # \"\" or \"0\" switches the limit off",
         snippetLabel: "fleet.toml"
       },
       {

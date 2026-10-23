@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-10-23
+### Added
+- Loop detection: an agent run that keeps printing the same output while the worktree does
+  not change is ended with exit 124 (`looping: the same output repeated for Ns without a
+  worktree change`), so the task moves to the next lane instead of waiting for the timeout.
+  It fires when, over the last `loop_seconds`, the worktree has not changed, at least 40
+  output lines arrived and at least 90 % of them repeat a line from that window.
+  `[harnesses.<name>.options] loop_seconds` (default 300, 0 switches it off, capped at the
+  run timeout); the window keeps at most 2000 lines.
+- Smart approval: with `[approval] assess_url` and `assess_model` set (any OpenAI-compatible
+  endpoint, a local model works), a task that waits for approval gets a risk rating from
+  that model: low, medium or high with a one-sentence reason, shown on the approval card
+  and in the MCP task status. It runs after the API answers, never approves or rejects,
+  and changes nothing about which tasks wait. Off by default.
+
 ## [0.6.2] - 2026-10-23
 ### Added
 - Task lists in the dashboard: each view has an order that fits it (Open: running, then

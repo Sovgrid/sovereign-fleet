@@ -12,11 +12,12 @@ import asyncio
 import contextlib
 import hashlib
 import json
+import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -25,7 +26,7 @@ from pydantic import BaseModel, Field
 
 from fleet import __version__
 from fleet.api import auth, background
-from fleet.core import lane_health, memlimit, sandbox
+from fleet.core import lane_health, memlimit, sandbox, risk as _risk
 from fleet.core.backends import BackendError, LocalBackend, make_backend
 from fleet.core.config import get_credential_plugin, load_config
 from fleet.core.models import compatible_harnesses_for_model
@@ -177,6 +178,19 @@ def _response(t: FleetTask) -> TaskResponse:
 _RISKY = re.compile(r"\b(rm\s+-rf|delete|drop|migrate|unlink|force|reset\s+--hard|destroy|purge)\b",
                     re.IGNORECASE)
 
+async def _start_assessment(task_id: str, text: str) -> None:
+    """Rate a task that waits for approval and store {level, reason, model, at} in its metadata
+    as "risk". Runs after the response (FastAPI background task); never raises. Only tasks of
+    the package's own store get it (a grid-runner task lives in the runner's spool)."""
+    result = await _risk.assess(text, load_config())
+    if result is None:
+        return
+    try:
+        if not task_store.update_metadata(task_id, {"risk": result}):
+            logging.getLogger("fleet.api.app").info("risk assessment: %s is not in the local store", task_id)
+    except Exception:  # noqa: BLE001 - a broken store must not take down the daemon
+        logging.getLogger("fleet.api.app").exception("risk assessment store failed")
+
 
 @app.get("/health")
 def health():
@@ -199,7 +213,7 @@ def list_tasks(request: Request):
 
 
 @app.post("/api/fleet/tasks", response_model=TaskResponse)
-def enqueue_task(req: EnqueueTaskRequest):
+def enqueue_task(req: EnqueueTaskRequest, background_tasks: BackgroundTasks):
     """Queue a task. On the grid backend, metadata.intent (project, title, assigned_lane,
     acceptance_criteria, optional allowed_paths and gate_cmd) skips LLM triage."""
     autonomy = _current_settings.autonomy_level
@@ -208,6 +222,11 @@ def enqueue_task(req: EnqueueTaskRequest):
         task = backend().enqueue(req.text, req.lane, req.depends_on, req.metadata, needs_approval)
     except BackendError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+    # Start a background risk assessment for approval-waiting tasks when [approval] is configured.
+    # This endpoint is sync (it runs in a thread without an event loop): a background task, not
+    # asyncio.create_task, which raised there.
+    if needs_approval and load_config().approval.assess_url:
+        background_tasks.add_task(_start_assessment, task.id, req.text)
     return _response(task)
 
 

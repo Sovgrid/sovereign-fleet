@@ -1,6 +1,6 @@
 # Sovereign Fleet
 
-> Task queue, kernel sandbox, gates, router and dashboard for running coding-agent CLIs (Claude Code, OpenCode, Goose, Pi, Aider, Antigravity CLI) on your own machine. Alpha, 0.6.2.
+> Task queue, kernel sandbox, gates, router and dashboard for running coding-agent CLIs (Claude Code, OpenCode, Goose, Pi, Aider, Antigravity CLI) on your own machine. Alpha, 0.6.3.
 
 ## What it is
 - FastAPI daemon (`fleet daemon`, loopback by default): task queue in `~/.fleet/spool/tasks.json` (flock, atomic writes), model roster, settings, dashboard, background jobs (daily lane health check, issue intake). Every /api route needs the API token (Bearer or the dashboard's HttpOnly session cookie).

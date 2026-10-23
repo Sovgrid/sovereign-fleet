@@ -255,6 +255,9 @@ auto_approve = true
 stall_seconds = 300   # exit 124 after 300 s with no output and no worktree change;
                       # 0 disables stall detection (default 480; 0 for claude-code and agy,
                       # which print only at the end; capped at the run timeout)
+loop_seconds = 300    # exit 124 when the same output repeats without a worktree change;
+                      # 0 disables loop detection (default 300; 0 for claude-code and agy);
+                      # requires at least 40 lines in the window and 90% repeats
 ```
 
 ---

@@ -99,6 +99,15 @@ class PluginsSection(_Strict):
     credentials: str = ""
 
 
+class ApprovalSection(_Strict):
+    """Optional risk-assessment section.  When assess_url is set the daemon asks a model to rate
+    risky tasks while they wait for human approval (safe_auto mode)."""
+    assess_url: str = ""                   # OpenAI-compatible base URL; empty: assessment off
+    assess_model: str = ""                 # model id
+    assess_key_env: str = ""               # optional env var holding the API key
+    assess_timeout: int = Field(30, ge=1, le=300)  # seconds
+
+
 class HarnessSection(_Strict):
     """Per-harness configuration from [harnesses.<name>]."""
     binary: str = ""                # override the class binary (empty: use the class default)
@@ -249,6 +258,7 @@ class FleetConfig(_Strict):
     secrets: SecretsSection = Field(default_factory=SecretsSection)
     grid_status: GridStatusSection = Field(default_factory=GridStatusSection)
     plugins: PluginsSection = Field(default_factory=PluginsSection)
+    approval: ApprovalSection = Field(default_factory=ApprovalSection)
     matrix: MatrixSection = Field(default_factory=MatrixSection)
     gitea: GiteaSection = Field(default_factory=GiteaSection)
     routing: RoutingSection = Field(default_factory=RoutingSection)
