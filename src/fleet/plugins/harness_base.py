@@ -1,6 +1,7 @@
 """Harness plugins: one agent CLI each, always run inside the Landlock sandbox."""
 
 import asyncio
+import hashlib
 import logging
 import os
 import re
@@ -9,7 +10,9 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from fleet.core.config import load_config
 from fleet.core.gates import kill_group
+from fleet.core.memlimit import GroupWatch, scope_prefix
 from fleet.core.models import ModelAdapterResult, ModelEndpoint
 from fleet.core.quirks import resolve_opencode_model
 from fleet.core.sandbox import SandboxUnavailable, make_sandbox, policy_for_worktree
@@ -19,6 +22,16 @@ logger = logging.getLogger("fleet.plugins.harness")
 
 _HOME = Path.home()
 DEFAULT_TIMEOUT_SECONDS = 600
+STALL_CHECK_SECONDS = 30
+DEFAULT_STALL_SECONDS = 480
+
+
+class _Stalled(Exception):
+    """Raised by _communicate_with_stall when nothing happened for stall_seconds."""
+
+    def __init__(self, stall_seconds: int) -> None:
+        self.stall_seconds = stall_seconds
+        super().__init__(f"stalled after {stall_seconds}s")
 
 
 def start_crash(result: Dict[str, Any], seconds: float) -> bool:
@@ -59,6 +72,9 @@ class CliHarness(HarnessPlugin):
     needs_tool_calling: bool = True
     own_login: bool = False
     model_fixed: bool = False
+    # Stall detection default for this CLI (`[harnesses.<name>.options] stall_seconds`
+    # overrides it). 0 for CLIs that print nothing until they finish.
+    default_stall_seconds: int = DEFAULT_STALL_SECONDS
 
     def __init__(self, _section=None) -> None:  # noqa: ANN001 - HarnessSection, injected by registry
         self._section = _section
@@ -118,12 +134,26 @@ class CliHarness(HarnessPlugin):
         section_env = (section.env or {}) if section is not None else {}
         section_paths = (section.state_paths or []) if section is not None else []
         effective_paths = self.state_paths + tuple(Path(p) for p in section_paths)
+        # Stall detection: [harnesses.<name>.options] stall_seconds, read like
+        # permission_mode for Claude Code. Default default_stall_seconds, 0 switches it off, never larger
+        # than the run's timeout.
+        stall = (section.options.get("stall_seconds")
+                 if section is not None and section.options.get("stall_seconds") is not None
+                 else self.default_stall_seconds)
+        try:
+            stall = int(stall)
+        except (TypeError, ValueError):
+            stall = self.default_stall_seconds
+        if stall > timeout:
+            stall = timeout
 
         sandbox = make_sandbox(policy_for_worktree(worktree_dir, effective_paths))
         try:
             argv = sandbox.wrap([*self.build_command(task.get("text", ""), model), *section_args, *args])
         except SandboxUnavailable as e:
             return self._result(126, "", f"refused to run unsandboxed: {e}")
+        memory_max = load_config().sandbox.memory_max
+        argv = [*scope_prefix(memory_max), *argv]
         run_env = sandbox.build_safe_env()
         run_env.update({k: os.environ[k] for k in pass_env if k in os.environ})
         run_env.update(env or {})
@@ -146,8 +176,25 @@ class CliHarness(HarnessPlugin):
             )
         except OSError as e:
             return self._result(127, "", f"cannot start {effective_binary}: {e}")
+        # The floor under the systemd scope, and the only limit where there is none.
+        watch = GroupWatch(process.pid, memory_max)
+        watch.start()
         try:
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
+            result = await self._finish(process, worktree_dir, timeout, stall)
+        finally:
+            await watch.stop()
+        if watch.fired:
+            return self._result(137, result["stdout"], watch.message())
+        return result
+
+    async def _finish(self, process, worktree_dir: str, timeout: int, stall: int) -> Dict[str, Any]:
+        """Wait for the agent: its result, or 124 after a stall or the timeout."""
+        try:
+            stdout, stderr = await self._communicate_with_stall(process, worktree_dir, timeout, stall)
+        except _Stalled as e:
+            stdout = await kill_group(process)
+            return self._result(124, _decode(stdout),
+                                f"stalled: no output and no worktree change for {e.stall_seconds}s")
         except asyncio.CancelledError:
             await kill_group(process)
             raise
@@ -156,8 +203,109 @@ class CliHarness(HarnessPlugin):
             return self._result(124, _decode(stdout), f"timed out after {timeout}s")
         return self._result(process.returncode, _decode(stdout), _decode(stderr))
 
+    async def _communicate_with_stall(self, process, worktree_dir: str, timeout: int,
+                                      stall_seconds: int) -> Tuple[bytes, bytes]:
+        """Read stdout and stderr incrementally like communicate(), but end early on a stall.
+
+        A stall means no new bytes on either stream and no worktree change for
+        stall_seconds; then _Stalled is raised so execute_task kills the group like a
+        timeout. After timeout, asyncio.TimeoutError is raised for the same handling.
+        The worktree is fingerprinted every STALL_CHECK_SECONDS.
+        """
+        start = time.monotonic()
+        last_activity = start
+        last_fingerprint: Optional[str] = None
+        next_check = start
+
+        stdout_buf = bytearray()
+        stderr_buf = bytearray()
+        activity = asyncio.Event()
+
+        async def pump(stream, buf: bytearray) -> None:
+            while True:
+                chunk = await stream.read(65536)
+                if not isinstance(chunk, bytes):
+                    # A mocked process whose stdout is a bare mock returns a truthy mock here
+                    # forever; that loop grew to 51 GB and took the daemon down (2026-10-22).
+                    raise TypeError(f"stream.read() returned {type(chunk).__name__}, not bytes")
+                if not chunk:
+                    return
+                buf.extend(chunk)
+                activity.set()
+
+        pump_tasks = [
+            asyncio.create_task(pump(process.stdout, stdout_buf)),
+            asyncio.create_task(pump(process.stderr, stderr_buf)),
+        ]
+        exit_task = asyncio.create_task(process.wait())
+        try:
+            while True:
+                now = time.monotonic()
+                if exit_task.done() and all(t.done() for t in pump_tasks):
+                    break
+                if stall_seconds > 0 and now - last_activity > stall_seconds:
+                    raise _Stalled(stall_seconds)
+                if now - start > timeout:
+                    raise asyncio.TimeoutError()
+                deadline = start + timeout
+                if stall_seconds > 0:
+                    deadline = min(deadline, last_activity + stall_seconds)
+                deadline = min(deadline, next_check)
+                # Wake on output, on the process exiting and on a pipe closing, or at the
+                # deadline; tasks already done stay out of the set so this never spins.
+                waiter = asyncio.create_task(activity.wait())
+                pending = {waiter} | {t for t in (exit_task, *pump_tasks) if not t.done()}
+                await asyncio.wait(pending, timeout=max(deadline - now, 0.0),
+                                   return_when=asyncio.FIRST_COMPLETED)
+                activity_set = waiter.done()
+                waiter.cancel()
+                activity.clear()
+                if activity_set:
+                    last_activity = time.monotonic()
+                now = time.monotonic()
+                if now >= next_check:
+                    fp = await asyncio.to_thread(_worktree_fingerprint, worktree_dir)
+                    if last_fingerprint is not None and fp != last_fingerprint:
+                        last_activity = now
+                    last_fingerprint = fp
+                    next_check = now + STALL_CHECK_SECONDS
+        finally:
+            for task in (*pump_tasks, exit_task):
+                task.cancel()
+            await asyncio.gather(*pump_tasks, exit_task, return_exceptions=True)
+
+        return bytes(stdout_buf), bytes(stderr_buf)
+
     def _result(self, exit_code: int, stdout: str, stderr: str) -> Dict[str, Any]:
         return {"harness": self.name, "exit_code": exit_code, "stdout": stdout, "stderr": stderr}
+
+
+def _worktree_fingerprint(worktree_dir: str) -> str:
+    """Cheap fingerprint of a worktree: sha256 over (relative path, size, mtime_ns) of every
+    file below it, skipping `.git` and directories named `node_modules`, `.venv`,
+    `__pycache__`."""
+    root = Path(worktree_dir)
+    skip_dirs = {".git", "node_modules", ".venv", "__pycache__"}
+    entries: List[Tuple[str, int, int]] = []
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+        dirnames[:] = [d for d in sorted(dirnames) if d not in skip_dirs]
+        for name in filenames:
+            file_path = Path(dirpath) / name
+            try:
+                st = file_path.stat()
+            except OSError:
+                continue
+            entries.append((str(file_path.relative_to(root)), st.st_size, st.st_mtime_ns))
+    entries.sort()
+    digest = hashlib.sha256()
+    for rel, size, mtime_ns in entries:
+        digest.update(rel.encode("utf-8", "surrogateescape"))
+        digest.update(b"\0")
+        digest.update(str(size).encode("ascii"))
+        digest.update(b"\0")
+        digest.update(str(mtime_ns).encode("ascii"))
+        digest.update(b"\0")
+    return digest.hexdigest()
 
 
 def _decode(data: bytes | None) -> str:
@@ -168,10 +316,12 @@ class ClaudeCodeHarness(CliHarness):
     name = "claude-code"
     binary = "claude"
     description = "Claude Code CLI"
-    state_paths = (_HOME / ".claude", _HOME / ".claude.json", _HOME / ".config/claude")
+    state_paths = (_HOME / ".claude", _HOME / ".claude.json", _HOME / ".config/claude",
+                   _HOME / ".local/share/claude")
 
     own_login: bool = True
     model_fixed: bool = True
+    default_stall_seconds = 0  # `-p` prints only the final answer
     supported_api_kinds: Tuple[str, ...] = ("anthropic", "subscription")
 
     _OPTION_DEFAULTS: Dict[str, Any] = {"permission_mode": "acceptEdits"}
@@ -184,6 +334,38 @@ class ClaudeCodeHarness(CliHarness):
         # edits are approved; shell commands are not (the sandbox confines both)
         perm = (self._section.options.get("permission_mode") if self._section and self._section.options.get("permission_mode") is not None else "acceptEdits")
         return [self.effective_binary, "-p", prompt, "--permission-mode", perm,
+                *(["--model", model] if model else [])]
+
+
+class AgyHarness(CliHarness):
+    """Google's Antigravity CLI. Own login (the Google account agy is signed in with), models from
+    its own catalog (`agy models`, e.g. gemini-4-argon-medium, claude-sonnet-5-5-medium), so a lane
+    names the model and the step passes it with --model."""
+    name = "agy"
+    binary = "agy"
+    description = "Antigravity CLI (own login, models from its catalog)"
+    # Measured 2026-10-22 (agy 1.4.5): it writes its sessions under ~/.gemini/antigravity-cli and a
+    # project file under ~/.gemini/config/projects; its terminal tool opens a PTY (/dev/ptmx).
+    state_paths = (_HOME / ".gemini/antigravity-cli", _HOME / ".gemini/config", Path("/dev/ptmx"))
+
+    own_login: bool = True
+    model_fixed: bool = False
+    default_stall_seconds = 0  # `-p` prints only the final answer
+    supported_api_kinds: Tuple[str, ...] = ("subscription",)
+
+    # Tool permissions are approved: the fleet's sandbox confines what the tools can do.
+    # agy's own --mode auto needs a terminal sandbox agy does not find on Linux, so it is not used.
+    _OPTION_DEFAULTS: Dict[str, Any] = {"skip_permissions": True}
+
+    def adapt_model(self, endpoint: ModelEndpoint) -> ModelAdapterResult:
+        # The model id is agy's own; it reaches build_command as `model`.
+        return ModelAdapterResult()
+
+    def build_command(self, prompt: str, model: str = "") -> List[str]:
+        opts = self._section.options if self._section is not None else {}
+        skip = opts.get("skip_permissions", self._OPTION_DEFAULTS["skip_permissions"])
+        return [self.effective_binary, "-p", prompt,
+                *(["--dangerously-skip-permissions"] if skip else []),
                 *(["--model", model] if model else [])]
 
 
@@ -427,4 +609,4 @@ def provider_failure(res: Dict[str, Any]) -> Dict[str, Any]:
 
 
 ALL_HARNESSES: Sequence[type] = (ClaudeCodeHarness, OpenCodeHarness, GooseHarness, PiHarness,
-                                 AiderHarness)
+                                 AiderHarness, AgyHarness)

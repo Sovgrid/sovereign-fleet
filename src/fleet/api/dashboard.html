@@ -871,6 +871,56 @@
       min-height: 42px;
     }
 
+    .sort-box {
+      min-width: 140px;
+      display: inline-flex;
+      margin-left: auto;          /* sort and search stay together on the right */
+    }
+
+    .sort-box select {
+      padding: 0.4rem 0.75rem;
+      font-size: 0.75rem;
+      min-height: 42px;
+    }
+
+    .new-tasks-pill {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      margin-bottom: 0.5rem;
+    }
+
+    .new-tasks-btn {
+      background: rgba(6, 182, 212, 0.12);
+      border: 1px solid var(--cyan);
+      color: var(--cyan);
+      padding: 0.4rem 0.9rem;
+      border-radius: var(--radius-sm);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.78rem;
+      font-weight: 600;
+      cursor: pointer;
+      min-height: 42px;
+      transition: all 0.15s ease;
+    }
+
+    .new-tasks-btn:hover {
+      background: rgba(6, 182, 212, 0.2);
+    }
+
+    .new-tasks-pill[hidden] {
+      display: none;
+    }
+
+    .show-more-row {
+      margin-top: 0.5rem;
+      text-align: center;
+    }
+
+    .show-more-row[hidden] {
+      display: none;
+    }
+
     .tasks-container {
       display: flex;
       flex-direction: column;
@@ -900,6 +950,7 @@
       gap: 0.5rem;
       transition: all 0.15s ease;
       cursor: pointer;
+      position: relative;
     }
 
     .task-card:hover {
@@ -910,6 +961,29 @@
     .task-card.active-expanded {
       border-color: var(--cyan);
       background: #101320;
+    }
+
+    .task-card.new-task-highlight {
+      border-color: var(--emerald);
+      box-shadow: 0 0 8px rgba(16, 185, 129, 0.25);
+      transition: box-shadow 0.3s ease, border-color 0.3s ease;
+    }
+
+    .task-card.new-task-highlight::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--emerald);
+      animation: new-task-flash 2s ease-out forwards;
+    }
+
+    @keyframes new-task-flash {
+      0% { opacity: 1; }
+      70% { opacity: 1; }
+      100% { opacity: 0; }
     }
 
     .task-card-summary {
@@ -2374,6 +2448,15 @@
         width: 100%;
       }
 
+      .sort-box {
+        width: 100%;
+        margin-left: 0;
+      }
+
+      .sort-box select {
+        width: 100%;
+      }
+
       .filter-tabs {
         width: 100%;
         display: flex;
@@ -3204,7 +3287,7 @@
           type="text"
           id="faq-search-input"
           class="faq-search-box"
-          placeholder="Search help (e.g. mcp, router, pairs, sandbox, gates, receipts, matrix, recipes)"
+          placeholder="Search help (e.g. sort, memory, stall, quota, agy, sandbox, gates, receipts)"
           oninput="handleFaqSearch(this.value)"
         >
 
@@ -3212,7 +3295,7 @@
         <div class="faq-tabs" id="faq-category-tabs">
           <button type="button" class="filter-btn active" onclick="setFaqCategory('all')">
             <span class="filter-label">ALL TOPICS</span>
-            <span class="filter-count">13</span>
+            <span class="filter-count">19</span>
           </button>
           <button type="button" class="filter-btn" onclick="setFaqCategory('mcp_agents')">
             <span class="filter-label">MCP &amp; CLIENTS</span>
@@ -3220,15 +3303,19 @@
           </button>
           <button type="button" class="filter-btn" onclick="setFaqCategory('architecture')">
             <span class="filter-label">ROUTING &amp; LANES</span>
-            <span class="filter-count">3</span>
+            <span class="filter-count">5</span>
           </button>
           <button type="button" class="filter-btn" onclick="setFaqCategory('security')">
             <span class="filter-label">SECURITY &amp; SANDBOX</span>
-            <span class="filter-count">4</span>
+            <span class="filter-count">5</span>
           </button>
           <button type="button" class="filter-btn" onclick="setFaqCategory('orchestration')">
             <span class="filter-label">ISSUES, CHAINS &amp; CLI</span>
             <span class="filter-count">4</span>
+          </button>
+          <button type="button" class="filter-btn" onclick="setFaqCategory('tasks')">
+            <span class="filter-label">WORKING WITH TASKS</span>
+            <span class="filter-count">3</span>
           </button>
         </div>
 
@@ -3350,6 +3437,7 @@
                     <option value="goose">goose</option>
                     <option value="pi">Pi</option>
                     <option value="aider">aider</option>
+                    <option value="agy">Antigravity (agy)</option>
                   </select>
                 </div>
 
@@ -3452,6 +3540,20 @@
                 <span class="filter-count" id="count-passed">0</span>
               </button>
             </div>
+            <div class="sort-box">
+              <select
+                id="task-sort-select"
+                aria-label="Sort"
+                onchange="onSortChange()"
+                class="form-input search-input"
+                style="padding: 0.4rem 0.75rem; font-size: 0.75rem; min-height: 42px; background: var(--input-bg); border: 1px solid var(--border); color: var(--text-muted); border-radius: var(--radius-sm); font-family: 'JetBrains Mono', monospace; cursor: pointer;"
+              >
+                <option value="default">Default</option>
+                <option value="newest">Newest first</option>
+                <option value="oldest">Oldest first</option>
+                <option value="lane">By lane</option>
+              </select>
+            </div>
             <div class="search-box">
               <input
                 type="text"
@@ -3464,8 +3566,16 @@
             </div>
           </div>
 
+          <div id="new-tasks-pill" class="new-tasks-pill" hidden>
+            <button type="button" class="new-tasks-btn" onclick="scrollToTop()">
+              <span class="new-tasks-count"></span> new tasks
+            </button>
+          </div>
           <div class="tasks-container" id="tasks-list">
             <!-- Dynamic task cards render here with progressive disclosure -->
+          </div>
+          <div id="show-more-row" class="show-more-row" hidden>
+            <button type="button" id="show-more-btn" class="chip-btn" onclick="loadMore()">Show 50 more</button>
           </div>
         </div>
       </div>
@@ -4052,6 +4162,10 @@
     let tasksData = [];
     let tasksDataSerialized = '';
     let currentFilter = 'open';
+    let currentPage = 0;              // pages beyond the first 50 the user opened in this view
+    const TASK_PAGE_SIZE = 50;
+    const renderedTaskIds = {};       // view -> ids drawn last time, to spot new tasks
+    let newTasksAbove = 0;            // arrived above the visible cards while scrolled down
     let currentCoordinator = '';
     let currentTab = 'tasks';
     let currentRosterFilter = 'online';
@@ -4206,6 +4320,9 @@
     // Filter selection for Tasks
     function setFilter(filter) {
       currentFilter = filter;
+      currentPage = 0;
+      newTasksAbove = 0;
+      delete renderedTaskIds[filter];
       if (filter === 'failed') {
         try { localStorage.setItem('fleet.failuresSeenAt', String(Date.now() / 1000)); } catch (e) { /* private mode */ }
         renderAttention();
@@ -4215,6 +4332,7 @@
         b.classList.remove('active');
         if (b.id === TASK_FILTER_BUTTON[filter]) b.classList.add('active');
       });
+      restoreSortControl();
       renderTasks();
     }
 
@@ -4309,6 +4427,127 @@
       return `<span class="status-pill pill-fail"><svg class="pill-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg> ${escapeHtml(status ? status.toUpperCase() : 'UNKNOWN')}</span>`;
     }
 
+    // --- Sort mode persistence (per view) ---
+    function getSortKey(view) { return 'fleet.sort.' + view; }
+
+    function saveSortMode(view, mode) {
+      try { localStorage.setItem(getSortKey(view), mode); } catch (e) { /* private mode */ }
+    }
+
+    function loadSortMode(view) {
+      try { return localStorage.getItem(getSortKey(view)) || 'default'; } catch (e) { return 'default'; }
+    }
+
+    function onSortChange() {
+      const sel = document.getElementById('task-sort-select');
+      if (sel) {
+        const mode = sel.value;
+        saveSortMode(currentFilter, mode);
+      }
+      currentPage = 0;
+      delete renderedTaskIds[currentFilter];
+      renderTasks();
+    }
+
+    function restoreSortControl() {
+      const sel = document.getElementById('task-sort-select');
+      if (sel) {
+        const mode = loadSortMode(currentFilter);
+        sel.value = mode;
+      }
+    }
+
+    function scrollToTop() {
+      const listEl = document.getElementById('tasks-list');
+      if (listEl) listEl.scrollTo({ top: 0, behavior: 'smooth' });
+      newTasksAbove = 0;
+      document.getElementById('new-tasks-pill').hidden = true;
+    }
+
+    /**
+     * Sort tasks by view and mode. Stable tiebreaker on id (string compare).
+     * Returns a new array (does not mutate).
+     */
+    function getTaskEndAt(t) {
+      return t.result && t.result.finished_at
+        ? t.result.finished_at
+        : (t.metadata && t.metadata.finished_at)
+          ? t.metadata.finished_at
+          : (t.created_at || 0);
+    }
+
+    function taskTimeLabel(epoch, ended) {
+      const d = new Date(epoch * 1000);
+      const sameDay = d.toDateString() === new Date().toDateString();
+      const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const when = sameDay ? time : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${time}`;
+      return ended ? `ended ${when}` : when;
+    }
+
+    function sortTasks(list, view, mode) {
+      const sorted = Array.from(list);
+      if (mode === 'newest') {
+        sorted.sort((a, b) => {
+          const ca = (a.created_at || 0) - (b.created_at || 0);
+          return ca !== 0 ? ca : (a.id > b.id ? 1 : (a.id < b.id ? -1 : 0));
+        });
+        sorted.reverse();
+      } else if (mode === 'oldest') {
+        sorted.sort((a, b) => {
+          const ca = (a.created_at || 0) - (b.created_at || 0);
+          return ca !== 0 ? ca : (a.id > b.id ? 1 : (a.id < b.id ? -1 : 0));
+        });
+      } else if (mode === 'lane') {
+        sorted.sort((a, b) => {
+          const la = a.lane || '';
+          const lb = b.lane || '';
+          if (la < lb) return -1;
+          if (la > lb) return 1;
+          // Within same lane, newest first
+          const ca = (b.created_at || 0) - (a.created_at || 0);
+          if (ca !== 0) return ca;
+          return a.id > b.id ? -1 : (a.id < b.id ? 1 : 0);
+        });
+      } else {
+        // default: per-view sensible order
+        if (view === 'open') {
+          // in_progress first, then awaiting_approval, then queued oldest first
+          // Within in_progress: newest first
+          const laneOrder = { 'in_progress': 0, 'awaiting_approval': 1, 'queued': 2 };
+          sorted.sort((a, b) => {
+            const oa = laneOrder[a.status] !== undefined ? laneOrder[a.status] : 3;
+            const ob = laneOrder[b.status] !== undefined ? laneOrder[b.status] : 3;
+            if (oa !== ob) return oa - ob;
+            if (a.status === 'in_progress' && b.status === 'in_progress') {
+              const ca = (b.created_at || 0) - (a.created_at || 0);
+              if (ca !== 0) return ca;
+            }
+            if (a.status === 'queued' && b.status === 'queued') {
+              const ca = (a.created_at || 0) - (b.created_at || 0);
+              if (ca !== 0) return ca;
+            }
+            return a.id > b.id ? -1 : (a.id < b.id ? 1 : 0);
+          });
+        } else if (view === 'failed' || view === 'completed') {
+          // by end time, newest first
+          sorted.sort((a, b) => {
+            const ea = getTaskEndAt(a);
+            const eb = getTaskEndAt(b);
+            if (ea !== eb) return eb - ea;
+            return a.id > b.id ? -1 : (a.id < b.id ? 1 : 0);
+          });
+        } else {
+          // archived, default: newest first by created_at
+          sorted.sort((a, b) => {
+            const ca = (b.created_at || 0) - (a.created_at || 0);
+            if (ca !== 0) return ca;
+            return a.id > b.id ? -1 : (a.id < b.id ? 1 : 0);
+          });
+        }
+      }
+      return sorted;
+    }
+
     // Render Tasks Spool
     function renderTasks() {
       const container = document.getElementById('tasks-list');
@@ -4342,185 +4581,232 @@
             <div style="color: var(--text-muted);">${currentFilter === 'open' ? 'Nothing running or waiting.' : 'No tasks in this view.'}</div>
           </div>
         `;
+        document.getElementById('new-tasks-pill').hidden = true;
+        document.getElementById('show-more-row').hidden = true;
         return;
       }
 
-      container.innerHTML = '';
-      filtered.slice().reverse().forEach(t => {
-        const card = document.createElement('div');
-        const isExpanded = expandedTasks.has(t.id);
-        card.className = `task-card ${isExpanded ? 'active-expanded' : ''}`;
-        card.onclick = () => toggleTask(t.id);
+      const sorted = sortTasks(filtered, currentFilter, loadSortMode(currentFilter));
+      const shown = sorted.slice(0, (currentPage + 1) * TASK_PAGE_SIZE);
 
-        const timeStr = t.created_at ? new Date(t.created_at * 1000).toLocaleTimeString() : 'now';
-        const laneBadge = getLaneBadge(t.lane);
-        const statusPill = getStatusPill(t.status);
-
-        // Exit code text
-        let exitCodeText = '[QUEUED]';
-        let exitCodeClass = 'style="color: var(--amber);"';
-        if (t.status === 'in_progress') {
-          exitCodeText = '[RUNNING]';
-          exitCodeClass = 'style="color: var(--cyan);"';
-        } else if (t.result && t.result.exit_code !== undefined) {
-          exitCodeText = `exit_code=${t.result.exit_code} (${t.result.exit_code === 0 ? '[OK] SUCCESS' : '[FAIL] ERROR'})`;
-          exitCodeClass = t.result.exit_code === 0 ? 'style="color: var(--emerald);"' : 'style="color: var(--rose);"';
-        } else if (t.status === 'completed') {
-          exitCodeText = 'exit_code=0 [OK]';
-          exitCodeClass = 'style="color: var(--emerald);"';
-        } else if (t.status === 'failed') {
-          exitCodeText = 'exit_code=1 [FAIL]';
-          exitCodeClass = 'style="color: var(--rose);"';
+      // The list scrolls itself. Scrolled down: keep the card at the top of the view where it
+      // is and count what arrives above it; at the top: new cards simply appear, highlighted.
+      const scrolled = container.scrollTop > 10;
+      let anchorId = null, anchorTop = 0;
+      if (scrolled) {
+        const top = container.getBoundingClientRect().top;
+        for (const c of container.querySelectorAll('.task-card')) {
+          const r = c.getBoundingClientRect();
+          if (r.bottom > top) { anchorId = c.dataset.taskId; anchorTop = r.top; break; }
         }
+      }
+      const seen = renderedTaskIds[currentFilter];   // what this view showed last time
+      const fresh = new Set(seen ? shown.filter(t => !seen.has(t.id)).map(t => t.id) : []);
+      renderedTaskIds[currentFilter] = new Set(shown.map(t => t.id));
+      const anchorIndex = anchorId ? shown.findIndex(t => t.id === anchorId) : -1;
 
-        // Changed files block
-        let changedFilesHtml = '';
-        if (t.result && Array.isArray(t.result.changed_files) && t.result.changed_files.length > 0) {
-          changedFilesHtml = `
+      container.innerHTML = '';
+      shown.forEach(t => {
+        const card = document.createElement('div');
+        const isNew = !scrolled && fresh.has(t.id);
+        card.className = `task-card${expandedTasks.has(t.id) ? ' active-expanded' : ''}${isNew ? ' new-task-highlight' : ''}`;
+        card.dataset.taskId = t.id;
+        card.onclick = () => toggleTask(t.id);
+        card.innerHTML = _buildTaskCard(t);
+        if (isNew) setTimeout(() => card.classList.remove('new-task-highlight'), 2000);
+        container.appendChild(card);
+      });
+      // The pill first: it sits above the list, so showing it moves the list down.
+      if (!scrolled) newTasksAbove = 0;
+      else if (anchorIndex > 0) newTasksAbove += shown.slice(0, anchorIndex).filter(t => fresh.has(t.id)).length;
+      const pill = document.getElementById('new-tasks-pill');
+      pill.querySelector('.new-tasks-count').textContent = String(newTasksAbove);
+      pill.hidden = newTasksAbove === 0;
+      document.getElementById('show-more-row').hidden = shown.length >= sorted.length;
+      if (anchorId) {
+        const c = Array.from(container.querySelectorAll('.task-card')).find(el => el.dataset.taskId === anchorId);
+        if (c) container.scrollTop += c.getBoundingClientRect().top - anchorTop;
+      }
+    }
+
+    /** "Show 50 more": the next page of the current view, kept across polls. */
+    function loadMore() {
+      currentPage++;
+      renderTasks();
+    }
+
+    /** Build the inner HTML for a single task card (extracted from renderTasks). */
+    function _buildTaskCard(t) {
+      const isExpanded = expandedTasks.has(t.id);
+      // Failed and Done are ordered by end time, so their cards show it; older days get a date.
+      const byEnd = currentFilter === 'failed' || currentFilter === 'completed';
+      const stamp = byEnd ? getTaskEndAt(t) : t.created_at;
+      const timeStr = stamp ? taskTimeLabel(stamp, byEnd) : 'now';
+      const laneBadge = getLaneBadge(t.lane);
+      const statusPill = getStatusPill(t.status);
+
+      // Exit code text
+      let exitCodeText = '[QUEUED]';
+      let exitCodeClass = 'style="color: var(--amber);"';
+      if (t.status === 'in_progress') {
+        exitCodeText = '[RUNNING]';
+        exitCodeClass = 'style="color: var(--cyan);"';
+      } else if (t.result && t.result.exit_code !== undefined) {
+        exitCodeText = `exit_code=${t.result.exit_code} (${t.result.exit_code === 0 ? '[OK] SUCCESS' : '[FAIL] ERROR'})`;
+        exitCodeClass = t.result.exit_code === 0 ? 'style="color: var(--emerald);"' : 'style="color: var(--rose);"';
+      } else if (t.status === 'completed') {
+        exitCodeText = 'exit_code=0 [OK]';
+        exitCodeClass = 'style="color: var(--emerald);"';
+      } else if (t.status === 'failed') {
+        exitCodeText = 'exit_code=1 [FAIL]';
+        exitCodeClass = 'style="color: var(--rose);"';
+      }
+
+      // Changed files block
+      let changedFilesHtml = '';
+      if (t.result && Array.isArray(t.result.changed_files) && t.result.changed_files.length > 0) {
+        changedFilesHtml = `
+          <div class="detail-section">
+            <div class="detail-heading">CHANGED FILES (${t.result.changed_files.length})</div>
+            <div class="changed-files-box">
+              ${t.result.changed_files.map(f => `<div class="changed-file-item">&gt; <code>${escapeHtml(f)}</code></div>`).join('')}
+            </div>
+          </div>
+        `;
+      }
+
+      // Logs block
+      let logDetailsHtml = '';
+      if (t.result) {
+        if (t.result.error) {
+          logDetailsHtml = `
             <div class="detail-section">
-              <div class="detail-heading">CHANGED FILES (${t.result.changed_files.length})</div>
-              <div class="changed-files-box">
-                ${t.result.changed_files.map(f => `<div class="changed-file-item">&gt; <code>${escapeHtml(f)}</code></div>`).join('')}
-              </div>
+              <div class="detail-heading" style="color: var(--rose);">ERROR LOG</div>
+              <pre class="log-code-block error-block">${escapeHtml(t.result.error)}${t.result.details ? '\n' + escapeHtml(JSON.stringify(t.result.details, null, 2)) : ''}</pre>
+            </div>
+          `;
+        } else if (t.result.harness_output) {
+          logDetailsHtml = `
+            <div class="detail-section">
+              <div class="detail-heading">HARNESS OUTPUT</div>
+              <pre class="log-code-block">${escapeHtml(t.result.harness_output.slice(0, 3000))}${t.result.harness_output.length > 3000 ? '\n... [truncated]' : ''}</pre>
             </div>
           `;
         }
+      }
 
-        // Logs block
-        let logDetailsHtml = '';
-        if (t.result) {
-          if (t.result.error) {
-            logDetailsHtml = `
-              <div class="detail-section">
-                <div class="detail-heading" style="color: var(--rose);">ERROR LOG</div>
-                <pre class="log-code-block error-block">${escapeHtml(t.result.error)}${t.result.details ? '\n' + escapeHtml(JSON.stringify(t.result.details, null, 2)) : ''}</pre>
-              </div>
-            `;
-          } else if (t.result.harness_output) {
-            logDetailsHtml = `
-              <div class="detail-section">
-                <div class="detail-heading">HARNESS OUTPUT</div>
-                <pre class="log-code-block">${escapeHtml(t.result.harness_output.slice(0, 3000))}${t.result.harness_output.length > 3000 ? '\n... [truncated]' : ''}</pre>
-              </div>
-            `;
-          }
-        }
+      const chevronSvg = `
+        <svg class="chevron-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="transform: ${isExpanded ? 'rotate(180deg)' : 'rotate(0deg)'}; transition: transform 0.2s ease;">
+          <polyline points="6 9 12 15 18 9"></polyline>
+        </svg>
+      `;
 
-        const chevronSvg = `
-          <svg class="chevron-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="transform: ${isExpanded ? 'rotate(180deg)' : 'rotate(0deg)'}; transition: transform 0.2s ease;">
-            <polyline points="6 9 12 15 18 9"></polyline>
-          </svg>
-        `;
+      // Dependency badge
+      let depBadgeHtml = '';
+      if (t.depends_on && t.depends_on.length > 0) {
+        depBadgeHtml = `<span class="provider-pill" style="background: rgba(255,255,255,0.05); color: var(--text-muted); border: 1px solid var(--border);" title="Depends on: ${escapeHtml(t.depends_on.join(', '))}">DEP: ${escapeHtml(t.depends_on.join(','))}</span>`;
+      }
 
-        // Dependency badge
-        let depBadgeHtml = '';
-        if (t.depends_on && t.depends_on.length > 0) {
-          depBadgeHtml = `<span class="provider-pill" style="background: rgba(255,255,255,0.05); color: var(--text-muted); border: 1px solid var(--border);" title="Depends on: ${escapeHtml(t.depends_on.join(', '))}">DEP: ${escapeHtml(t.depends_on.join(','))}</span>`;
-        }
+      // Harness / Model Pair badge
+      const pair = actualPair(t);
+      const hName = (pair && pair.harness) || (t.metadata && t.metadata.harness) || '';
+      const mName = (pair && pair.model) || (t.metadata && t.metadata.model) || '';
+      let pairBadgeHtml = '';
+      if (hName && hName !== 'auto' && mName && mName !== 'auto') {
+        pairBadgeHtml = `<span class="provider-pill" style="border-color: rgba(16,185,129,0.3); color: var(--emerald);" title="Pair: ${escapeHtml(hName)} + ${escapeHtml(mName)}">${escapeHtml(hName)}:${escapeHtml(mName)}</span>`;
+      } else if (hName && hName !== 'auto') {
+        pairBadgeHtml = `<span class="provider-pill" title="Harness: ${escapeHtml(hName)}">${escapeHtml(hName)}</span>`;
+      }
 
-        // Harness / Model Pair badge
-        const pair = actualPair(t);
-        const hName = (pair && pair.harness) || (t.metadata && t.metadata.harness) || '';
-        const mName = (pair && pair.model) || (t.metadata && t.metadata.model) || '';
-        let pairBadgeHtml = '';
-        if (hName && hName !== 'auto' && mName && mName !== 'auto') {
-          pairBadgeHtml = `<span class="provider-pill" style="border-color: rgba(16,185,129,0.3); color: var(--emerald);" title="Pair: ${escapeHtml(hName)} + ${escapeHtml(mName)}">${escapeHtml(hName)}:${escapeHtml(mName)}</span>`;
-        } else if (hName && hName !== 'auto') {
-          pairBadgeHtml = `<span class="provider-pill" title="Harness: ${escapeHtml(hName)}">${escapeHtml(hName)}</span>`;
-        }
-
-        const ref = issueRef(t);
-        const title = (t.text || '').split('\n')[0];
-        card.innerHTML = `
-          <div class="task-card-summary">
-            <div class="task-title-line">
-              <span class="toggle-glyph" aria-hidden="true">${chevronSvg}</span>
-              <span class="task-title" title="${escapeHtml(t.text)}">${escapeHtml(title)}</span>
+      const ref = issueRef(t);
+      const title = (t.text || '').split('\n')[0];
+      return `
+        <div class="task-card-summary">
+          <div class="task-title-line">
+            <span class="toggle-glyph" aria-hidden="true">${chevronSvg}</span>
+            <span class="task-title" title="${escapeHtml(t.text)}">${escapeHtml(title)}</span>
+          </div>
+          <div class="task-header-row">
+            <div class="task-header-left task-meta-badges">
+              ${statusPill}
+              ${laneBadge}
+              ${pairBadgeHtml}
+              ${ref ? (reachable(ref.url)
+                ? `<a class="provider-pill issue-pill" href="${escapeHtml(ref.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${escapeHtml(ref.label)}</a>`
+                : `<span class="provider-pill issue-pill" title="${escapeHtml(ref.url)}">${escapeHtml(ref.label)}</span>`) : ''}
+              ${depBadgeHtml}
+              <span class="task-time-badge">${timeStr}</span>
             </div>
-            <div class="task-header-row">
-              <div class="task-header-left task-meta-badges">
-                ${statusPill}
-                ${laneBadge}
-                ${pairBadgeHtml}
-                ${ref ? (reachable(ref.url)
-                  ? `<a class="provider-pill issue-pill" href="${escapeHtml(ref.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${escapeHtml(ref.label)}</a>`
-                  : `<span class="provider-pill issue-pill" title="${escapeHtml(ref.url)}">${escapeHtml(ref.label)}</span>`) : ''}
-                ${depBadgeHtml}
-                <span class="task-time-badge">${timeStr}</span>
-              </div>
-              <div class="task-header-right" style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
-                ${t.status === 'awaiting_approval' ? `
-                  <button type="button" class="task-action-btn btn-action-approve" data-task-id="${escapeHtml(t.id)}" onclick="event.stopPropagation(); approveTask(this.dataset.taskId)">[APPROVE]</button>
-                  <button type="button" class="task-action-btn btn-action-reject" data-task-id="${escapeHtml(t.id)}" onclick="event.stopPropagation(); rejectTask(this.dataset.taskId)">[REJECT]</button>
-                ` : ''}
-              </div>
+            <div class="task-header-right" style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+              ${t.status === 'awaiting_approval' ? `
+                <button type="button" class="task-action-btn btn-action-approve" data-task-id="${escapeHtml(t.id)}" onclick="event.stopPropagation(); approveTask(this.dataset.taskId)">[APPROVE]</button>
+                <button type="button" class="task-action-btn btn-action-reject" data-task-id="${escapeHtml(t.id)}" onclick="event.stopPropagation(); rejectTask(this.dataset.taskId)">[REJECT]</button>
+              ` : ''}
             </div>
           </div>
+        </div>
 
-          ${isExpanded ? `
-          <div class="task-accordion-details" onclick="event.stopPropagation()">
-            <div class="detail-section">
-              <div class="detail-heading">FULL PROMPT</div>
-              <div class="detail-prompt-box">${escapeHtml(t.text)}</div>
-            </div>
-
-            <div class="detail-meta-grid">
-              <div class="meta-cell">
-                <span class="meta-label">TASK ID:</span>
-                <span class="meta-value">${escapeHtml(t.id)}</span>
-              </div>
-              <div class="meta-cell">
-                <span class="meta-label">TARGET LANE:</span>
-                <span class="meta-value">${escapeHtml(laneText(t))}</span>
-              </div>
-              <div class="meta-cell">
-                <span class="meta-label">ISOLATED WORKTREE PATH:</span>
-                <span class="meta-value" style="color: var(--cyan);">${escapeHtml(t.worktree_path || `~/.fleet/worktrees/${t.id}`)}</span>
-              </div>
-              <div class="meta-cell">
-                <span class="meta-label">EXECUTION EXIT CODE:</span>
-                <span class="meta-value" ${exitCodeClass}>${exitCodeText}</span>
-              </div>
-              <div class="meta-cell">
-                <span class="meta-label">HARNESS:</span>
-                <span class="meta-value">${escapeHtml(choiceText(t.metadata && t.metadata.harness, actualPair(t) && actualPair(t).harness, actualPair(t) && actualPair(t).live))}</span>
-              </div>
-              <div class="meta-cell">
-                <span class="meta-label">MODEL:</span>
-                <span class="meta-value">${escapeHtml(choiceText(t.metadata && t.metadata.model, actualPair(t) && actualPair(t).model, actualPair(t) && actualPair(t).live))}</span>
-              </div>
-              ${t.depends_on && t.depends_on.length > 0 ? `
-              <div class="meta-cell" style="grid-column: 1 / -1;">
-                <span class="meta-label">DEPENDS ON:</span>
-                <span class="meta-value" style="color: var(--amber);">${escapeHtml(t.depends_on.join(', '))}</span>
-              </div>
-              ` : ''}
-            </div>
-
-            ${changedFilesHtml}
-            ${logDetailsHtml}
-
-            <!-- Task Actions Bar -->
-            <div style="display: flex; gap: 0.5rem; justify-content: flex-end; align-items: center; margin-top: 0.75rem; padding-top: 0.65rem; border-top: 1px dashed var(--border); flex-wrap: wrap;">
-              ${(t.status === 'in_progress' || t.status === 'queued') ? `
-                <button type="button" class="task-action-btn btn-action-cancel" data-task-id="${escapeHtml(t.id)}" onclick="cancelTask(this.dataset.taskId)" title="Stop the task">Cancel task</button>
-              ` : ''}
-              ${(t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled') ? `
-                <button type="button" class="task-action-btn btn-action-archive" data-task-id="${escapeHtml(t.id)}" onclick="archiveTask(this.dataset.taskId)">[ARCHIVE]</button>
-              ` : ''}
-              ${t.status === 'archived' ? `
-                <button type="button" class="task-action-btn btn-action-archive" data-task-id="${escapeHtml(t.id)}" onclick="unarchiveTask(this.dataset.taskId)">↺ RESTORE FROM ARCHIVE</button>
-              ` : ''}
-              <button type="button" class="task-action-btn" data-task-id="${escapeHtml(t.id)}" onclick="redispatch(this.dataset.taskId)" title="Copy the prompt into the new-task box">↺ RE-DISPATCH</button>
-            </div>
+        ${isExpanded ? `
+        <div class="task-accordion-details" onclick="event.stopPropagation()">
+          <div class="detail-section">
+            <div class="detail-heading">FULL PROMPT</div>
+            <div class="detail-prompt-box">${escapeHtml(t.text)}</div>
           </div>
-          ` : ''}
-        `;
-        container.appendChild(card);
-      });
+
+          <div class="detail-meta-grid">
+            <div class="meta-cell">
+              <span class="meta-label">TASK ID:</span>
+              <span class="meta-value">${escapeHtml(t.id)}</span>
+            </div>
+            <div class="meta-cell">
+              <span class="meta-label">TARGET LANE:</span>
+              <span class="meta-value">${escapeHtml(laneText(t))}</span>
+            </div>
+            <div class="meta-cell">
+              <span class="meta-label">ISOLATED WORKTREE PATH:</span>
+              <span class="meta-value" style="color: var(--cyan);">${escapeHtml(t.worktree_path || `~/.fleet/worktrees/${t.id}`)}</span>
+            </div>
+            <div class="meta-cell">
+              <span class="meta-label">EXECUTION EXIT CODE:</span>
+              <span class="meta-value" ${exitCodeClass}>${exitCodeText}</span>
+            </div>
+            <div class="meta-cell">
+              <span class="meta-label">HARNESS:</span>
+              <span class="meta-value">${escapeHtml(choiceText(t.metadata && t.metadata.harness, actualPair(t) && actualPair(t).harness, actualPair(t) && actualPair(t).live))}</span>
+            </div>
+            <div class="meta-cell">
+              <span class="meta-label">MODEL:</span>
+              <span class="meta-value">${escapeHtml(choiceText(t.metadata && t.metadata.model, actualPair(t) && actualPair(t).model, actualPair(t) && actualPair(t).live))}</span>
+            </div>
+            ${t.depends_on && t.depends_on.length > 0 ? `
+            <div class="meta-cell" style="grid-column: 1 / -1;">
+              <span class="meta-label">DEPENDS ON:</span>
+              <span class="meta-value" style="color: var(--amber);">${escapeHtml(t.depends_on.join(', '))}</span>
+            </div>
+            ` : ''}
+          </div>
+
+          ${changedFilesHtml}
+          ${logDetailsHtml}
+
+          <!-- Task Actions Bar -->
+          <div style="display: flex; gap: 0.5rem; justify-content: flex-end; align-items: center; margin-top: 0.75rem; padding-top: 0.65rem; border-top: 1px dashed var(--border); flex-wrap: wrap;">
+            ${(t.status === 'in_progress' || t.status === 'queued') ? `
+              <button type="button" class="task-action-btn btn-action-cancel" data-task-id="${escapeHtml(t.id)}" onclick="cancelTask(this.dataset.taskId)" title="Stop the task">Cancel task</button>
+            ` : ''}
+            ${(t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled') ? `
+              <button type="button" class="task-action-btn btn-action-archive" data-task-id="${escapeHtml(t.id)}" onclick="archiveTask(this.dataset.taskId)">[ARCHIVE]</button>
+            ` : ''}
+            ${t.status === 'archived' ? `
+              <button type="button" class="task-action-btn btn-action-archive" data-task-id="${escapeHtml(t.id)}" onclick="unarchiveTask(this.dataset.taskId)">↺ RESTORE FROM ARCHIVE</button>
+            ` : ''}
+            <button type="button" class="task-action-btn" data-task-id="${escapeHtml(t.id)}" onclick="redispatch(this.dataset.taskId)" title="Copy the prompt into the new-task box">↺ RE-DISPATCH</button>
+          </div>
+        </div>
+        ` : ''}
+      `;
     }
 
-    // Load Tasks from API
     let tasksEtag = '';
     async function loadTasks() {
       try {
@@ -4697,7 +4983,10 @@
         const el = document.getElementById(`health-count-${key}`);
         if (el) el.innerText = data.lanes.filter(test).length;
       }
-      const shown = data.lanes.filter(LANE_HEALTH_GROUPS[laneHealthFilter]);
+      // Problems first (dead, retired, untested), then by name: what needs a look is on top.
+      const LANE_RANK = { dead: 0, retired: 1, untested: 2 };
+      const shown = data.lanes.filter(LANE_HEALTH_GROUPS[laneHealthFilter]).slice().sort((a, b) =>
+        ((LANE_RANK[a.status] ?? 3) - (LANE_RANK[b.status] ?? 3)) || String(a.id || '').localeCompare(String(b.id || '')));
       document.getElementById('lane-health-list').innerHTML = shown.length === 0
         ? '<div class="health-meta">No lanes in this view.</div>'
         : shown.map(l => {
@@ -4779,7 +5068,10 @@
     function renderIntake(data) {
       const panel = document.getElementById('intake-panel');
       if (!panel) return;
-      const rows = (data && data.projects || []).filter(p => p.enabled);
+      // Failing sources first, paused ones last, else by project name.
+      const rank = p => (p.last_error && !p.paused) ? 0 : (p.paused ? 2 : 1);
+      const rows = (data && data.projects || []).filter(p => p.enabled)
+        .sort((a, b) => (rank(a) - rank(b)) || String(a.project || '').localeCompare(String(b.project || '')));
       if (rows.length === 0) {
         panel.hidden = true;
         return;
@@ -5955,6 +6247,66 @@
         answer: "The fleet command runs one task end to end, tests harness conformance, inspects lanes, routing, intake and config; the REST API (Bearer token) queues and steers tasks; /api/fleet/status/waybar feeds a status bar.",
         snippet: "fleet run \"Fix the off-by-one in pager.py\" --project myapp\nfleet harnesses test goose\nfleet lanes show\nfleet config check",
         snippetLabel: "Shell examples"
+      },
+      {
+        id: "faq-task-lists",
+        category: "tasks",
+        categoryLabel: "WORKING WITH TASKS",
+        question: "How are the task lists ordered, and how do I keep the newest task on top?",
+        tags: ["tasks", "sort", "order", "newest", "oldest", "lane", "filter", "search", "new tasks"],
+        answer: "Each view has a default order that fits what you do there. Open: running tasks first, then the ones waiting for your approval, then the queue in the order it will run. Failed and Done: newest end time first, so a task that failed a minute ago is on top even if it was queued yesterday, and their cards show when they ended. Archived: newest first. The Sort menu next to the search switches a view to Newest first, Oldest first or By lane; the dashboard remembers the choice per view in this browser. When you have scrolled down and new tasks arrive, the list does not jump: a pill says how many are new, and a click takes you to the top. Each view shows 50 tasks, Show 50 more loads the next ones; the counts on the tabs are always totals. Inside a task, attempts and the log stay in time order, oldest first.",
+        snippet: null,
+        snippetLabel: null
+      },
+      {
+        id: "faq-task-routine",
+        category: "tasks",
+        categoryLabel: "WORKING WITH TASKS",
+        question: "What is a good routine for working with the fleet (best practice)?",
+        tags: ["best practice", "routine", "contract", "intent", "approval", "autopsy", "review", "split"],
+        answer: "Give every task a contract: a project, a title, acceptance criteria, allowed paths and a test as its gate (the intent of fleet_dispatch_task). One change per task; a task that needs more than one run timeout is usually two tasks. Look at Open first: approvals wait for you, nothing else does. In Failed, read the autopsy before you retry: a scope violation wants a wider allowed path, a timeout a smaller task, a quota a later retry. Treat the cross-lane review as a first pass, not as the final word: check user interface changes in the browser and read new tests, since a test that cannot fail passes every gate. Archive what you have handled so the views stay short.",
+        snippet: null,
+        snippetLabel: null
+      },
+      {
+        id: "faq-run-limits",
+        category: "tasks",
+        categoryLabel: "WORKING WITH TASKS",
+        question: "What ends an agent run early: timeout, stall or memory limit?",
+        tags: ["timeout", "stall", "stall_seconds", "memory", "137", "124", "failover", "limits"],
+        answer: "Three limits end a run, and each one counts as a failed attempt, so the task moves on to the next lane. The task timeout (Settings, default 600 s) ends a run with exit code 124. A stall ends it earlier with 124: no output and no change in the worktree for stall_seconds (default 480, capped at the timeout; off for Claude Code and the Antigravity CLI, which print nothing until they finish). The memory limit ends it with 137 when the run's processes together use more than [sandbox] memory_max (default 8G). Each process group is killed whole, children included.",
+        snippet: "[harnesses.goose.options]\nstall_seconds = 300   # 0 switches stall detection off\n\n[sandbox]\nmemory_max = \"8G\"     # \"\" or \"0\" switches the limit off",
+        snippetLabel: "fleet.toml"
+      },
+      {
+        id: "faq-memory-limit",
+        category: "security",
+        categoryLabel: "SECURITY & SANDBOX",
+        question: "How does the memory limit work, and why does the daemon need one?",
+        tags: ["memory", "oom", "memory_max", "systemd", "cgroup", "watchdog", "docker", "health"],
+        answer: "One runaway process can use all memory, and then the kernel's OOM killer may end the daemon with it (it happened: a test process grew to 51 GB). So every agent run and every gate gets its own limit, [sandbox] memory_max (default 8G), in two layers. Where a user systemd manager runs, the run starts in its own systemd scope with that MemoryMax. Everywhere, also in Docker or without systemd, a watchdog adds up the resident memory of the run's process group every 2 seconds and kills the group above the limit. System health shows the active layer, for example memory_limit: systemd-scope 8G. Run the daemon itself with the example unit in examples/sovereign-fleet.service: it caps the daemon and keeps it running when one of its children is killed (OOMPolicy=continue). FLEET_MEMORY_LIMIT=0 switches the limit off for a debugging session.",
+        snippet: "cp examples/sovereign-fleet.service ~/.config/systemd/user/\nsystemctl --user enable --now sovereign-fleet.service",
+        snippetLabel: "Run the daemon as a user service"
+      },
+      {
+        id: "faq-lane-resting",
+        category: "architecture",
+        categoryLabel: "ROUTING & LANES",
+        question: "Why is a lane resting, and when does it come back?",
+        tags: ["quota", "rate limit", "resting", "429", "reset", "subscription", "lane health"],
+        answer: "When a provider answers with a limit, the lane rests instead of failing task after task. A per minute rate limit rests it for 2 minutes. A daily quota rests it until the provider's daily reset (midnight Pacific time for Google AI Studio). When the provider names the reset (\"Resets in 94h19m\"), the lane rests until exactly then, together with every other lane that runs the same own-login CLI, since they share one subscription. System health lists the resting lanes; the router skips them and the next lane takes the task.",
+        snippet: null,
+        snippetLabel: null
+      },
+      {
+        id: "faq-subscription-harnesses",
+        category: "architecture",
+        categoryLabel: "ROUTING & LANES",
+        question: "How do Claude Code and the Antigravity CLI run with my own subscription?",
+        tags: ["claude code", "antigravity", "agy", "subscription", "login", "harness", "gemini"],
+        answer: "Both log in with your own account instead of an API key, so the daemon never handles a key for them. Log in once in a terminal (claude, agy); the sandbox lets each CLI write only its own state directories. Claude Code runs claude -p with its fixed model. The Antigravity CLI runs agy -p with the model each lane names, from agy's own catalog, and approves its tool calls itself inside the sandbox (option skip_permissions, default on). A subscription model pairs only with the CLI that reaches it. Check a CLI with fleet harnesses test agy before you give it work.",
+        snippet: "[lanes.antigravity_gemini]\ncost = \"paid\"\nmax_parallel = 1\n[[lanes.antigravity_gemini.steps]]\nharness = \"agy\"\nmodel = \"gemini-4-argon-medium\"",
+        snippetLabel: "A lane on the Antigravity CLI"
       }
     ];
 
@@ -6045,9 +6397,18 @@
       }, 2000);
     }
 
+    function updateFaqCounts() {  // counted from FAQ_DATA, never typed by hand
+      document.querySelectorAll('#faq-category-tabs .filter-btn').forEach(btn => {
+        const cat = (btn.getAttribute('onclick').match(/'([^']+)'/) || [])[1];
+        const count = btn.querySelector('.filter-count');
+        if (cat && count) count.innerText = cat === 'all' ? FAQ_DATA.length : FAQ_DATA.filter(i => i.category === cat).length;
+      });
+    }
+
     function renderFaqList() {
       const container = document.getElementById('faq-accordion-list');
       if (!container) return;
+      updateFaqCounts();
 
       const filtered = FAQ_DATA.filter(item => {
         if (currentFaqCategory !== 'all' && item.category !== currentFaqCategory) {
@@ -6127,6 +6488,7 @@
     }
 
     // Initialize UI
+    restoreSortControl();
     const footerPort = document.getElementById('footer-port');
     if (footerPort) footerPort.innerText = `PORT ${location.port || (location.protocol === 'https:' ? 443 : 80)}`;
     refreshAllData();

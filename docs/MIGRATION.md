@@ -1,5 +1,10 @@
 # From the grid runner to Sovereign Fleet
 
+> **Status (2026-10-23): complete in the package.** Phases 5 and 6 are done; the package runs,
+> gates and lands tasks without the runner. An installation that still has projects on the
+> runner moves them with `[projects.<name>] backend = "local"`, one project at a time; the
+> `grid` backend stays as the bridge until the last one has moved.
+
 Sovereign Fleet replaces the legacy grid runner it originated from, evolving a single-host
 orchestrator into a standalone, modular open-source daemon. The goal is one standalone, open-source
 app that does everything the runner does, with nothing host-specific in the code, and adds what the

@@ -31,7 +31,8 @@ from fleet.core.config import FleetConfig, LaneSpec, _expand, active_credential_
 
 logger = logging.getLogger("fleet.core.roster")
 
-_BINARIES = {"claude-code": "claude", "opencode": "opencode", "goose": "goose", "pi": "pi", "aider": "aider"}
+_BINARIES = {"claude-code": "claude", "opencode": "opencode", "goose": "goose", "pi": "pi", "aider": "aider",
+             "agy": "agy"}
 _NIM_HOSTS = ("integrate.api.nvidia.com",)
 
 

@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from fleet import __version__
 from fleet.api import auth, background
-from fleet.core import lane_health, sandbox
+from fleet.core import lane_health, memlimit, sandbox
 from fleet.core.backends import BackendError, LocalBackend, make_backend
 from fleet.core.config import get_credential_plugin, load_config
 from fleet.core.models import compatible_harnesses_for_model
@@ -185,9 +185,12 @@ def health():
 
 @app.get("/api/fleet/tasks", response_model=List[TaskResponse])
 def list_tasks(request: Request):
-    """Every task. The dashboard polls this every few seconds: with the ETag of its last copy in
-    If-None-Match it gets a bodiless 304 while nothing changed."""
-    body = json.dumps(jsonable_encoder([_response(t) for t in backend().list_tasks()]),
+    """Every task, newest first. The dashboard polls this every few seconds: with the ETag of its
+    last copy in If-None-Match it gets a bodiless 304 while nothing changed."""
+    # One order for every backend (the local spool is oldest first, the composite newest first;
+    # the dashboard reversed both and showed the oldest task on top behind a grid runner).
+    tasks = sorted(backend().list_tasks(), key=lambda t: (float(t.created_at or 0), t.id), reverse=True)
+    body = json.dumps(jsonable_encoder([_response(t) for t in tasks]),
                       separators=(",", ":"), ensure_ascii=False).encode()
     etag = '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
     if etag in [tag.strip() for tag in request.headers.get("if-none-match", "").split(",")]:
@@ -387,6 +390,12 @@ def _credential_plugin_entry(tasks_backend) -> Optional[Dict[str, Any]]:
             "status": status, "version": plugin.meta.version, "description": desc}
 
 
+def _memory_limit_summary() -> str:
+    """Short string for the KPI: layer and limit value."""
+    info = memlimit.memory_limit_status(load_config().sandbox.memory_max)
+    return f"{info['layer']} {info['limit']}"
+
+
 def _lane_quota_summary() -> str:
     lanes = load_config().lanes
     if not lanes:
@@ -564,7 +573,9 @@ def get_system_health():
             "active_harnesses": sum(1 for h in harnesses_list.values() if h.is_available()),
             "quota_status": _lane_quota_summary(),
             "lane_health": lanes["text"] if lanes else "no lanes configured",
+            "memory_limit": _memory_limit_summary(),
         },
+        "memory_limit": memlimit.memory_limit_status(load_config().sandbox.memory_max),
         "lane_health": lanes,
         "count_enabled": active,
         "count_total": len(plugins),

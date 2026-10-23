@@ -1,9 +1,11 @@
 """Tests for Harness plugins."""
 
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
+
+from conftest import fake_process
 
 from fleet.plugins.base import PluginKind
 from fleet.plugins.harness_base import (
@@ -42,9 +44,7 @@ def test_harness_meta():
 async def test_claude_harness_execution_mocked():
     harness = ClaudeCodeHarness()
     
-    mock_proc = AsyncMock()
-    mock_proc.returncode = 0
-    mock_proc.communicate.return_value = (b"Task completed successfully", b"")
+    mock_proc = fake_process(b"Task completed successfully", b"", returncode=0)
 
     with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
         result = await harness.execute_task({"text": "Fix bug in auth"}, "/tmp/test-wt")
@@ -53,12 +53,21 @@ async def test_claude_harness_execution_mocked():
         assert mock_exec.called
 
 
+def test_claude_share_claude_is_writable_state():
+    """The native-installer symlink ~/.local/bin/claude targets ~/.local/share/claude, which must
+    be writable (like ~/.claude) for the claude-code harness to exec inside the sandbox."""
+    from fleet.core.sandbox import policy_for_worktree
+
+    harness = ClaudeCodeHarness()
+    assert Path.home() / ".local/share/claude" in harness.state_paths
+    policy = policy_for_worktree("/tmp/wt", harness.state_paths)
+    assert str(Path.home() / ".local/share/claude") in policy.read_write_paths
+
+
 @pytest.mark.asyncio
 async def test_goose_harness_execution_mocked():
     harness = GooseHarness()
-    mock_proc = AsyncMock()
-    mock_proc.returncode = 0
-    mock_proc.communicate.return_value = (b"Goose task executed", b"")
+    mock_proc = fake_process(b"Goose task executed", b"", returncode=0)
 
     with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
         result = await harness.execute_task({"text": "Implement feature"}, "/tmp/test-wt")
@@ -70,9 +79,7 @@ async def test_goose_harness_execution_mocked():
 @pytest.mark.asyncio
 async def test_pi_harness_execution_mocked():
     harness = PiHarness()
-    mock_proc = AsyncMock()
-    mock_proc.returncode = 0
-    mock_proc.communicate.return_value = (b"Pi task executed", b"")
+    mock_proc = fake_process(b"Pi task executed", b"", returncode=0)
 
     with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
         result = await harness.execute_task({"text": "Review PR"}, "/tmp/test-wt")
@@ -100,9 +107,7 @@ async def test_harness_command_is_wrapped_by_the_sandbox(monkeypatch):
 
     async def fake_exec(*argv, **kw):
         seen["argv"] = argv
-        proc = AsyncMock()
-        proc.returncode = 0
-        proc.communicate.return_value = (b"", b"")
+        proc = fake_process(b"", b"", returncode=0)
         return proc
 
     monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
@@ -138,9 +143,7 @@ def test_aider_keeps_its_repo_map():
 
 
 def _aider_run(stdout: bytes, returncode: int = 0):
-    proc = AsyncMock()
-    proc.returncode = returncode
-    proc.communicate.return_value = (stdout, b"")
+    proc = fake_process(stdout, b"", returncode=returncode)
     return patch("asyncio.create_subprocess_exec", return_value=proc)
 
 
@@ -263,13 +266,9 @@ async def test_goose_retries_on_start_panic_then_succeeds(tmp_path):
     """A panic result is retried once; the second result carries start_crash_retried."""
     harness = GooseHarness()
 
-    proc_fail = AsyncMock()
-    proc_fail.returncode = 1
-    proc_fail.communicate.return_value = (b"", b"thread panicked at index out of bounds")
+    proc_fail = fake_process(b"", b"thread panicked at index out of bounds", returncode=1)
 
-    proc_ok = AsyncMock()
-    proc_ok.returncode = 0
-    proc_ok.communicate.return_value = (b"ok", b"")
+    proc_ok = fake_process(b"ok", b"", returncode=0)
 
     call_count = [0]
 
@@ -293,9 +292,7 @@ async def test_goose_returns_second_failure_when_two_panic(tmp_path):
     """Two panics in a row: the subprocess is started twice and the second failure is returned."""
     harness = GooseHarness()
 
-    proc_fail = AsyncMock()
-    proc_fail.returncode = 1
-    proc_fail.communicate.return_value = (b"", b"thread panicked at oob")
+    proc_fail = fake_process(b"", b"thread panicked at oob", returncode=1)
 
     call_count = [0]
 

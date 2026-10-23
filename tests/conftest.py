@@ -8,6 +8,10 @@ import tempfile
 # be (2026-10-17: a sandboxed gate failed on "Permission denied" for it before any test ran).
 _IMPORT_HOME = tempfile.mkdtemp(prefix="fleet-tests-")
 os.environ["FLEET_CONFIG"] = os.path.join(_IMPORT_HOME, "config", "fleet.toml")
+# No test starts real work under the host's systemd: with a reachable user manager the
+# memory-limit prefix would come before the sandbox wrapper and change every argv. The
+# memory-limit tests switch it back on themselves.
+os.environ["FLEET_MEMORY_LIMIT"] = "0"
 os.environ["FLEET_ROOT"] = os.path.join(_IMPORT_HOME, "fleet")
 os.environ["XDG_CONFIG_HOME"] = os.path.join(_IMPORT_HOME, "config")
 os.environ["FLEET_BACKGROUND"] = "0"
@@ -72,3 +76,28 @@ def isolate_fleet(monkeypatch, tmp_path):
     monkeypatch.setattr(quirks, "_list_opencode_models", lambda timeout: [])   # never the real CLI
     yield store
     reset_credential_plugin()
+
+
+class _FakeStream:
+    """Stands in for a subprocess pipe: read() hands out the data, then b"" (EOF)."""
+
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    async def read(self, n: int = -1) -> bytes:
+        n = len(self._data) if n < 0 else n
+        chunk, self._data = self._data[:n], self._data[n:]
+        return chunk
+
+
+def fake_process(stdout: bytes = b"", stderr: bytes = b"", returncode: int = 0):
+    """A finished subprocess for patched asyncio.create_subprocess_exec: real byte streams,
+    so CliHarness's incremental reader sees EOF (a bare AsyncMock pipe never does)."""
+    from unittest.mock import AsyncMock
+
+    proc = AsyncMock()
+    proc.returncode = returncode
+    proc.stdout = _FakeStream(stdout)
+    proc.stderr = _FakeStream(stderr)
+    proc.communicate.return_value = (stdout, stderr)
+    return proc

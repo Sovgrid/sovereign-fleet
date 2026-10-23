@@ -7,6 +7,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-10-23
+### Added
+- Task lists in the dashboard: each view has an order that fits it (Open: running, then
+  approvals, then the queue in run order; Failed and Done: newest end time first, and their
+  cards show when a task ended; Archived: newest first). A Sort menu switches a view to
+  Newest first, Oldest first or By lane and is remembered per view. New tasks never move the
+  list while you are scrolled down: a pill says how many arrived above, a click goes to the
+  top. 50 cards per view, then "Show 50 more". Lane health lists problem lanes first, intake
+  failing sources first.
+- Help: a WORKING WITH TASKS section (list order, a working routine, what ends a run early)
+  and entries on the memory limit, resting lanes and the subscription CLIs; the tab counts
+  are counted from the entries.
+- Harness runs that stall are ended early instead of waiting out the full timeout:
+  `CliHarness.execute_task` reads stdout and stderr incrementally and kills the process
+  group with exit code 124 (`stalled: no output and no worktree change for Ns`) when
+  neither output nor the worktree changes for `stall_seconds` (default 480, 0 disables,
+  capped at the run timeout), read from `[harnesses.<name>.options] stall_seconds`.
+  Off by default for claude-code and agy, which print nothing until they finish.
+- The Antigravity CLI (`agy`) is a built-in harness: headless `agy -p`, tool approvals on inside
+  the fleet's sandbox, the model from agy's own catalog per lane (`--model`), its state
+  (`~/.gemini/antigravity-cli`, `~/.gemini/config`) and a PTY allowed; passes the conformance kit.
+  Subscription models from lanes now pair only with the CLI that reaches them, and the harness
+  registry takes its built-ins from `ALL_HARNESSES` instead of a second list.
+- Every agent run and every gate starts in its own systemd scope with a `MemoryMax` ceiling
+  (`[sandbox] memory_max`, default "8G"; "" or "0" switches it off), so a runaway process
+  cannot exhaust memory and trip the kernel's global OOM killer. The scope prefixes the
+  sandboxed argv and keeps the process group, so `kill_group` still works. Where no user
+  systemd manager exists (Docker containers, OpenRC, a daemon without a login session) the
+  limit still applies: a process-group watchdog (`fleet.core.memlimit.watch_group`) is the
+  floor under the scope and active everywhere, reading `/proc/<pid>/stat` and
+  `/proc/<pid>/statm` every 2 seconds and sending SIGKILL when the group's resident memory
+  exceeds the limit. `FLEET_MEMORY_LIMIT=0` switches it off. The health endpoint reports
+  which layer is active via `memory_limit_status()` (`systemd-scope` / `watchdog` / `off`)
+  and the new top-level `memory_limit` key plus the `memory_limit` KPI.
+  `examples/sovereign-fleet.service` runs the daemon itself as a capped user service.
+
+### Fixed
+- A run whose only change was a new, empty file counted as work: a feature task created an
+  empty test file, passed a pytest gate on it and landed with nothing implemented. New empty
+  files no longer count; such a run "changed nothing" and fails over.
+- The dashboard showed the oldest task on top behind a grid runner: the local spool lists
+  oldest first, the composite backend newest first, and the dashboard reversed both.
+  `GET /api/fleet/tasks` now returns newest first for every backend.
+- A lane whose provider names when its quota resets ("Resets in 94h19m45s", the Antigravity CLI's
+  weekly subscription limit) rested only 120 s and was tried again every few minutes until then.
+  It now rests until the named reset, together with every lane on the same own-login CLI, since
+  they share one subscription.
+- The claude-code harness failed to start in the sandbox: ~/.local/bin/claude is a symlink to
+  ~/.local/share/claude/versions/<version>, and the sandbox only reads ~/.local/bin, so exec of
+  the symlink target was denied with Permission denied. ~/.local/share/claude is now writable
+  state (like ~/.claude) for the claude-code harness; TOOLS_RO is unchanged.
+
+### Changed
+- The README roadmap and docs/MIGRATION.md: the migration from the grid runner is complete
+  (phases 5 and 6); the `grid` backend stays only as a bridge for installations that still
+  use it.
+
 ## [0.6.1] - 2026-10-22
 ### Added
 - The isolation backend is a plugin interface (`SandboxBackend`, entry point group

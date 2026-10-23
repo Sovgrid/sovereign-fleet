@@ -28,6 +28,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Sequence
 
 from fleet.core.config import _expand, load_config
+from fleet.core.memlimit import GroupWatch, scope_prefix
 from fleet.core.sandbox import LandlockSandbox, SandboxUnavailable, policy_for_worktree
 
 GLOB_CHARS = "*?["
@@ -203,6 +204,8 @@ async def run_gate(name: str, argv: List[str], worktree: Path, timeout: int) -> 
         wrapped = box.wrap(argv)
     except SandboxUnavailable as e:
         return GateResult(name, argv, 126, f"refused to run unsandboxed: {e}", "refused to run unsandboxed")
+    memory_max = load_config().sandbox.memory_max
+    wrapped = [*scope_prefix(memory_max), *wrapped]
     env = {**box.build_safe_env(), "ASTRO_TELEMETRY_DISABLED": "1", "CI": "1"}
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -211,6 +214,8 @@ async def run_gate(name: str, argv: List[str], worktree: Path, timeout: int) -> 
             start_new_session=True)  # its own process group, so a timeout ends every child
     except OSError as e:
         return GateResult(name, argv, 127, str(e), f"cannot start {argv[0]}: {e}")
+    watch = GroupWatch(proc.pid, memory_max)  # the floor under the systemd scope
+    watch.start()
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.CancelledError:
@@ -220,7 +225,11 @@ async def run_gate(name: str, argv: List[str], worktree: Path, timeout: int) -> 
         out = await kill_group(proc)
         text = (out or b"").decode(errors="replace")
         return GateResult(name, argv, 124, text, f"timed out after {timeout}s")
+    finally:
+        await watch.stop()
     text = (out or b"").decode(errors="replace")
+    if watch.fired:
+        return GateResult(name, argv, 137, text, watch.message())
     code = proc.returncode or 0
     return GateResult(name, argv, code, text, "" if code == 0 else failure_excerpt(text))
 

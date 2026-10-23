@@ -61,7 +61,8 @@ COST_WEIGHT = {"local": 1.0, "free": 1.0, "paid": 3.0}
 # (a push, a merge or a rebase onto a moved main is not the lane's doing).
 _SUCCESS = ("success", "completed", "merged", "landed", "pr_merged", "pr_opened", "pr_updated",
             "pushed", "push_failed", "merge_failed", "rebase_failed")
-_BINARIES = {"claude-code": "claude", "opencode": "opencode", "goose": "goose", "pi": "pi", "aider": "aider"}
+_BINARIES = {"claude-code": "claude", "opencode": "opencode", "goose": "goose", "pi": "pi", "aider": "aider",
+             "agy": "agy"}
 
 
 @dataclass(frozen=True)
@@ -176,6 +177,8 @@ def effective_bakeoff_priors() -> Dict[str, Dict[str, float]]:
 
 def _infer_harness_from_lane(lane: str) -> str:
     l = lane.lower()
+    if "antigravity" in l or "agy" in l:
+        return "agy"
     if "goose" in l:
         return "goose"
     if "aider" in l:

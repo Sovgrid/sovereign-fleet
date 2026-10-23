@@ -69,6 +69,16 @@ backends raise ``SandboxUnavailable`` and ``fleet config check`` reports the pro
 
 ---
 
+### Built-in subscription harnesses
+
+Claude Code (`claude-code`) and the Antigravity CLI (`agy`) log in with their own account and bring their own
+model catalog (`own_login`). Their lanes are subscription models that only that CLI reaches: a lane with the step
+`{harness = "agy", model = "gemini-4-argon-medium"}` passes the model as `--model` (`agy models` lists them).
+`agy` runs headless with `-p` and approves its tools (`[harnesses.agy.options] skip_permissions = false` turns
+that off); the fleet's sandbox lets it write `~/.gemini/antigravity-cli`, `~/.gemini/config` and open a PTY.
+
+---
+
 ## 2. The `CliHarness` Base Class
 
 Every CLI harness inherits from `fleet.plugins.harness_base.CliHarness` (which in turn implements `fleet.plugins.base.HarnessPlugin`).
@@ -242,6 +252,9 @@ ECHO_LOG_LEVEL = "info"
 
 [harnesses.echo-agent.options]
 auto_approve = true
+stall_seconds = 300   # exit 124 after 300 s with no output and no worktree change;
+                      # 0 disables stall detection (default 480; 0 for claude-code and agy,
+                      # which print only at the end; capped at the run timeout)
 ```
 
 ---

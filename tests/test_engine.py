@@ -189,3 +189,42 @@ def test_rate_limit_structured_signals():
     assert classify_failure("Cron schedule: 3 runs per day") is None
     assert classify_failure("git: connection reset by peer") is None
     assert classify_failure("SyntaxError: invalid syntax") is None
+
+
+def test_reset_after_parses_provider_reset_times():
+    from fleet.core.engine import reset_after
+
+    agy = ('AGY_ERROR: {"short_error":"RESOURCE_EXHAUSTED (code 429): Individual quota reached. '
+           'Please upgrade your subscription to increase your limits. Resets in 94h19m45s."}')
+    assert reset_after(agy) == 94 * 3600 + 19 * 60 + 45
+    assert reset_after("limit hit, resets in 3h") == 3 * 3600
+    assert reset_after("quota resets in 2d 4h") == 2 * 86400 + 4 * 3600
+    assert reset_after("429 Too Many Requests") == 0
+    assert reset_after("") == 0
+
+
+def test_a_named_reset_rests_every_lane_of_the_same_login(tmp_path):
+    """agy's quota is per subscription: both agy lanes rest until the reset it names, a lane on
+    another CLI keeps running."""
+    import time as _time
+
+    from fleet.core.config import LaneSpec, LaneStep
+    from fleet.core.quota import lane_blocked_until
+
+    from types import SimpleNamespace
+
+    engine = FleetEngine(repo_path="/tmp/mock-repo")
+    engine.router = SimpleNamespace(spool_dir=tmp_path)
+    engine.lanes = {
+        "agy_gemini": LaneSpec(cost="paid", steps=[LaneStep(harness="agy", model="gemini")]),
+        "agy_sonnet": LaneSpec(cost="paid", steps=[LaneStep(harness="agy", model="sonnet")]),
+        "local": LaneSpec(cost="local", steps=[LaneStep(harness="goose", model="qwen")]),
+    }
+    engine._rest("agy_gemini", "rate_limit", "Individual quota reached. Resets in 94h19m45s.")
+    soon = _time.time() + 94 * 3600
+    assert lane_blocked_until("agy_gemini", spool_dir=tmp_path) > soon
+    assert lane_blocked_until("agy_sonnet", spool_dir=tmp_path) > soon
+    assert lane_blocked_until("local", spool_dir=tmp_path) < _time.time()
+
+    engine._rest("local", "rate_limit", "429 Too Many Requests")
+    assert lane_blocked_until("local", spool_dir=tmp_path) < _time.time() + 600

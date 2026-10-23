@@ -215,6 +215,19 @@ class WorktreeManager:
                 i += 1  # the next entry is the rename source
         return changed
 
+    async def has_work(self, worktree_dir: str) -> bool:
+        """True if the agent left a real change: a changed file that is not a new, empty one. A
+        feature task once created only an empty test file, passed a pytest gate and landed
+        (2026-10-23)."""
+        for name in await self.get_changed_files(worktree_dir):
+            path = Path(worktree_dir) / name
+            if path.is_file() and path.stat().st_size == 0:
+                code, _, _ = await _git("-C", worktree_dir, "cat-file", "-e", f"HEAD:{name}")
+                if code != 0:  # not in HEAD: a new empty file
+                    continue
+            return True
+        return False
+
     async def commit_all(self, worktree_dir: str, message: str) -> Tuple[bool, str]:
         """Commits every change in the worktree. (True, sha), (False, "") if there was nothing
         to commit, or (False, error)."""

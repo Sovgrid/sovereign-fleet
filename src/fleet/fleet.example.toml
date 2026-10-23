@@ -29,6 +29,8 @@ ports = []
 read_only = []                    # extra paths agents may read, e.g. your other repositories
 writable = []                     # extra paths agents may write; keep this short
 gate_writable = []                # extra paths gates may write (tool caches); gates run sandboxed too
+# Memory ceiling per agent run and gate (systemd MemoryMax); "" or "0" switches the limit off.
+# memory_max = "8G"
 # Switching the sandbox off is not a config value: only FLEET_SANDBOX=0 in the environment.
 
 [secrets]

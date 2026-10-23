@@ -35,6 +35,16 @@ async def test_the_task_list_answers_304_while_nothing_changed():
 
 
 @pytest.mark.asyncio
+async def test_the_task_list_is_newest_first():
+    """Every backend's list comes out newest first (the local spool stores oldest first)."""
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=AUTH) as client:
+        for text in ("order one", "order two", "order three"):
+            await client.post("/api/fleet/tasks", json={"text": text})
+        stamps = [float(t["created_at"] or 0) for t in (await client.get("/api/fleet/tasks")).json()]
+        assert stamps == sorted(stamps, reverse=True)
+
+
+@pytest.mark.asyncio
 async def test_enqueue_and_list_tasks():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=AUTH) as client:
         # Enqueue

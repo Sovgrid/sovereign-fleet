@@ -311,3 +311,28 @@ def test_landing_nothing_new_is_a_failure_not_a_push(tmp_path, repo):
     wt_mgr = WorktreeManager(str(repo), str(tmp_path / "wt-empty"))
     res = asyncio.run(landing.land(repo, repo, "fleet/t-empty", "t-empty", "empty", project, wt_mgr))
     assert res.status == "failed" and "no commit" in res.detail, res
+
+
+@pytest.mark.asyncio
+async def test_an_empty_new_file_is_not_work(tmp_path):
+    """2026-10-23: a task that only created an empty test file passed its pytest gate and landed."""
+    import subprocess
+
+    from fleet.core.worktree import WorktreeManager
+
+    repo = tmp_path / "r"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    (repo / "a.py").write_text("x = 1\n")
+    (repo / "keep.txt").write_text("k\n")
+    subprocess.run(["git", "-C", str(repo), "add", "."], check=True)
+    subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "i"], check=True)
+    mgr = WorktreeManager(str(repo), str(tmp_path / "wt"))
+    (repo / "tests").mkdir()
+    (repo / "tests" / "test_new.py").write_text("")
+    assert await mgr.has_work(str(repo)) is False
+    (repo / "keep.txt").write_text("")           # emptying a tracked file is a change
+    assert await mgr.has_work(str(repo)) is True
+    (repo / "keep.txt").write_text("k\n")
+    (repo / "tests" / "test_new.py").write_text("def test_x():\n    assert True\n")
+    assert await mgr.has_work(str(repo)) is True

@@ -2,9 +2,11 @@
 
 import os
 import tempfile
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
+
+from conftest import fake_process
 
 from fleet.core.sandbox import (
     SandboxBackend,
@@ -161,9 +163,7 @@ async def test_harness_executes_argv_from_wrap():
 
             async def fake_exec(*argv, **kw):
                 seen_argv.append(argv)
-                proc = AsyncMock()
-                proc.returncode = 0
-                proc.communicate.return_value = (b"output", b"")
+                proc = fake_process(b"output", b"", returncode=0)
                 return proc
 
             with patch("asyncio.create_subprocess_exec", fake_exec):

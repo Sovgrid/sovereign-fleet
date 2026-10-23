@@ -14,14 +14,9 @@ _BUILTIN: Dict[str, type] = {}
 
 def _load_builtins() -> Dict[str, type]:
     """Import the built-in harness classes from harness_base."""
-    from fleet.plugins.harness_base import (
-        AiderHarness,
-        ClaudeCodeHarness,
-        GooseHarness,
-        OpenCodeHarness,
-        PiHarness,
-    )
-    for cls in (ClaudeCodeHarness, OpenCodeHarness, GooseHarness, PiHarness, AiderHarness):
+    # one list of built-ins (harness_base.ALL_HARNESSES), so a new harness cannot be missing here
+    from fleet.plugins.harness_base import ALL_HARNESSES
+    for cls in ALL_HARNESSES:
         _BUILTIN[cls.name] = cls
     return _BUILTIN
 

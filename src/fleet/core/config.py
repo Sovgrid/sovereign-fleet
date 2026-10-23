@@ -55,12 +55,25 @@ class BackendSection(_Strict):
     max_concurrent: int = Field(1, ge=1, le=16)  # tasks the daemon's executor runs at once (per-lane limits stay with lanes.<name>.max_parallel)
 
 
+_SIZE_RE = re.compile(r"\d+[kKmMgGtT]?$")
+
+
 class SandboxSection(_Strict):
     backend: str = "landlock"                            # sandbox backend name
+    memory_max: str = "8G"                               # systemd MemoryMax per agent run and gate; "" or "0" switches it off
     ports: List[int] = Field(default_factory=list)       # besides 443, 80, 53: local model servers
     read_only: List[str] = Field(default_factory=list)   # extra paths agents may read
     writable: List[str] = Field(default_factory=list)    # extra paths agents may write
     gate_writable: List[str] = Field(default_factory=list)  # extra paths gates may write (caches)
+
+    @field_validator("memory_max")
+    @classmethod
+    def _memory_max(cls, v: str) -> str:
+        if v in ("", "0"):
+            return v
+        if not _SIZE_RE.fullmatch(v):
+            raise ValueError(f"not a systemd size string: {v!r} (digits with optional K/M/G/T suffix, or '' or '0')")
+        return v
 
     @field_validator("ports")
     @classmethod
@@ -304,6 +317,10 @@ def _step_base_url(step: Optional["LaneStep"]) -> str:
     return ""
 
 
+# Harnesses that log in with their own account and bring their own model catalog.
+OWN_LOGIN_HARNESSES = ("claude-code", "agy")
+
+
 def models_from_lanes(lanes: Dict[str, "LaneSpec"]) -> Dict[str, ModelEndpoint]:
     """Model endpoints for pair routing when fleet.toml has no [models]: one per real model.
 
@@ -319,7 +336,7 @@ def models_from_lanes(lanes: Dict[str, "LaneSpec"]) -> Dict[str, ModelEndpoint]:
             continue
         step = lane.steps[0] if lane.steps else None
         model_id = step.model if step else lane_name
-        own_login = any(s.harness == "claude-code" for s in lane.steps)
+        own_login = any(s.harness in OWN_LOGIN_HARNESSES for s in lane.steps)
         if own_login:
             provider = "subscription"
         elif lane.cost == "local":
@@ -334,7 +351,8 @@ def models_from_lanes(lanes: Dict[str, "LaneSpec"]) -> Dict[str, ModelEndpoint]:
             if (probe_url, model_id) in seen:
                 continue
             seen.add((probe_url, model_id))
-        elif step is not None and not own_login:
+        elif step is not None:
+            # a cloud id, or a subscription model of one CLI's own catalog: only that CLI reaches it
             harnesses = [step.harness]
         derived[lane_name] = ModelEndpoint(
             provider=provider,

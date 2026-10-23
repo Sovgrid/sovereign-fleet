@@ -44,7 +44,7 @@ async def test_harness_choice_true_for_grid_backend(monkeypatch):
             return True, None
 
     monkeypatch.setattr("fleet.api.app.backend", lambda: MockGridBackend())
-    monkeypatch.setattr("fleet.api.app.load_config", lambda: type("Cfg", (), {"backend": type("B", (), {"kind": "grid"})(), "lanes": []})())
+    monkeypatch.setattr("fleet.api.app.load_config", lambda: type("Cfg", (), {"backend": type("B", (), {"kind": "grid"})(),         "lanes": [], "sandbox": type("S", (), {"memory_max": "8G"})})())
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=AUTH) as client:
         resp = await client.get("/api/fleet/plugins")
@@ -81,7 +81,7 @@ async def test_harness_choice_true_for_local_backend(monkeypatch):
             return {"current": "local", "options": {"local": "Local model"}, "stored_in": "settings"}
 
     monkeypatch.setattr("fleet.api.app.backend", lambda: MockLocalBackend())
-    monkeypatch.setattr("fleet.api.app.load_config", lambda: type("Cfg", (), {"backend": type("B", (), {"kind": "local"})(), "lanes": []})())
+    monkeypatch.setattr("fleet.api.app.load_config", lambda: type("Cfg", (), {"backend": type("B", (), {"kind": "local"})(),         "lanes": [], "sandbox": type("S", (), {"memory_max": "8G"})})())
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=AUTH) as client:
         resp = await client.get("/api/fleet/plugins")

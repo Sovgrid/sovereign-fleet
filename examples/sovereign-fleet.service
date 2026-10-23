@@ -1,0 +1,27 @@
+# sovereign-fleet.service -- example user unit for the Fleet daemon
+# Install: cp examples/sovereign-fleet.service ~/.config/systemd/user/
+#          systemctl --user enable --now sovereign-fleet.service
+# ExecStart assumes the package is importable by /usr/bin/python3 (pip install); adjust it
+# (or add Environment=PYTHONPATH=<checkout>/src) for a source checkout.
+#
+# 2026-10-22: one runaway test process grew to 51 GB and took the whole
+# daemon down with a global OOM. The [sandbox] memory_max per-agent
+# limit (systemd scope or watchdog) plus a hard MemoryMax on the
+# service itself keeps a single runaway from killing everything.
+
+[Unit]
+Description=Sovereign Fleet Daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -m fleet.api.cli daemon
+# 20G soft, 24G hard ceiling so one agent cannot trigger the kernel OOM killer.
+MemoryHigh=20G
+MemoryMax=24G
+OOMPolicy=continue
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

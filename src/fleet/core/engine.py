@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from fleet.core import gates, landing, quirks, review
-from fleet.core.config import LaneSpec, ModelEndpoint, Project, RoutingSection, active_credential_plugin, lane_key, model_key
+from fleet.core.config import (OWN_LOGIN_HARNESSES, LaneSpec, ModelEndpoint, Project, RoutingSection,
+                               active_credential_plugin, lane_key, model_key)
 from fleet.core.settings import load_settings
 from fleet.core.gateguard import GateGuard
 from fleet.core.models import compute_compatibility
@@ -50,6 +51,20 @@ _RATE_LIMIT_PATTERNS = (
 
 
 RATE_LIMIT_PAUSE = 120   # seconds a lane rests after a per-minute limit
+
+# "Resets in 94h19m45s" (agy, 2026-10-23: a weekly subscription quota; the lane rested 120 s
+# and was tried again every few minutes for four days), "resets in 3h", "resets in 2d 4h".
+_RESETS_IN = re.compile(r"\bresets?\s+in\s+((?:\d+\s*[dhms]\s*)+)", re.IGNORECASE)
+_UNIT_SECONDS = {"d": 86400, "h": 3600, "m": 60, "s": 1}
+
+
+def reset_after(text: str) -> int:
+    """Seconds until a limit resets, when the provider's message says so; else 0."""
+    m = _RESETS_IN.search(text or "")
+    if not m:
+        return 0
+    return sum(int(n) * _UNIT_SECONDS[u.lower()]
+               for n, u in re.findall(r"(\d+)\s*([dhms])", m.group(1), re.IGNORECASE))
 
 
 def _last_line(text: str) -> str:
@@ -146,6 +161,8 @@ class FleetEngine:
             return any(re.search(rf"\b{re.escape(p)}\b", txt) for p in phrases)
 
         # 1. Lane-specific binding
+        if lane_parts & {"antigravity", "agy"}:
+            return "agy"
         if lane_parts & {"anthropic", "claude"}:
             return "claude-code"
         if lane_parts & {"nim", "glm"}:
@@ -525,7 +542,7 @@ class FleetEngine:
             res["step"] = {"harness": step.harness, "model": step.model}
             res["steps_tried"] = tried
             if res.get("exit_code") == 0:
-                if await self.worktree_mgr.get_changed_files(str(wt)):
+                if await self.worktree_mgr.has_work(str(wt)):
                     return res
                 res = {**res, "exit_code": 1, "stderr": f"{step.harness} ({step.model}) changed nothing"}
         return res
@@ -540,10 +557,25 @@ class FleetEngine:
             logger.info("lane %s: provider %s limited, the credential plugin switched keys", lane, provider)
         return bool(rotated)
 
+    def _same_login(self, lane: str) -> List[str]:
+        """The lane and every other lane whose steps all run the same own-login CLI: they share
+        one subscription quota (both agy lanes hit it on 2026-10-23)."""
+        harnesses = {step.harness for step in self.lanes[lane].steps}
+        if len(harnesses) != 1 or not harnesses <= set(OWN_LOGIN_HARNESSES):
+            return [lane]
+        return [name for name, spec in self.lanes.items()
+                if name == lane or {step.harness for step in spec.steps} == harnesses]
+
     def _rest(self, lane: str, kind: str, detail: str) -> None:
         """Take a lane out of routing until its limit resets."""
         spool = self.router.spool_dir
-        if kind == "daily_quota":
+        wait = reset_after(detail)
+        if wait > RATE_LIMIT_PAUSE:  # the provider named its reset: rest until then
+            hours, rest = divmod(wait, 3600)
+            reason = f"quota, resets in {hours}h{rest // 60:02d}m"
+            for name in self._same_login(lane):
+                block_lane_until(name, int(time.time()) + wait, reason, spool_dir=spool)
+        elif kind == "daily_quota":
             block_lane_until(lane, next_pacific_midnight(), "daily quota exceeded", spool_dir=spool)
         else:
             block_lane_until(lane, int(time.time()) + RATE_LIMIT_PAUSE, "rate limit", spool_dir=spool)
@@ -699,7 +731,7 @@ class FleetEngine:
                         return fail(detail, 5)
                     report["findings"] = findings
             changed_files = await self.worktree_mgr.get_changed_files(str(wt))
-            if not changed_files:
+            if not changed_files or not await self.worktree_mgr.has_work(str(wt)):
                 return fail("No change left in the worktree after verification", 6)
             return "completed", {"exit_code": 0, "changed_files": changed_files,
                                  "harness_output": exec_res.get("stdout", ""), **report}
@@ -741,8 +773,8 @@ class FleetEngine:
 
         # 8. GateGuard: every file the task claims to change was changed
         changed_files = await self.worktree_mgr.get_changed_files(str(wt))
-        if not changed_files:
-            # a task passes with work to keep, never with an empty branch
+        if not changed_files or not await self.worktree_mgr.has_work(str(wt)):
+            # a task passes with work to keep, never with an empty branch or only empty new files
             return fail("No change left in the worktree after verification", 6)
         claimed_files = meta.get("claimed_files", [])
         if claimed_files:

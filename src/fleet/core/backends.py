@@ -301,7 +301,7 @@ class GridBackend:
                 h_name = lane_id[6:]
                 mapping[h_name] = lane_id
                 mapping[h_name.replace("_", "-")] = lane_id
-            elif lane_id in ("goose", "aider", "pi", "opencode", "claude-code"):
+            elif lane_id in ("goose", "aider", "pi", "opencode", "claude-code", "agy"):
                 mapping[lane_id] = lane_id
 
         return mapping
