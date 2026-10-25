@@ -242,25 +242,12 @@ def promote_changelog(ver: str, dry_run: bool) -> str:
     else:
         end_idx = start_idx + len("## [Unreleased]") + next_section
 
-    old_section = content[start_idx:end_idx]
-    promoted = content[:start_idx] + new_section + content[end_idx:]
-
-    # Insert a fresh empty [Unreleased] section at the top, after the file header
-    unreleased_header = "## [Unreleased]\n\n"
-    # Find the first blank line (after header/title) and insert there
-    first_blank = promoted.find("\n\n")
-    if first_blank != -1:
-        promoted = (
-            promoted[: first_blank + 2]
-            + unreleased_header
-            + promoted[first_blank + 2:]
-        )
-    else:
-        promoted = (
-            unreleased_header
-            + new_section
-            + promoted
-        )
+    # A fresh empty [Unreleased] goes right where the old one was, above the promoted section,
+    # so the intro paragraph under the title stays where it is. Before, it went after the
+    # first blank line of the file, between the title and the intro (0.6.4).
+    tail = content[end_idx:]
+    promoted = (content[:start_idx] + "## [Unreleased]\n\n" + new_section.rstrip("\n") + "\n"
+                + ("\n" + tail.lstrip("\n") if tail.strip() else ""))
 
     if dry_run:
         return promoted[len(content):] if promoted != content else ""

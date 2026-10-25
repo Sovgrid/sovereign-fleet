@@ -339,8 +339,20 @@ def models_from_lanes(lanes: Dict[str, "LaneSpec"]) -> Dict[str, ModelEndpoint]:
     adapter adds its own) and one server model is one endpoint, however many lanes use it.
     Without a local `probe_url` the id only means something to the lane's first CLI (`opencode/...`
     to opencode), so only that CLI may pair with it. Switched-off lanes give no model."""
+    return _derive_models(lanes)[0]
+
+
+def lane_model_keys(lanes: Dict[str, "LaneSpec"]) -> Dict[str, str]:
+    """Each switched-on lane's model under the name models_from_lanes gives it, so a lane can be
+    found from the model the operator picked: lanes that share one local server model share
+    the name of the first of them."""
+    return _derive_models(lanes)[1]
+
+
+def _derive_models(lanes: Dict[str, "LaneSpec"]) -> Tuple[Dict[str, ModelEndpoint], Dict[str, str]]:
     derived: Dict[str, ModelEndpoint] = {}
-    seen: set = set()
+    keys: Dict[str, str] = {}
+    seen: Dict[Tuple[str, str], str] = {}
     for lane_name, lane in lanes.items():
         if not lane.enabled:
             continue
@@ -359,8 +371,9 @@ def models_from_lanes(lanes: Dict[str, "LaneSpec"]) -> Dict[str, ModelEndpoint]:
         if probe_url and not own_login:
             model_id = model_id.removeprefix("openai/")
             if (probe_url, model_id) in seen:
+                keys[lane_name] = seen[(probe_url, model_id)]
                 continue
-            seen.add((probe_url, model_id))
+            seen[(probe_url, model_id)] = lane_name
         elif step is not None:
             # a cloud id, or a subscription model of one CLI's own catalog: only that CLI reaches it
             harnesses = [step.harness]
@@ -378,7 +391,8 @@ def models_from_lanes(lanes: Dict[str, "LaneSpec"]) -> Dict[str, ModelEndpoint]:
             tool_calling=True,
             harnesses=harnesses,
         )
-    return derived
+        keys[lane_name] = lane_name
+    return derived, keys
 
 
 # Environment variables that override the file: (section, field, parser).

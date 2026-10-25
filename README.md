@@ -53,7 +53,7 @@ Status: **alpha (0.6.3)**. Read [What works today](#what-works-today) before rel
 | **Goose Recipes & Evals** | Goose recipes (recipe format `1.0.0`) in `recipes/*/recipe.yaml` (`fleet-ab-proposal-eval/recipe.yaml`, `fleet-self-improvement/recipe.yaml`, `fleet-bench-runner/recipe.yaml`) for deterministic A/B proposal evaluation, self-improvement loops, and benchmark execution. Loaded on demand via `goose run --recipe` with zero context overhead on regular tasks ([docs/EVALS_AND_BENCHMARKS.md](https://github.com/Sovgrid/sovereign-fleet/blob/main/docs/EVALS_AND_BENCHMARKS.md)). |
 | **Model roster** | The lanes of your fleet.toml, nothing built in (models, prices and free tiers change faster than releases). For each lane: switched off in the dashboard (the router then skips it too), dead or retired at the last health check, resting after a provider limit, CLI missing, local model not loaded, key missing, or online. Keys are only checked for presence. |
 | **Provider keys** | Per lane `key_env` + `key_file` (or a credential plugin): the key goes into that CLI run's environment only. A `CredentialPlugin` (`[plugins] credentials`) can supply keys from a vault or a key manager; the package ships none. |
-| **Dashboard & Mobile** | Three tabs, the essentials first and the rest one tap away. Tasks: a prompt with Dispatch (templates, lane, harness and dependencies under Options), a strip only when tasks wait for approval or failed, open work by default, each task with its status, lane and source issue. Agents: one lane list (online by default, details on tap) and the lane health in one line. Settings: autonomy, then groups that open on demand (limits, quality gates, keys and sandbox, issue sources, coordinator). Sign-in by link (`/#token=...`), installable PWA that loads changes on the next open. |
+| **Dashboard & Mobile** | Three tabs, the essentials first and the rest one tap away. Tasks: a prompt with Dispatch (templates, harness and model, and dependencies under Options; a pair that cannot run is greyed out with its reason, a refused dispatch says why), a strip only when tasks wait for approval or failed, open work by default, each task with its status, lane and source issue. Each view has an order that fits it (Open: running, approvals, then the queue in run order; Failed and Done: newest end time first, cards show when a task ended); a Sort menu next to the search switches to newest, oldest or by lane and is remembered per view; new tasks never move the list while you scroll (a "N new tasks" pill instead); 50 cards, then "Show 50 more". A held task shows the model's risk rating when `[approval]` is set. Help has a "Working with tasks" section. Agents: each model once with the harnesses that can run it and the router's pass rate per pair (tap one to dispatch with it), which harnesses are ready, the grid runner's lanes that fleet.toml does not describe folded away, and the lane health in one line. Settings: autonomy, then groups that open on demand (limits, quality gates, keys and sandbox, issue sources, coordinator). Sign-in by link (`/#token=...`), installable PWA that loads changes on the next open. |
 | **Cancel** | Local backend: marks the task cancelled; cancels the asyncio task so the agent's and the gates' process groups are killed; keeps the work on the `fleet/<id>` branch. Grid backend: the runner stops the agent. |
 
 ## Security model
@@ -187,7 +187,7 @@ fleet config check     # repos exist, TLS files readable, token file private, no
 | `[approval]` | `assess_url` (OpenAI-compatible base URL; empty: off), `assess_model`, `assess_key_env` (optional env var), `assess_timeout` (default 30): risk assessment for tasks waiting approval |
 | `[routing]` | `max_lanes`, `repair`, `history`, `switch_command`, `switch_local`, `health_hour`, `catalog`, `discover`, `priors` |
 | `[lanes.<name>]` | a lane: `cost`, `private`, `categories`, `provider`, `key_env`, `key_file`, `max_parallel`, `probe_url`, `switch_to`, `steps` (harness, model, args) |
-| `[models.<name>]` | reusable model endpoint: `api_kind`, `model_id`, `base_url`, `key_env`, `key_file`, `cost`, `private`, `probe_url`, `context`, `tool_calling`, `reasoning` |
+| `[models.<name>]` | reusable model endpoint: `provider`, `model_id`, `base_url`, `key_env`, `key_file`, `cost`, `private`, `probe_url`, `context`, `tool_calling`, `reasoning`, `harnesses` |
 | `[harnesses.<name>]` | per-harness overrides: `binary`, `args`, `env`, `state_paths`, `options` |
 | `[projects.<name>]` | `path`, `aliases`, `default_branch`, `gate`, `landing`, `remote`, `provider`, `backend`; `fleet run --project <name>` uses them |
 | `[projects.<name>.intake]` | `enabled`, `provider`, `repo`, `label`, `authors`, `interval_min` |
@@ -200,6 +200,46 @@ intake poller off. Two things are deliberately not in the
 file: `FLEET_SANDBOX=0` (emergency only, environment of the executor) and the dashboard's runtime
 settings (`FLEET_SETTINGS_FILE`, default `~/.config/sovereign-fleet/settings.json`).
 `FLEET_API_TOKEN` sets the token itself.
+
+### Which harness can run which model
+
+The dashboard greys out a pair it cannot run and says why. Two reasons are common:
+
+- **"model reachable only through opencode"** (or aider, ...). Without `[models]`, the models
+  come from your lanes, and a cloud lane's model id is written for that lane's CLI
+  (`opencode/nemotron-3-ultra-free`, `groq/openai/gpt-oss-120b`). Only that CLI knows how to
+  reach it. A local model server (`probe_url`) is the exception: it speaks the OpenAI API, so
+  every harness that supports it can use the model.
+- **"no active lane runs this pair"** (grid backend only). The grid runner decides in its own
+  code which CLI each of its lanes starts. The daemon maps your pair to the runner lane that runs
+  exactly that harness with that model; when the runner has none, or it is switched off, the
+  pair stays greyed out.
+
+How to open a pair up depends on the backend:
+
+- **Local backend** (the package runs the agents): describe the model once as an endpoint, and
+  every harness that supports its `provider` can use it (goose: `openai_compatible`, `openai`,
+  `vllm_local`; Claude Code and agy only run their own models):
+
+  ```toml
+  [models.glm_nim]
+  provider = "openai_compatible"
+  base_url = "https://integrate.api.nvidia.com/v1"
+  model_id = "z-ai/glm-5.3-flash"
+  key_env  = "OPENAI_API_KEY"
+  key_file = "nvidia_nim_api.key"
+  cost     = "free"
+  ```
+
+  As soon as `[models]` has one entry, it replaces the models derived from the lanes: list every
+  model you want to pick there, the local one too.
+- **Grid backend**: the runner lane is what counts. Add a lane to the runner that starts the
+  harness with the model, then a matching `[lanes.<name>]` entry here (one step with that
+  harness and model) so the daemon knows what the lane runs. Do not add `[models]` for this: the
+  daemon maps pairs to runner lanes through the lane-derived models.
+
+A new pair has no runs yet: the dashboard shows its pass rate with `~` (the router's estimate)
+until it has real results.
 
 ### Issue intake
 

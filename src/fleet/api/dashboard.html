@@ -1170,7 +1170,7 @@
     .meta-value {
       font-size: 0.78rem;
       color: var(--text-main);
-      word-break: break-all;
+      overflow-wrap: anywhere;   /* long ids and paths still wrap, words do not split */
     }
 
     .changed-files-box {
@@ -1794,6 +1794,60 @@
       user-select: none;
       font-size: 0.65rem;
     }
+
+    /* Models view: one card per model, its harnesses as the row of a harness x model matrix */
+    .pair-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      padding-left: calc(4px + 0.65rem);
+    }
+    .pair-chip {
+      font-family: inherit;
+      font-size: 0.68rem;
+      color: var(--text-muted);
+      background: var(--input-bg);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 0.2rem 0.6rem;
+      min-height: 28px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .pair-chip:hover, .pair-chip:focus-visible { border-color: var(--cyan); color: var(--text-main); outline: none; }
+    .pair-chip .pair-pct { color: var(--emerald); font-weight: 700; margin-left: 0.3rem; }
+    .pair-chip .pair-pct.is-prior { color: var(--text-subtle); font-weight: 400; }
+    .pair-chip.is-note { cursor: default; border-style: dashed; }
+    .pair-rows { display: flex; flex-direction: column; gap: 0.4rem; margin-bottom: 0.75rem; }
+    .pair-row {
+      display: grid;
+      grid-template-columns: minmax(5.5rem, auto) 1fr auto;
+      align-items: center;
+      gap: 0.6rem;
+      padding: 0.45rem 0.6rem;
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      background: var(--input-bg);
+      font-size: 0.72rem;
+    }
+    .pair-row .pair-harness { color: var(--text-main); font-weight: 700; }
+    .pair-row .pair-meta { color: var(--text-muted); }
+    .pair-row .pair-meta > span { white-space: nowrap; }
+    .pair-row .chip-btn { min-height: 32px; }
+    .harness-strip { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 1rem; }
+    .harness-chip {
+      font-size: 0.68rem;
+      padding: 0.2rem 0.6rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+    }
+    .harness-chip.is-ready { border-color: rgba(16,185,129,0.4); color: var(--emerald); }
+    .harness-chip .harness-why { color: var(--text-subtle); margin-left: 0.3rem; }
+    .section-note { color: var(--text-subtle); font-size: 0.72rem; margin: 0 0 0.75rem; line-height: 1.5; }
+    .lane-fold { margin-top: 1rem; border-top: 1px dashed var(--border); padding-top: 0.75rem; }
+    .lane-fold summary { cursor: pointer; color: var(--text-muted); font-size: 0.75rem; min-height: 32px; }
+    .lane-fold-row { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; padding: 0.35rem 0; font-size: 0.72rem; color: var(--text-muted); border-bottom: 1px solid var(--border); }
 
     /* Modal Backdrop & Dialog for System Health, Plugins & Knowledge Base */
     .modal-backdrop {
@@ -3442,11 +3496,10 @@
                 </div>
 
                 <div class="control-group" id="model-select-group">
-                  <label for="model-select" class="control-label">Target Model / Lane</label>
+                  <label for="model-select" class="control-label">Target Model</label>
                   <select id="model-select" onchange="onModelSelectChange()" aria-label="Target Model">
                     <option value="auto" selected>Auto: router picks (pass rate over cost)</option>
                   </select>
-                  <select id="lane-select" style="display: none;" aria-hidden="true"></select>
                 </div>
               </div>
 
@@ -3465,11 +3518,11 @@
               <div class="control-group">
                 <span class="control-label">Presets</span>
                 <div class="preset-chips-row" style="margin: 0; flex-wrap: wrap; gap: 0.35rem;">
-                  <button type="button" class="chip-btn" onclick="applyPreset('auto', 'auto')">[AUTO] Optimal</button>
-                  <button type="button" class="chip-btn" onclick="applyPreset('goose', 'local_qwen')">[SOVEREIGN] Goose + Qwen</button>
-                  <button type="button" class="chip-btn" onclick="applyPreset('aider', 'local_qwen')">[FAST] Aider + Qwen</button>
-                  <button type="button" class="chip-btn" onclick="applyPreset('pi', 'local_qwen')">[REVIEW] Pi + Qwen</button>
-                  <button type="button" class="chip-btn" onclick="applyPreset('claude-code', 'antigravity_sonnet')">[ARCH] Claude Code</button>
+                  <button type="button" class="chip-btn preset-btn" data-h="auto" data-m="auto" onclick="applyPreset('auto', 'auto')">[AUTO] Optimal</button>
+                  <button type="button" class="chip-btn preset-btn" data-h="goose" data-m="local_qwen" onclick="applyPreset('goose', 'local_qwen')">[SOVEREIGN] Goose + Qwen</button>
+                  <button type="button" class="chip-btn preset-btn" data-h="aider" data-m="local_qwen" onclick="applyPreset('aider', 'local_qwen')">[FAST] Aider + Qwen</button>
+                  <button type="button" class="chip-btn preset-btn" data-h="pi" data-m="local_qwen" onclick="applyPreset('pi', 'local_qwen')">[REVIEW] Pi + Qwen</button>
+                  <button type="button" class="chip-btn preset-btn" data-h="agy" data-m="antigravity_sonnet" onclick="applyPreset('agy', 'antigravity_sonnet')">[ARCH] Claude via agy</button>
                 </div>
               </div>
 
@@ -3494,6 +3547,7 @@
               </div>
             </div>
 
+            <div id="dispatch-error" role="alert" hidden style="color: var(--rose); font-size: 0.78rem; padding: 0.25rem 0;"></div>
             <button type="button" class="btn btn-dispatch" onclick="dispatchTask()">
               &gt; DISPATCH TASK
             </button>
@@ -3588,7 +3642,7 @@
         <div class="panel-header">
           <div class="panel-header-left">
             <span class="prompt-glyph">&gt;</span>
-            <span class="panel-title">LANES</span>
+            <span class="panel-title">MODELS</span>
           </div>
           <div class="panel-header-actions">
             <button
@@ -3605,10 +3659,12 @@
         </div>
 
         <div class="panel-body">
+          <p class="section-note">Every model once. Its chips are the harnesses that run it, with the router's pass rate (~ is an estimate, no runs yet). Tap one to dispatch with that pair.</p>
+          <div class="harness-strip" id="harness-strip" aria-label="Harnesses"></div>
           <!-- Roster Category Filter Tabs -->
           <div class="filter-tabs" id="roster-filter-tabs" style="margin-bottom: 1rem; width: 100%;">
             <button type="button" class="filter-btn active" onclick="setRosterFilter('online')">
-              <span class="filter-label">ONLINE</span>
+              <span class="filter-label">READY</span>
               <span class="filter-count" id="count-filter-online">0</span>
             </button>
             <button type="button" class="filter-btn" onclick="setRosterFilter('free_tier')">
@@ -3634,8 +3690,13 @@
           </div>
 
           <div class="roster-grid" id="roster-container">
-            <!-- Dynamic roster cards render here -->
+            <!-- Dynamic model cards render here -->
           </div>
+          <details class="lane-fold" id="lane-fold" hidden>
+            <summary id="lane-fold-summary">Runner lanes fleet.toml does not describe</summary>
+            <p class="section-note" style="margin-top: 0.5rem;">The grid runner has these lanes, but fleet.toml does not say which harness and model they use, so the dispatch form cannot pick them. Auto routing in the runner may still use the enabled ones.</p>
+            <div id="lane-fold-list"></div>
+          </details>
         </div>
       </div>
 
@@ -4840,20 +4901,16 @@
       const text = document.getElementById('task-input').value.trim();
       const harness = document.getElementById('harness-select') ? document.getElementById('harness-select').value : 'auto';
       const model = document.getElementById('model-select') ? document.getElementById('model-select').value : 'auto';
-      const lane = document.getElementById('lane-select') ? document.getElementById('lane-select').value : '';
-      const chosenTarget = (model && model !== 'auto') ? model : (lane && lane !== 'auto' ? lane : '');
       const depsInput = document.getElementById('depends-on-input');
       const depsText = depsInput ? depsInput.value.trim() : '';
       const depends_on = depsText ? depsText.split(',').map(s => s.trim()).filter(Boolean) : [];
       if (!text) return;
 
-      const metadata = { harness, model: chosenTarget || 'auto' };
-      const payload = {
-        text,
-        lane: chosenTarget || undefined,
-        depends_on,
-        metadata
-      };
+      // harness and model only: the backend finds the lane that runs the pair
+      const metadata = { harness, model: model || 'auto' };
+      const payload = { text, depends_on, metadata };
+      const errEl = document.getElementById('dispatch-error');
+      if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
 
       try {
         const res = await fetch('/api/fleet/tasks', {
@@ -4866,9 +4923,15 @@
           if (depsInput) depsInput.value = '';
           tasksDataSerialized = '';
           await loadTasks();
+        } else {
+          // a refused task must say why: it used to vanish without a word (2026-10-24)
+          let detail = `HTTP ${res.status}`;
+          try { const body = await res.json(); if (body && body.detail) detail = String(body.detail); } catch (_) {}
+          if (errEl) { errEl.textContent = `Not dispatched: ${detail}`; errEl.hidden = false; }
         }
       } catch (err) {
         console.error('Failed to dispatch task', err);
+        if (errEl) { errEl.textContent = `Not dispatched: ${err.message || err}`; errEl.hidden = false; }
       }
     }
 
@@ -5170,40 +5233,12 @@
           nokey: data.no_key_count || 0,
         };
 
-        // Update badge in header
-        const badge = document.getElementById('roster-active-badge');
-        if (badge) {
-          badge.innerText = `${rosterData.filter(isOnline).length} / ${rosterMeta.total} online`;
-          badge.style.color = '';
-          badge.style.borderColor = '';
-        }
-
-        // Update count badges
-        const countAll = document.getElementById('count-filter-all');
-        const countFree = document.getElementById('count-filter-free');
-        const countSub = document.getElementById('count-filter-sub');
-        const countNim = document.getElementById('count-filter-nim');
-        const countLocal = document.getElementById('count-filter-local');
-
-        if (countAll) countAll.innerText = rosterData.length;
-        const countOnline = document.getElementById('count-filter-online');
-        if (countOnline) countOnline.innerText = rosterData.filter(isOnline).length;
-        if (countFree) countFree.innerText = rosterData.filter(l => l.category === 'free_tier').length;
-        if (countSub) countSub.innerText = rosterData.filter(l => l.category === 'subscription').length;
-        if (countNim) countNim.innerText = rosterData.filter(l => l.category === 'nvidia_nim').length;
-        if (countLocal) countLocal.innerText = rosterData.filter(l => l.category === 'local_sovereign').length;
-
-        // Populate dispatch lane dropdown with active/online lanes
-        populateDispatchLanes();
+        populateModelSelect();
         renderRoster();
+        refreshPresets();
       } catch (err) {
         console.error('Failed to load roster', err);
       }
-    }
-
-    // Populate Target Model / Lane dropdown in Dispatch Form
-    function populateDispatchLanes() {
-      populateModelSelect();
     }
 
     // Toggle Roster Item Accordion
@@ -5231,11 +5266,10 @@
     // Update Lane Cost Preview in Dispatch Form
     function updateLaneCostPreview() {
       const modelSel = document.getElementById('model-select');
-      const laneSel = document.getElementById('lane-select');
       const previewEl = document.getElementById('lane-cost-preview');
       if (!previewEl) return;
 
-      const selected = (modelSel && modelSel.value && modelSel.value !== 'auto') ? modelSel.value : (laneSel && laneSel.value ? laneSel.value : '');
+      const selected = (modelSel && modelSel.value && modelSel.value !== 'auto') ? modelSel.value : '';
       if (!selected || selected === 'auto') {
         previewEl.style.display = 'none';
         previewEl.textContent = '';
@@ -5259,17 +5293,57 @@
       }
     }
 
-    // Select Roster Lane for Dispatch
-    function selectRosterLane(laneId, harnessId) {
-      const laneSel = document.getElementById('lane-select');
-      const modelSel = document.getElementById('model-select');
-      const harnessSel = document.getElementById('harness-select');
-      if (modelSel) modelSel.value = laneId;
-      if (laneSel) laneSel.value = laneId;
-      if (harnessSel && harnessId) harnessSel.value = harnessId;
-      updateLaneCostPreview();
-      onPairSelectionChange();
+    // Render Dynamic Universal Model Lanes Roster
+    // A lane the runner may use now: active there and not dead by the health check
+    function isOnline(item) {
+      return item.available && item.status_badge === '[ONLINE]';
+    }
 
+    // ── Display names and the pairs the dispatch form can send ──
+    function modelLabel(name) {
+      if (!name || name === 'auto') return 'Auto';
+      const r = (rosterData || []).find(l => l.id === name);
+      if (r && r.name) return r.name;
+      const m = (modelsData || []).find(x => x.name === name);
+      return String((m && m.model_id) || name).split('/').pop();
+    }
+    function harnessLabel(id) {
+      if (!id || id === 'auto') return 'Auto';
+      const opt = Array.from(document.querySelectorAll('#harness-select option')).find(o => o.value === id);
+      return opt ? (opt.dataset.baseLabel || opt.textContent).replace(/ \([^)]*\)$/, '') : id;
+    }
+    function modelCategory(m) {
+      const r = (rosterData || []).find(l => l.id === m.name);
+      if (r && r.category) return r.category;
+      return m.cost === 'local' ? 'local_sovereign' : (m.cost === 'free' ? 'free_tier' : 'subscription');
+    }
+    // Router pairs whose model is offered and runnable with that harness (on the grid: an active
+    // lane runs exactly that pair), in the router's order
+    function runnablePairs() {
+      return (routerPairsData || []).filter(p => {
+        if (!p.compatible) return false;
+        const m = (modelsData || []).find(x => x.name === p.model);
+        if (!m || m.available === false) return false;
+        const c = m.compatibility && m.compatibility[p.harness];
+        return !c || c.compatible !== false;
+      });
+    }
+    function pairPct(p) {
+      const pct = Math.round((p.p_pass || 0) * 100);
+      return p.attempts ? `${pct}%` : `~${pct}%`;
+    }
+    function pairTitle(p) {
+      return `${harnessLabel(p.harness)} + ${modelLabel(p.model)}: ${Math.round((p.p_pass || 0) * 100)}% pass, ` +
+             `${(p.minutes_per_pass || 0).toFixed(1)} min per correct result, ${p.attempts || 0} runs (${p.basis || 'prior'})`;
+    }
+    function modelLanes(name) {
+      const ids = Object.keys(laneChoices).filter(id => laneChoices[id].model === name);
+      return ids.length ? ids : ((rosterData || []).some(l => l.id === name) ? [name] : []);
+    }
+
+    // Pick a pair for the next dispatch and go to the task form
+    function usePair(harness, model) {
+      applyPreset(harness, model);
       switchTab('tasks');
       const input = document.getElementById('task-input');
       if (input) {
@@ -5278,133 +5352,160 @@
       }
     }
 
-    // Render Dynamic Universal Model Lanes Roster
-    // A lane the runner may use now: active there and not dead by the health check
-    function isOnline(item) {
-      return item.available && item.status_badge === '[ONLINE]';
+    async function toggleModelLanes(name, enable) {
+      for (const id of modelLanes(name)) {
+        const lane = (rosterData || []).find(l => l.id === id);
+        if (lane && lane.enabled !== enable) {
+          await fetch('/api/fleet/roster/toggle', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lane_id: id, enabled: enable })
+          }).catch(err => console.error('Failed to toggle lane', err));
+        }
+      }
+      await loadRoster();
+      await loadModels();
+    }
+
+    function renderHarnessStrip() {
+      const el = document.getElementById('harness-strip');
+      if (!el) return;
+      const hs = (pluginsData && pluginsData.harnesses) || [];
+      const isReady = h => h.selectable !== false && h.available !== false;
+      // ready first; a short why on the chip, the full reason on hover / long-press
+      const short = r => /not installed/i.test(r || '') ? 'not installed' : (/lane/i.test(r || '') ? 'no lane' : 'unavailable');
+      el.innerHTML = [...hs.filter(isReady), ...hs.filter(h => !isReady(h))].map(h => {
+        const ready = isReady(h);
+        const why = ready ? '' : `<span class="harness-why">${short(h.reason)}</span>`;
+        return `<span class="harness-chip ${ready ? 'is-ready' : ''}" title="${escapeHtml(h.reason || 'ready')}">${escapeHtml(harnessLabel(h.id))}${why}</span>`;
+      }).join('');
+    }
+
+    // A model is ready when a lane runs it now (on the grid: an active runner lane)
+    function modelReady(m) {
+      if (m.available === false) return false;
+      const r = (rosterData || []).find(l => l.id === m.name);
+      return !r || isOnline(r) || modelLanes(m.name).some(id => { const l = rosterData.find(x => x.id === id); return l && isOnline(l); });
     }
 
     function renderRoster() {
       const container = document.getElementById('roster-container');
       if (!container) return;
+      renderHarnessStrip();
+      const models = modelsData || [];
+      const pairs = runnablePairs();
 
-      const visibleLanes = rosterData.filter(item => {
+      const counts = {
+        online: models.filter(modelReady).length, all: models.length,
+        free: models.filter(m => modelCategory(m) === 'free_tier').length,
+        sub: models.filter(m => modelCategory(m) === 'subscription').length,
+        nim: models.filter(m => modelCategory(m) === 'nvidia_nim').length,
+        local: models.filter(m => modelCategory(m) === 'local_sovereign').length,
+      };
+      for (const [k, v] of Object.entries(counts)) {
+        const el = document.getElementById(`count-filter-${k}`);
+        if (el) el.innerText = v;
+      }
+      const badge = document.getElementById('roster-active-badge');
+      if (badge) badge.innerText = `${counts.online} / ${counts.all} ready`;
+
+      const visible = models.filter(m => {
         if (currentRosterFilter === 'all') return true;
-        if (currentRosterFilter === 'online') return isOnline(item);
-        return item.category === currentRosterFilter;
+        if (currentRosterFilter === 'online') return modelReady(m);
+        return modelCategory(m) === currentRosterFilter;
       });
 
-      if (visibleLanes.length === 0) {
-        container.innerHTML = rosterData.length === 0
-          ? '<div style="color: var(--text-subtle); padding: 1.5rem; text-align: center;">No lanes yet. Lanes live in fleet.toml ([lanes.&lt;name&gt;]); <code>fleet config init</code> writes a commented example.</div>'
-          : '<div style="color: var(--text-subtle); padding: 1.5rem; text-align: center;">No lanes in this view.</div>';
-        return;
-      }
+      if (!visible.length) {
+        container.innerHTML = models.length === 0
+          ? '<div style="color: var(--text-subtle); padding: 1.5rem; text-align: center;">No models yet. Lanes live in fleet.toml ([lanes.&lt;name&gt;]); <code>fleet config init</code> writes a commented example.</div>'
+          : '<div style="color: var(--text-subtle); padding: 1.5rem; text-align: center;">No models in this view.</div>';
+      } else {
+        container.innerHTML = visible.map(m => {
+          const id = m.name;
+          const r = (rosterData || []).find(l => l.id === id) || {};
+          const cat = modelCategory(m);
+          const isExpanded = expandedRosters.has(id);
+          const ready = modelReady(m);
+          const mine = pairs.filter(p => p.model === id);
+          const best = mine[0];
+          const barClass = { free_tier: 'bar-emerald', subscription: 'bar-purple', local_sovereign: 'bar-amber' }[cat] || 'bar-cyan';
+          const lanes = modelLanes(id);
+          const anyEnabled = lanes.some(l => { const x = rosterData.find(y => y.id === l); return !x || x.enabled !== false; });
+          let status = '<span class="online-dot" title="ready" aria-label="ready"></span>';
+          if (m.available === false) status = '<span class="status-pill pill-standby">NO ACTIVE LANE</span>';
+          else if (!ready) status = `<span class="status-pill pill-standby">${escapeHtml(String(r.status_badge || 'OFFLINE').replace(/[\[\]]/g, ''))}</span>`;
+          const chev = `<svg class="chevron-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="transform: rotate(${isExpanded ? 180 : 0}deg); transition: transform 0.2s ease;"><polyline points="6 9 12 15 18 9"></polyline></svg>`;
 
-      container.innerHTML = visibleLanes.map(item => {
-        const isExpanded = expandedRosters.has(item.id);
-        const rosterChevronSvg = `
-          <svg class="chevron-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="transform: ${isExpanded ? 'rotate(180deg)' : 'rotate(0deg)'}; transition: transform 0.2s ease;">
-            <polyline points="6 9 12 15 18 9"></polyline>
-          </svg>
-        `;
+          const chips = mine.length
+            ? mine.map(p => `<button type="button" class="pair-chip" title="${escapeHtml(pairTitle(p))}" data-h="${escapeHtml(p.harness)}" data-m="${escapeHtml(id)}" onclick="usePair(this.dataset.h, this.dataset.m); event.stopPropagation();">${escapeHtml(harnessLabel(p.harness))}<span class="pair-pct ${p.attempts ? '' : 'is-prior'}">${pairPct(p)}</span></button>`).join('')
+            : (m.available === false ? '' : `<button type="button" class="pair-chip" title="No single harness runs this model here; its lane tries its own chain of harnesses" data-m="${escapeHtml(id)}" onclick="usePair('auto', this.dataset.m); event.stopPropagation();">Auto<span class="pair-pct is-prior">lane's harness chain</span></button>`);
 
-        // Bar and Pill Colors based on category
-        let barClass = 'bar-cyan';
-        let provTagClass = 'prov-tag-cyan';
-        if (item.category === 'free_tier') {
-          barClass = 'bar-emerald';
-          provTagClass = 'prov-tag-emerald';
-        } else if (item.category === 'subscription') {
-          barClass = 'bar-purple';
-          provTagClass = 'prov-tag-purple';
-        } else if (item.category === 'local_sovereign') {
-          barClass = 'bar-amber';
-          provTagClass = 'prov-tag-amber';
-        }
-
-        // Status pill classes
-        let statusClass = 'pill-ready';
-        if (item.status_badge === '[QUOTA BLOCKED]' || item.status_badge === '[DEAD]') {
-          statusClass = 'pill-fail';
-        } else if (item.status_badge === '[STANDBY (SWAP)]') {
-          statusClass = 'pill-standby';
-        } else if (item.status_badge === '[NO KEY]' || item.status_badge === '[NO SERVER]') {
-          statusClass = 'pill-standby';
-        } else if (item.status_badge === '[DISABLED]') {
-          statusClass = 'pill-standby';
-        }
-
-        const quickCtx = (item.context_window || '128k').split(' ')[0];
-        const quickTps = (item.throughput || '~80 tok/s').split('(')[0].trim();
-
-        return `
-          <div class="roster-card ${isExpanded ? 'active-expanded' : ''} ${item.status_badge === '[DEAD]' ? 'lane-dead' : ''}" data-lane="${escapeHtml(item.id)}" onclick="toggleRoster(this.dataset.lane)">
-            <div class="roster-header-line">
-              <div class="roster-title-group">
-                <div class="provider-bar ${barClass}"></div>
-                <span class="model-name">${escapeHtml(item.name)}</span>
-              </div>
-              <div class="roster-status-group">
-                ${item.pass_rate !== null && item.pass_rate !== undefined ? `<span class="roster-quick-stat" title="measured pass rate">${item.pass_rate}%</span>` : ''}
-                ${isOnline(item) ? '<span class="online-dot" title="online" aria-label="online"></span>' : `<span class="status-pill ${statusClass}">${escapeHtml(item.status_badge.replace(/[\[\]]/g, ''))}</span>`}
-                <span class="toggle-glyph" aria-hidden="true">${rosterChevronSvg}</span>
-              </div>
-            </div>
-
-            ${isExpanded ? `
-            <div class="roster-sub-line">
-              <span class="provider-pill ${provTagClass}">${escapeHtml(item.provider)}</span>
-              <span class="roster-quick-stat">${escapeHtml(item.cost_tier)}</span>
-              <span class="roster-quick-stat-sep">//</span>
-              <span class="roster-quick-stat">${escapeHtml(quickTps)}</span>
-            </div>` : ''}
-
-            ${isExpanded ? `
-            <div class="roster-details" onclick="event.stopPropagation()">
-              <div class="roster-spec-grid">
-                ${[
-                  ['WHY NOT ONLINE', item.unavailable_reason, 'rose'],
-                  ['COST', item.cost_desc || item.cost_tier],
-                  ['PROVIDER', item.provider],
-                  ['MODELS', (item.models || []).join(', ')],
-                  ['CLIS', (item.harnesses || []).join(' → ') || item.default_harness],
-                  ['ENDPOINT', item.endpoint],
-                  ['MEASURED', item.throughput],
-                  ['STRENGTHS', item.arch],
-                ].filter(([, v]) => v).map(([label, value, tone]) => `
+          const rows = mine.map(p => `
+                <div class="pair-row">
+                  <span class="pair-harness">${escapeHtml(harnessLabel(p.harness))}</span>
+                  <span class="pair-meta" title="${escapeHtml(pairTitle(p))}"><span>${pairPct(p)}</span> · <span>${(p.minutes_per_pass || 0).toFixed(1)} min/pass</span> · <span>${p.attempts ? `${p.attempts} runs` : (/bakeoff/.test(p.basis || '') ? 'bake-off estimate' : 'estimate')}</span></span>
+                  <button type="button" class="chip-btn" data-h="${escapeHtml(p.harness)}" data-m="${escapeHtml(id)}" onclick="usePair(this.dataset.h, this.dataset.m)">Use</button>
+                </div>`).join('');
+          const laneInfo = lanes.map(l => {
+            const row = laneChoices[l];
+            return row ? `${l} (${row.harnesses.join(' → ')})` : l;
+          }).join(', ');
+          const spec = [
+            ['WHY NOT READY', r.unavailable_reason || (m.available === false ? 'No active runner lane runs this model.' : ''), 'rose'],
+            ['COST', r.cost_tier || m.cost],
+            ['ABOUT', r.arch || r.cost_desc],
+            ['PROVIDER', r.provider || m.provider],
+            ['RUNNER LANES', laneInfo],
+          ].filter(([, v]) => v).map(([label, value, tone]) => `
                 <div class="roster-spec-cell" style="grid-column: 1 / -1;${tone ? ' border-color: rgba(244,63,94,0.3);' : ''}">
                   <span class="meta-label">${label}:</span>
                   <span class="meta-value"${tone ? ' style="color: var(--rose);"' : ''}>${escapeHtml(String(value))}</span>
-                </div>`).join('')}
-              </div>
+                </div>`).join('');
 
-              <div style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.75rem;">
-                <button
-                  type="button"
-                  class="roster-select-btn"
-                  style="flex: 1;"
-                  data-lane="${escapeHtml(item.id)}" data-harness="${escapeHtml(item.default_harness)}"
-                  onclick="selectRosterLane(this.dataset.lane, this.dataset.harness); event.stopPropagation();"
-                  ${item.status_badge === '[ONLINE]' ? '' : 'disabled title="Lane currently offline or quota blocked" style="opacity: 0.6; cursor: not-allowed;"'}
-                >
-                  &gt; SELECT FOR DISPATCH
-                </button>
-                <button
-                  type="button"
-                  class="chip-btn"
-                  data-lane="${escapeHtml(item.id)}"
-                  onclick="toggleLaneEnabled(this.dataset.lane, ${item.enabled}); event.stopPropagation();"
-                  style="min-height: 38px; font-size: 0.7rem;"
-                >
-                  ${item.enabled ? '[DISABLE]' : '[ENABLE]'}
-                </button>
+          return `
+          <div class="roster-card ${isExpanded ? 'active-expanded' : ''} ${ready ? '' : 'lane-dead'}" data-lane="${escapeHtml(id)}" onclick="toggleRoster(this.dataset.lane)">
+            <div class="roster-header-line">
+              <div class="roster-title-group">
+                <div class="provider-bar ${barClass}"></div>
+                <span class="model-name">${escapeHtml(modelLabel(id))}</span>
+              </div>
+              <div class="roster-status-group">
+                ${best ? `<span class="roster-quick-stat" title="${escapeHtml(pairTitle(best))}">best ${pairPct(best)}</span>` : ''}
+                ${status}
+                <span class="toggle-glyph" aria-hidden="true">${chev}</span>
               </div>
             </div>
-            ` : ''}
-          </div>
-        `;
-      }).join('');
+            ${chips ? `<div class="pair-chips">${chips}</div>` : ''}
+            ${isExpanded ? `
+            <div class="roster-details" onclick="event.stopPropagation()">
+              ${rows ? `<div class="pair-rows">${rows}</div>` : ''}
+              <div class="roster-spec-grid">${spec}</div>
+              <div style="display: flex; gap: 0.5rem; align-items: center; margin-top: 0.75rem;">
+                <button type="button" class="roster-select-btn" style="flex: 1;" data-m="${escapeHtml(id)}"
+                  onclick="usePair('auto', this.dataset.m)" ${m.available === false ? 'disabled style="flex: 1; opacity: 0.6; cursor: not-allowed;"' : ''}>
+                  &gt; USE, AUTO HARNESS
+                </button>
+                ${lanes.length ? `<button type="button" class="chip-btn" data-m="${escapeHtml(id)}" onclick="toggleModelLanes(this.dataset.m, ${!anyEnabled})" style="min-height: 42px; font-size: 0.7rem; flex: 0 0 auto;">${anyEnabled ? '[DISABLE]' : '[ENABLE]'}</button>` : ''}
+              </div>
+            </div>` : ''}
+          </div>`;
+        }).join('');
+      }
+
+      // Runner lanes fleet.toml does not describe: still switchable, not dispatchable by pair
+      const fold = document.getElementById('lane-fold');
+      const list = document.getElementById('lane-fold-list');
+      if (fold && list) {
+        const known = new Set([...Object.keys(laneChoices), ...models.map(m => m.name)]);
+        const other = Object.keys(laneChoices).length ? (rosterData || []).filter(l => !known.has(l.id)) : [];
+        fold.hidden = !other.length;
+        const summary = document.getElementById('lane-fold-summary');
+        if (summary) summary.textContent = `Runner lanes fleet.toml does not describe (${other.length})`;
+        list.innerHTML = other.map(l => `
+          <div class="lane-fold-row">
+            <span>${escapeHtml(l.name)} <span style="color: var(--text-subtle);">${escapeHtml(String(l.status_badge || '').replace(/[\[\]]/g, '').toLowerCase())}</span></span>
+            <button type="button" class="chip-btn" data-lane="${escapeHtml(l.id)}" onclick="toggleLaneEnabled(this.dataset.lane, ${l.enabled})" style="min-height: 32px; font-size: 0.68rem;">${l.enabled ? '[DISABLE]' : '[ENABLE]'}</button>
+          </div>`).join('');
+      }
     }
 
     // Settings Management
@@ -5608,12 +5709,15 @@
         if (pluginsData.coordinator && pluginsData.coordinator.name) setCoordinator(pluginsData.coordinator.name);
         renderPluginsModal();
         updateHarnessSelect();
+        renderRoster();
+        refreshPresets();
       } catch (err) {
         console.error('Failed to load plugins', err);
       }
     }
 
     let modelsData = [];
+    let laneChoices = {};   // grid only: lane id -> {harnesses, model, active}
     let routerPairsData = [];
     let topAutoPair = null;
 
@@ -5623,7 +5727,11 @@
         if (!res.ok) return;
         const data = await res.json();
         modelsData = data.models || [];
+        laneChoices = data.lanes || {};
         populateModelSelect();
+        renderRoster();
+        refreshPresets();
+        updateAutoPairRecommendation();   // the pairs may have loaded first; runnable needs the models
       } catch (err) {
         console.error('Failed to load models', err);
       }
@@ -5636,78 +5744,64 @@
         const data = await res.json();
         routerPairsData = data.pairs || [];
         updateAutoPairRecommendation();
+        renderRoster();
       } catch (err) {
         console.error('Failed to load router pairs', err);
       }
     }
 
+    // The model picker lists models (/api/fleet/models), one entry per real model; the harness
+    // is the other picker. Grid lanes weld a harness to a model, so they are not offered here:
+    // the backend finds the lane for the chosen pair, and an unrunnable pair is greyed out.
     function populateModelSelect() {
       const modelSel = document.getElementById('model-select');
-      const laneSel = document.getElementById('lane-select');
       if (!modelSel) return;
       const currentVal = modelSel.value || 'auto';
 
       let html = '<option value="auto">Auto: router picks (pass rate over cost)</option>';
-      let laneHtml = '<option value="">Router picks (measured pass rate, local and free first)</option>';
-
       const groups = [
         { label: 'LOCAL & SOVEREIGN', cat: 'local_sovereign' },
         { label: 'FREE TIER', cat: 'free_tier' },
         { label: 'NVIDIA NIM', cat: 'nvidia_nim' },
         { label: 'SUBSCRIPTIONS & CLOUD', cat: 'subscription' },
       ];
-
-      const addedIds = new Set();
-
-      groups.forEach(g => {
-        const lanesInGroup = (rosterData || []).filter(l => l.category === g.cat && (l.enabled !== false));
-        if (lanesInGroup.length > 0) {
-          html += `<optgroup label="── ${g.label} ──">`;
-          laneHtml += `<optgroup label="── ${g.label} ──">`;
-          lanesInGroup.forEach(l => {
-            addedIds.add(l.id);
-            const costTag = l.cost_tier ? ` [${escapeHtml(l.cost_tier)}]` : '';
-            const statusTag = (!l.available || l.status_badge === '[STANDBY]') ? ' (standby)' : '';
-            html += `<option value="${escapeHtml(l.id)}">${escapeHtml(l.name)}${costTag}${statusTag}</option>`;
-            laneHtml += `<option value="${escapeHtml(l.id)}">${escapeHtml(l.name)}${statusTag}</option>`;
-          });
-          html += `</optgroup>`;
-          laneHtml += `</optgroup>`;
+      const laneOf = id => (rosterData || []).find(l => l.id === id);
+      const catOf = m => {
+        const r = laneOf(m.name);
+        if (r && r.category) return r.category;
+        return m.cost === 'local' ? 'local_sovereign' : (m.cost === 'free' ? 'free_tier' : 'subscription');
+      };
+      const option = m => {
+        const r = laneOf(m.name);
+        const label = (r && r.name) || String(m.model_id || m.name).split('/').pop();
+        const costTag = r && r.cost_tier ? ` [${escapeHtml(r.cost_tier)}]` : (m.cost ? ` [${escapeHtml(m.cost)}]` : '');
+        if (m.available === false) {
+          return `<option value="${escapeHtml(m.name)}" disabled data-unavailable="1">${escapeHtml(label)}${costTag} (no active lane)</option>`;
         }
+        const statusTag = r && (r.available === false || r.status_badge === '[STANDBY]') ? ' (standby)' : '';
+        return `<option value="${escapeHtml(m.name)}">${escapeHtml(label)}${costTag}${statusTag}</option>`;
+      };
+      // models no active lane runs go last, in their own group, instead of cluttering every tier
+      const runnable = (modelsData || []).filter(m => m.available !== false);
+      const placed = new Set((modelsData || []).filter(m => m.available === false).map(m => m.name));
+      groups.forEach(g => {
+        const inGroup = runnable.filter(m => catOf(m) === g.cat);
+        if (!inGroup.length) return;
+        html += `<optgroup label="── ${g.label} ──">` + inGroup.map(m => { placed.add(m.name); return option(m); }).join('') + '</optgroup>';
       });
-
-      // Include any models from modelsData not already in roster
-      const extraModels = (modelsData || []).filter(m => !addedIds.has(m.name));
-      if (extraModels.length > 0) {
-        html += `<optgroup label="── OTHER CONFIGURED MODELS ──">`;
-        extraModels.forEach(m => {
-          const costTag = m.cost ? ` [${escapeHtml(m.cost)}]` : '';
-          html += `<option value="${escapeHtml(m.name)}">${escapeHtml(m.name)}${costTag}</option>`;
-        });
-        html += `</optgroup>`;
-      }
+      const rest = runnable.filter(m => !placed.has(m.name));
+      if (rest.length) html += '<optgroup label="── OTHER CONFIGURED MODELS ──">' + rest.map(option).join('') + '</optgroup>';
+      const off = (modelsData || []).filter(m => m.available === false);
+      if (off.length) html += '<optgroup label="── NOT RUNNABLE NOW ──">' + off.map(option).join('') + '</optgroup>';
 
       modelSel.innerHTML = html;
-      if (laneSel) laneSel.innerHTML = laneHtml;
-
-      if (Array.from(modelSel.options).some(o => o.value === currentVal)) {
-        modelSel.value = currentVal;
-      } else {
-        modelSel.value = 'auto';
-      }
-      if (laneSel) {
-        laneSel.value = modelSel.value === 'auto' ? '' : modelSel.value;
-      }
+      const keep = Array.from(modelSel.options).find(o => o.value === currentVal && !o.disabled);
+      modelSel.value = keep ? currentVal : 'auto';
       updateLaneCostPreview();
       onPairSelectionChange();
     }
 
     function onModelSelectChange() {
-      const modelSel = document.getElementById('model-select');
-      const laneSel = document.getElementById('lane-select');
-      if (modelSel && laneSel) {
-        laneSel.value = (modelSel.value === 'auto' ? '' : modelSel.value);
-      }
       updateLaneCostPreview();
       onPairSelectionChange('model');
     }
@@ -5728,7 +5822,7 @@
         return;
       }
 
-      const compatible = routerPairsData.filter(p => p.compatible);
+      const compatible = runnablePairs();
       if (!compatible.length) {
         if (text) text.textContent = 'ROUTER OPTIMAL';
         if (stats) stats.textContent = '(pass rate over cost)';
@@ -5736,15 +5830,17 @@
         if (hintEl) hintEl.textContent = 'ROUTER OPTIMAL';
         return;
       }
-      topAutoPair = compatible[0];
-      if (text) text.textContent = `${topAutoPair.harness.toUpperCase()} + ${topAutoPair.model.toUpperCase()}`;
-      if (stats) stats.textContent = `${topAutoPair.minutes_per_pass.toFixed(2)} min/pass · ${(topAutoPair.p_pass * 100).toFixed(0)}% pass`;
+      // The card names the best pair with real runs: a new model's prior can rank first while the
+      // router explores it, but that is a guess, not a recommendation
+      topAutoPair = compatible.find(p => p.attempts > 0) || compatible[0];
+      if (text) text.textContent = `${harnessLabel(topAutoPair.harness)} + ${modelLabel(topAutoPair.model)}`.toUpperCase();
+      if (stats) stats.textContent = `${pairPct(topAutoPair)} pass · ${topAutoPair.minutes_per_pass.toFixed(1)} min/pass · ${topAutoPair.attempts ? `${topAutoPair.attempts} runs` : 'estimate'}`;
       if (costEl) {
         const costStr = (topAutoPair.cost || 'local').toLowerCase();
         costEl.textContent = costStr.toUpperCase();
         costEl.className = `auto-cost-pill cost-${costStr}`;
       }
-      if (hintEl) hintEl.textContent = 'ROUTER OPTIMAL';
+      if (hintEl) hintEl.textContent = topAutoPair.attempts ? 'BEST MEASURED' : 'ROUTER ESTIMATE';
       if (badgeEl) badgeEl.textContent = '[AUTO]';
       if (cardEl) cardEl.classList.remove('is-custom');
       onPairSelectionChange();
@@ -5753,28 +5849,47 @@
     function selectAutoPair() {
       const harnessSel = document.getElementById('harness-select');
       const modelSel = document.getElementById('model-select');
-      const laneSel = document.getElementById('lane-select');
       if (harnessSel) harnessSel.value = 'auto';
       if (modelSel) modelSel.value = 'auto';
-      if (laneSel) laneSel.value = '';
       updateLaneCostPreview();
       onPairSelectionChange();
+    }
+
+    // A preset whose pair cannot run now is greyed out with the reason, not silently turned into Auto
+    function refreshPresets() {
+      const hSel = document.getElementById('harness-select');
+      const mSel = document.getElementById('model-select');
+      if (!hSel || !mSel) return;
+      document.querySelectorAll('.preset-btn').forEach(btn => {
+        const h = btn.dataset.h, m = btn.dataset.m;
+        let why = '';
+        const hOpt = Array.from(hSel.options).find(o => o.value === h);
+        const mInfo = (modelsData || []).find(x => x.name === m);
+        if (h !== 'auto' && (!hOpt || (pluginsData && (pluginsData.harnesses || []).some(x => x.id === h && x.selectable === false)))) {
+          why = `${harnessLabel(h)} is not available here`;
+        } else if (m !== 'auto' && (!mInfo || mInfo.available === false)) {
+          why = `${modelLabel(m)} has no active lane`;
+        } else if (h !== 'auto' && m !== 'auto' && mInfo.compatibility && mInfo.compatibility[h] && mInfo.compatibility[h].compatible === false) {
+          why = mInfo.compatibility[h].reason || 'this pair cannot run';
+        }
+        btn.disabled = !!why;
+        btn.title = why || `${harnessLabel(h)} + ${modelLabel(m)}`;
+        btn.style.opacity = why ? '0.45' : '';
+        btn.style.cursor = why ? 'not-allowed' : '';
+      });
     }
 
     function applyPreset(harness, modelOrLane) {
       const harnessSel = document.getElementById('harness-select');
       const modelSel = document.getElementById('model-select');
-      const laneSel = document.getElementById('lane-select');
+      if (laneChoices[modelOrLane]) modelOrLane = laneChoices[modelOrLane].model;  // a grid lane: its model
       if (harnessSel) {
-        const hExists = Array.from(harnessSel.options).some(o => o.value === harness);
+        const hExists = Array.from(harnessSel.options).some(o => o.value === harness && !o.disabled);
         harnessSel.value = hExists ? harness : 'auto';
       }
       if (modelSel) {
-        const mExists = Array.from(modelSel.options).some(o => o.value === modelOrLane);
+        const mExists = Array.from(modelSel.options).some(o => o.value === modelOrLane && !o.disabled);
         modelSel.value = mExists ? modelOrLane : 'auto';
-      }
-      if (laneSel) {
-        laneSel.value = (modelOrLane === 'auto' ? '' : modelOrLane);
       }
       updateLaneCostPreview();
       onPairSelectionChange();
@@ -5799,6 +5914,7 @@
           opt.dataset.baseLabel = opt.textContent;
         }
         const baseLabel = opt.dataset.baseLabel;
+        if (opt.dataset.unavailable) { opt.disabled = true; continue; }
         const mInfo = modelsData.find(m => m.name === opt.value);
         if (selHarness !== 'auto' && mInfo && mInfo.compatibility) {
           const compat = mInfo.compatibility[selHarness];
@@ -5864,10 +5980,10 @@
       if (selHarness === 'auto' && selModel === 'auto') {
         if (cardEl) cardEl.classList.remove('is-custom');
         if (badgeEl) badgeEl.textContent = '[AUTO]';
-        if (hintEl) hintEl.textContent = 'ROUTER OPTIMAL';
+        if (hintEl) hintEl.textContent = topAutoPair && topAutoPair.attempts ? 'BEST MEASURED' : 'ROUTER OPTIMAL';
         if (topAutoPair) {
-          if (textEl) textEl.textContent = `${topAutoPair.harness.toUpperCase()} + ${topAutoPair.model.toUpperCase()}`;
-          if (statsEl) statsEl.textContent = `${topAutoPair.minutes_per_pass.toFixed(2)} min/pass · ${(topAutoPair.p_pass * 100).toFixed(0)}% pass`;
+          if (textEl) textEl.textContent = `${harnessLabel(topAutoPair.harness)} + ${modelLabel(topAutoPair.model)}`.toUpperCase();
+          if (statsEl) statsEl.textContent = `${pairPct(topAutoPair)} pass · ${topAutoPair.minutes_per_pass.toFixed(1)} min/pass · ${topAutoPair.attempts ? `${topAutoPair.attempts} runs` : 'estimate'}`;
           if (costEl) {
             const costStr = (topAutoPair.cost || 'local').toLowerCase();
             costEl.textContent = costStr.toUpperCase();
@@ -5891,7 +6007,7 @@
       if (cardEl) cardEl.classList.add('is-custom');
       if (badgeEl) badgeEl.textContent = '[CUSTOM]';
       if (hintEl) hintEl.textContent = 'TAP TO RESET';
-      if (textEl) textEl.textContent = `${selHarness.toUpperCase()} + ${selModel.toUpperCase()}`;
+      if (textEl) textEl.textContent = `${harnessLabel(selHarness)} + ${modelLabel(selModel)}`.toUpperCase();
 
       const mInfo = modelsData.find(m => m.name === selModel);
       const rMatch = rosterData.find(r => r.id === selModel);
@@ -5907,17 +6023,16 @@
             preview.style.color = 'var(--rose)';
             preview.style.borderColor = 'rgba(244,63,94,0.3)';
             preview.style.background = 'rgba(244,63,94,0.06)';
-            preview.textContent = `[INCOMPATIBLE] ${selHarness} + ${selModel}: ${compat.reason || 'incompatible combination'}`;
+            preview.textContent = `[INCOMPATIBLE] ${harnessLabel(selHarness)} + ${modelLabel(selModel)}: ${compat.reason || 'incompatible combination'}`;
           }
           return;
         }
       }
 
       // Compatible pair
-      const matchingPair = routerPairsData.find(p =>
+      const matchingPair = runnablePairs().find(p =>
         (selHarness === 'auto' || p.harness === selHarness) &&
-        (selModel === 'auto' || p.model === selModel) &&
-        p.compatible
+        (selModel === 'auto' || p.model === selModel)
       );
 
       const costVal = (matchingPair && matchingPair.cost) || (mInfo && mInfo.cost) || (rMatch && rMatch.cost_tier) || 'custom';
@@ -5927,7 +6042,7 @@
       }
 
       if (matchingPair) {
-        if (statsEl) statsEl.textContent = `${matchingPair.minutes_per_pass.toFixed(2)} min/pass · ${(matchingPair.p_pass * 100).toFixed(0)}% pass`;
+        if (statsEl) statsEl.textContent = `${matchingPair.minutes_per_pass.toFixed(1)} min/pass · ${pairPct(matchingPair)} pass`;
       } else {
         if (statsEl) statsEl.textContent = 'Custom harness & model';
       }
@@ -6156,6 +6271,16 @@
         answer: "The router supports both named lanes ([lanes.<name>]) and decoupled (harness, model) pairs ([models.<name>] + HarnessPlugin). Compatibility is computed from declared capabilities (API kind, tool calling, subscription login). For pair routing, Thompson sampling ranks compatible pairs by cost-weighted minutes per correct result (seeded from routing.priors_file or bakeoff_priors.json); for lane routing, lanes are ranked by measured pass rate per task category over cost (local and free count 1, paid 3), with a hang penalised as four attempts. Tasks marked sensitive/is_sensitive stay strictly on private sovereign endpoints. A provider limit rests the lane or model (120 s, or until midnight US/Pacific for a daily quota), max_parallel keeps full lanes behind lanes with room, dead and retired lanes are left out, and a failed attempt hands the worktree to the next choice after one repair pass.",
         snippet: "fleet router rank --category bugfix\nfleet harnesses list\nfleet harnesses test goose",
         snippetLabel: "Inspect router ranking & harness conformance"
+      },
+      {
+        id: "faq-harness-model",
+        category: "architecture",
+        categoryLabel: "ROUTING & LANES",
+        question: "Harness and model: what do I pick, and why are some greyed out?",
+        tags: ["harness", "model", "pair", "dispatch", "agents", "lane", "greyed", "disabled", "auto"],
+        answer: "A task runs one harness (the agent CLI: goose, aider, opencode, Pi ...) with one model. Under Options you pick each, or leave either on Auto and the router picks it. Agents lists every model once; its chips are the harnesses that can run it, with the router's pass rate for that pair (~ is an estimate before the first runs). Tap a chip to dispatch with that pair. A pair is greyed out with its reason when it cannot run. \"Reachable only through opencode\": the model comes from a lane whose model id is written for that one CLI; on the local backend, describe it as [models.<name>] (provider openai_compatible, base_url, model_id, key) and other harnesses can use it; one [models] entry replaces all lane-derived models, so list them all. \"No active lane runs this pair\" (grid runner): the runner starts a fixed CLI per lane, so a new pair needs a runner lane and a matching [lanes.<name>] entry, not [models]. README, \"Which harness can run which model\", has the details. On the grid runner the daemon turns your pair into the runner's lane; triage still writes the task, and a sensitive task stays on a local lane whatever you picked. A refused dispatch says why under the prompt.",
+        snippet: "curl -s -H \"Authorization: Bearer $TOKEN\" https://<host>:8444/api/fleet/models",
+        snippetLabel: "Models, and which harness can run each"
       },
       {
         id: "faq-local-models",

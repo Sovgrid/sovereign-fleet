@@ -458,6 +458,22 @@ def test_unreleased_at_top_after_promotion():
         shutil.rmtree(tmp)
 
 
+def test_promotion_keeps_the_intro_under_the_title():
+    """The 0.6.4 bump put the new [Unreleased] between the title and the intro paragraph and
+    glued the promoted section to the next one."""
+    log = ("# Changelog\n\nIntro line.\n\n## [Unreleased]\n### Fixed\n- bugfix\n"
+           "\n## [0.4.0] - 2026-01-01\n### Added\n- old\n")
+    repo, tmp = _mkrepo(log)
+    try:
+        r = _run_bump(repo, ["patch"])
+        assert r.returncode == 0, r.stderr
+        ch = (repo / "CHANGELOG.md").read_text()
+        assert ch.startswith("# Changelog\n\nIntro line.\n\n## [Unreleased]\n\n## [")
+        assert "- bugfix\n\n## [0.4.0]" in ch
+    finally:
+        shutil.rmtree(tmp)
+
+
 # ── integration: Unreleased at EOF without trailing newline does not crash ──
 
 

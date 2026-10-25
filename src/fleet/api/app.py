@@ -180,14 +180,14 @@ _RISKY = re.compile(r"\b(rm\s+-rf|delete|drop|migrate|unlink|force|reset\s+--har
 
 async def _start_assessment(task_id: str, text: str) -> None:
     """Rate a task that waits for approval and store {level, reason, model, at} in its metadata
-    as "risk". Runs after the response (FastAPI background task); never raises. Only tasks of
-    the package's own store get it (a grid-runner task lives in the runner's spool)."""
+    as "risk". Runs after the response (FastAPI background task); never raises. The backend
+    stores it where the task lives: the package's store, or the grid runner's spool."""
     result = await _risk.assess(text, load_config())
     if result is None:
         return
     try:
-        if not task_store.update_metadata(task_id, {"risk": result}):
-            logging.getLogger("fleet.api.app").info("risk assessment: %s is not in the local store", task_id)
+        if not backend().update_metadata(task_id, {"risk": result}):
+            logging.getLogger("fleet.api.app").info("risk assessment: no store kept it for %s", task_id)
     except Exception:  # noqa: BLE001 - a broken store must not take down the daemon
         logging.getLogger("fleet.api.app").exception("risk assessment store failed")
 
@@ -610,9 +610,17 @@ def get_models():
     cfg = load_config()
     models = cfg.effective_models
     harnesses = harness_registry(cfg)
+    # On the grid backend a pair runs only if a runner lane runs it: a compatible pair without
+    # an active lane is not selectable either (the dashboard greys it out with this reason).
+    tasks_backend = backend()
+    table = tasks_backend.choice_table() if hasattr(tasks_backend, "choice_table") else None
     result = []
     for name, m in models.items():
         compat = compatible_harnesses_for_model(harnesses, m)
+        if table is not None:
+            for h_name, (ok, _reason) in list(compat.items()):
+                if ok and not tasks_backend.lanes_for_choice(h_name, name, active_only=True, table=table):
+                    compat[h_name] = (False, "no active lane runs this pair")
         result.append({
             "name": name,
             "provider": m.provider,
@@ -628,8 +636,11 @@ def get_models():
                 h_name: {"compatible": ok, "reason": reason}
                 for h_name, (ok, reason) in compat.items()
             },
+            **({"available": bool(tasks_backend.lanes_for_choice("auto", name, active_only=True, table=table))}
+               if table is not None else {}),
         })
-    return {"models": result}
+    # the grid's lanes as harness and model, so a lane picked elsewhere (Agents) maps to a choice
+    return {"models": result, **({"lanes": table} if table is not None else {})}
 
 
 @app.get("/api/fleet/router/pairs")

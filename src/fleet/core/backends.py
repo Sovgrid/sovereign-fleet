@@ -66,6 +66,9 @@ class LocalBackend:
     def list_tasks(self) -> List[FleetTask]:
         return self.store.load_tasks()
 
+    def update_metadata(self, task_id: str, fields: Dict[str, Any]) -> bool:
+        return self.store.update_metadata(task_id, fields)
+
     def get_task(self, task_id: str) -> Optional[FleetTask]:
         return self.store.get_task(task_id)
 
@@ -307,13 +310,65 @@ class GridBackend:
         return mapping
 
     def harness_selectable(self, harness: Any) -> Tuple[bool, Optional[str]]:
-        """A harness is selectable on the grid backend if installed and has a runner lane."""
+        """A harness is selectable on the grid backend if installed and an active runner lane
+        runs only it."""
         if not harness.is_available():
             return False, "not installed"
-        hmap = self.harness_to_lane_map()
-        if harness.name not in hmap:
-            return False, "installed, no lane runs it on the grid runner yet"
+        if not self.lanes_for_choice(harness.name, "auto", active_only=True):
+            return False, "installed, no active lane runs it on the grid runner"
         return True, None
+
+    def choice_table(self) -> Dict[str, Dict[str, Any]]:
+        """What each runner lane runs, for the operator's harness and model choice: its
+        harnesses, its model as /api/fleet/models names it, and whether the runner has it active.
+        From fleet.toml's lanes; a runner lane fleet.toml does not describe but named
+        local_<harness> counts as that harness on the first local model, as
+        harness_to_lane_map assumes."""
+        from fleet.core.config import lane_model_keys
+        cfg = load_config()
+        keys = lane_model_keys(cfg.lanes)
+        # harnesses in step order (the lane's chain), each once
+        table = {name: {"harnesses": list(dict.fromkeys(step.harness for step in spec.steps)), "model": keys[name]}
+                 for name, spec in cfg.lanes.items() if name in keys}
+        local_model = next((keys[n] for n, spec in cfg.lanes.items() if n in keys and spec.cost == "local"), "")
+        for h_name, lane_id in self.harness_to_lane_map().items():
+            if lane_id not in table and lane_id == f"local_{h_name}" and local_model:
+                table[lane_id] = {"harnesses": [h_name], "model": local_model}
+        d = getattr(self, "d", None)   # a runner without get_active_lanes has none active
+        active = set(d.get_active_lanes()) if hasattr(d, "get_active_lanes") else set()
+        for name, row in table.items():
+            row["active"] = name in active
+        return table
+
+    def lanes_for_choice(self, harness: str = "auto", model: str = "auto",
+                         active_only: bool = False, table: Optional[Dict[str, Dict[str, Any]]] = None) -> List[str]:
+        """The runner lanes that run what the operator chose: every step on `harness`, and the
+        model `model` ("auto": any), from choice_table (pass one to reuse it)."""
+        table = self.choice_table() if table is None else table
+        return [name for name, row in table.items()
+                if (harness == "auto" or row["harnesses"] == [harness])
+                and (model == "auto" or row["model"] == model)
+                and (row["active"] or not active_only)]
+
+    def _lane_for_choice(self, harness: str, model: str) -> str:
+        """The lane a task gets for the operator's harness and model choice: the router's first
+        among the active lanes that run it. BackendError when none does."""
+        wanted = " with ".join(f"{k} {v}" for k, v in (("harness", harness), ("model", model)) if v != "auto")
+        table = self.choice_table()
+        lanes = self.lanes_for_choice(harness, model, table=table)
+        active = self.lanes_for_choice(harness, model, active_only=True, table=table)
+        if not active:
+            if lanes:
+                raise BackendError(f"no active lane runs {wanted} (lanes for it: {', '.join(lanes)}; "
+                                   "none is active on the grid runner now)")
+            raise BackendError(f"no lane runs {wanted} on this installation")
+        try:
+            from fleet.core.router import rank_active
+            ranked = rank_active(active, running=self.running_per_lane())
+        except Exception as e:  # noqa: BLE001 - the choice stands without a ranking
+            logger.warning("router ranking for %s unavailable: %s", wanted, e)
+            ranked = []
+        return ranked[0].lane if ranked else active[0]
 
     # reading
 
@@ -336,7 +391,8 @@ class GridBackend:
         except (TypeError, ValueError):
             created = 0.0
         issue = _issue_of(t)
-        task_meta = {"intent": intent, "source": t.get("source"), **({"issue": issue} if issue else {})}
+        task_meta = {**(t.get("meta") or {}), "intent": intent, "source": t.get("source"),
+                     **({"issue": issue} if issue else {})}
         if intent.get("harness_requested"):
             task_meta["harness"] = intent["harness_requested"]
             task_meta["harness_requested"] = intent["harness_requested"]
@@ -371,13 +427,12 @@ class GridBackend:
         if depends_on:
             raise BackendError("the grid runner chains tasks with chain.py; queue them one by one")
         intent = metadata.get("intent")
-        harness = metadata.get("harness")
+        harness = metadata.get("harness") or "auto"
+        model = metadata.get("model") or "auto"
         harness_lane = None
-        if harness and harness != "auto":
-            harness_map = self.harness_to_lane_map()
-            harness_lane = harness_map.get(harness)
-            if not harness_lane:
-                raise BackendError(f"no lane runs {harness} on this installation")
+        if not lane and (harness != "auto" or model != "auto"):
+            harness_lane = self._lane_for_choice(harness, model)
+        note = ", ".join(f"{k} {v}" for k, v in (("harness", harness), ("model", model)) if v != "auto")
 
         override = None
         picked = None
@@ -398,15 +453,19 @@ class GridBackend:
                     override["assigned_lane"] = picked["lane"]
                     override["router"] = {"by": "sovereign-fleet", "basis": picked["basis"],
                                           "ranking": picked["ranking"]}
-        elif effective_lane:
-            # the dispatcher validates coordinator intents strictly; a bare lane is not one
-            raise BackendError("a lane needs a coordinator intent: metadata.intent with project, "
-                               "title, assigned_lane and acceptance_criteria; or send neither")
+        choice = {}
+        if intent is None and effective_lane:
+            # No coordinator intent: triage still writes the task, the runner takes our lane.
+            if not _accepts(self.d.create_task, "lane_choice"):
+                raise BackendError("this grid runner takes a lane only with a coordinator intent "
+                                   "(metadata.intent with project, title, assigned_lane and "
+                                   "acceptance_criteria); update it, or send neither")
+            choice = {"lane_choice": effective_lane, "lane_note": note or f"lane {effective_lane}"}
         # A held task must never be pending, not even for a moment: the runner starts pending
         # tasks within seconds. A dispatcher with `hold` creates it held.
         hold = {"hold": True} if needs_approval and _accepts(self.d.create_task, "hold") else {}
         try:
-            created = self.d.create_task(text, source=source, intent_override=override, **hold)
+            created = self.d.create_task(text, source=source, intent_override=override, **hold, **choice)
         except ValueError as e:  # e.g. an inactive lane
             raise BackendError(str(e)) from e
         if created.get("status") == "rejected":
@@ -451,6 +510,13 @@ class GridBackend:
         except Exception:  # noqa: BLE001 - a broken router must not stop the intake
             logger.exception("router pick for a grid task failed; using the runner's first active lane")
         return {"lane": active[0], "basis": "the runner's first active lane", "ranking": active[:5]} if active else None
+
+    def update_metadata(self, task_id: str, fields: Dict[str, Any]) -> bool:
+        """Display data on a runner task (the risk rating), in its "meta". An older runner
+        without update_task_meta keeps none: False."""
+        if not hasattr(self.d, "update_task_meta"):
+            return False
+        return self.d.update_task_meta(task_id, fields) is not None
 
     def _set(self, task_id: str, status: str, log: str, allowed: Optional[tuple] = None) -> Optional[FleetTask]:
         raw = self._raw(task_id)
@@ -620,6 +686,9 @@ class CompositeBackend:
             return task
         return self.grid.get_task(task_id)
 
+    def update_metadata(self, task_id: str, fields: Dict[str, Any]) -> bool:
+        return self.local.update_metadata(task_id, fields) or self.grid.update_metadata(task_id, fields)
+
     def enqueue(
         self,
         text: str,
@@ -717,6 +786,13 @@ class CompositeBackend:
 
     def harness_selectable(self, harness: Any) -> Tuple[bool, Optional[str]]:
         return self.grid.harness_selectable(harness)
+
+    def choice_table(self) -> Dict[str, Dict[str, Any]]:
+        return self.grid.choice_table()
+
+    def lanes_for_choice(self, harness: str = "auto", model: str = "auto",
+                         active_only: bool = False, table: Optional[Dict[str, Dict[str, Any]]] = None) -> List[str]:
+        return self.grid.lanes_for_choice(harness, model, active_only=active_only, table=table)
 
     def running_per_lane(self) -> Dict[str, int]:
         grid_running = self.grid.running_per_lane()

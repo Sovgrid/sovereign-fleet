@@ -31,8 +31,11 @@ FAKE_DISPATCHER = textwrap.dedent('''
     def _find(task_id):
         return next((t for t in TASKS if t["id"] == task_id), None)
 
-    def create_task(raw_text, source="matrix_voice", audio_meta=None, intent_override=None, hold=False):
+    def create_task(raw_text, source="matrix_voice", audio_meta=None, intent_override=None, hold=False,
+                    lane_choice=None, lane_note=""):
         CALLS.append(("create_task", raw_text, source, intent_override))
+        if lane_choice:
+            CALLS.append(("lane_choice", lane_choice, lane_note))
         if intent_override is not None:
             missing = [k for k in ("project", "title", "assigned_lane", "acceptance_criteria")
                        if not intent_override.get(k)]
@@ -40,7 +43,7 @@ FAKE_DISPATCHER = textwrap.dedent('''
                 raise ValueError(f"coordinator intent missing fields: {missing}")
         t = {"id": f"t{len(TASKS) + 1}", "raw_text": raw_text, "status": "awaiting_approval" if hold else "pending",
              "created_at": "1790000000", "source": source,
-             "intent": intent_override or {"title": raw_text[:40], "assigned_lane": "local_qwen"},
+             "intent": intent_override or {"title": raw_text[:40], "assigned_lane": lane_choice or "local_qwen"},
              "log": ["created"], "result": {}}
         TASKS.append(t)
         return dict(t)
@@ -53,6 +56,13 @@ FAKE_DISPATCHER = textwrap.dedent('''
         t["status"] = status
         if log_entry:
             t["log"].append(log_entry)
+        return dict(t)
+
+    def update_task_meta(task_id, fields):
+        t = _find(task_id)
+        if t is None:
+            return None
+        t.setdefault("meta", {}).update(fields)
         return dict(t)
 
     def delegate_task_to_local(task_id, log_entry=""):
@@ -154,12 +164,79 @@ async def test_coordinator_intent_skips_triage(grid):
 
 
 @pytest.mark.asyncio
-async def test_bare_lane_and_bad_intent_are_400_not_500(grid):
+async def test_a_bare_lane_is_triaged_and_keeps_the_lane_a_bad_intent_is_400(grid):
     async with _client() as c:
         r = await c.post("/api/fleet/tasks", json={"text": "x", "lane": "muse"})
-        assert r.status_code == 400 and "coordinator intent" in r.json()["detail"]
+        assert r.status_code == 200 and r.json()["lane"] == "muse"
+        assert ("lane_choice", "muse", "lane muse") in _dispatcher().CALLS
         r = await c.post("/api/fleet/tasks", json={"text": "x", "metadata": {"intent": {"title": "t"}}})
         assert r.status_code == 400 and "missing fields" in r.json()["detail"]
+
+
+def _choice_config(tmp_path):
+    """fleet.toml lanes as on a real grid: one local model under three lanes (a goose, aider,
+    opencode chain and two single-harness lanes), one cloud model only opencode reaches."""
+    import os
+    from pathlib import Path
+    local = 'cost = "local"\nprobe_url = "http://127.0.0.1:30001/v1"\n'
+    step = '[[lanes.{0}.steps]]\nharness = "{1}"\nmodel = "{2}"\n'
+    toml = (f'[routing]\nhistory = "{tmp_path / "none.json"}"\n'
+            + "[lanes.local_qwen]\n" + local + step.format("local_qwen", "goose", "qwen3.6-35b")
+            + step.format("local_qwen", "aider", "openai/qwen3.6-35b")
+            + "[lanes.local_goose]\n" + local + step.format("local_goose", "goose", "qwen3.6-35b")
+            + "[lanes.local_aider]\n" + local + step.format("local_aider", "aider", "openai/qwen3.6-35b")
+            + '[lanes.muse]\ncost = "free"\n' + step.format("muse", "opencode", "opencode/muse-free"))
+    Path(os.environ["FLEET_CONFIG"]).parent.mkdir(parents=True, exist_ok=True)
+    Path(os.environ["FLEET_CONFIG"]).write_text(toml)
+
+
+@pytest.mark.asyncio
+async def test_harness_and_model_pick_the_lane_that_runs_exactly_that(grid, tmp_path):
+    """The dashboard sends harness and model, never a lane (2026-10-24: every non-Auto choice was
+    refused with "a lane needs a coordinator intent", and the dashboard showed nothing)."""
+    _choice_config(tmp_path)
+    app_module.backend()  # imports the runner's dispatcher
+    d = _dispatcher()
+    d.get_active_lanes = lambda privacy_filter=None: ["local_qwen", "local_goose", "local_aider", "muse"]
+    async with _client() as c:
+        r = await c.post("/api/fleet/tasks", json={"text": "x", "metadata": {"harness": "aider", "model": "local_qwen"}})
+        assert r.status_code == 200, r.text
+        assert r.json()["lane"] == "local_aider"
+        assert ("lane_choice", "local_aider", "harness aider, model local_qwen") in d.CALLS
+        # the model alone: any lane on it; the harness alone: only lanes that run just that harness
+        r = await c.post("/api/fleet/tasks", json={"text": "x", "metadata": {"harness": "auto", "model": "local_qwen"}})
+        assert r.json()["lane"] in ("local_qwen", "local_goose", "local_aider")
+        r = await c.post("/api/fleet/tasks", json={"text": "x", "metadata": {"harness": "opencode"}})
+        assert r.json()["lane"] == "muse"
+        # a pair no lane runs, and one whose lane is off, are refused with the reason
+        r = await c.post("/api/fleet/tasks", json={"text": "x", "metadata": {"harness": "goose", "model": "muse"}})
+        assert r.status_code == 400 and "no lane runs harness goose with model muse" in r.json()["detail"]
+        d.get_active_lanes = lambda privacy_filter=None: ["local_qwen"]
+        r = await c.post("/api/fleet/tasks", json={"text": "x", "metadata": {"harness": "aider", "model": "local_qwen"}})
+        assert r.status_code == 400 and "none is active" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_models_api_marks_pairs_no_active_lane_runs(grid, tmp_path):
+    _choice_config(tmp_path)
+    app_module.backend()
+    _dispatcher().get_active_lanes = lambda privacy_filter=None: ["local_qwen", "local_goose", "muse"]
+    async with _client() as c:
+        models = {m["name"]: m for m in (await c.get("/api/fleet/models")).json()["models"]}
+    qwen = models["local_qwen"]["compatibility"]
+    assert qwen["goose"]["compatible"] is True
+    assert qwen["aider"] == {"compatible": False, "reason": "no active lane runs this pair"}
+    assert models["local_qwen"]["available"] is True and models["muse"]["available"] is True
+
+
+def test_an_old_runner_without_lane_choice_is_told_to_update(grid, tmp_path):
+    import os
+
+    from fleet.core.backends import BackendError, GridBackend
+    backend = GridBackend(os.environ["FLEET_GRID_RUNNER_DIR"])
+    backend.d.create_task = lambda raw_text, source="", audio_meta=None, intent_override=None, hold=False: {}
+    with pytest.raises(BackendError, match="update it"):
+        backend.enqueue("x", "muse", [], {}, False)
 
 
 @pytest.mark.asyncio
@@ -342,10 +419,12 @@ async def test_transcribe_turns_speech_into_text_without_a_task(grid):
     assert ("transcribe_audio", b"OggS-audio") in calls and not [c for c in calls if c[0] == "create_task"]
 
 
-def test_grid_enqueue_maps_harnesses_and_validates(grid):
+def test_grid_enqueue_maps_harnesses_and_validates(grid, tmp_path):
     import os
     from fleet.core.backends import BackendError, GridBackend
+    _choice_config(tmp_path)
     backend = GridBackend(os.environ["FLEET_GRID_RUNNER_DIR"])
+    backend.d.get_active_lanes = lambda privacy_filter=None: ["local_qwen", "local_goose", "local_aider", "muse"]
     intent = {"project": "p", "title": "t", "acceptance_criteria": ["a"]}
 
     # 1. Maps goose to local_goose and records harness_requested
@@ -364,7 +443,7 @@ def test_grid_enqueue_maps_harnesses_and_validates(grid):
     assert t_aider.lane == "local_aider"
 
     # 3. Rejects a harness without a supporting lane
-    with pytest.raises(BackendError, match="no lane runs unknown_harness on this installation"):
+    with pytest.raises(BackendError, match="no lane runs harness unknown_harness on this installation"):
         backend.enqueue("fix it", None, [], {"intent": dict(intent), "harness": "unknown_harness"}, False)
 
     # 4. Explicit lane beats harness
@@ -398,7 +477,7 @@ async def test_grid_plugins_payload_reports_harness_selectable(grid):
         if "claude-code" in harnesses:
             assert harnesses["claude-code"]["selectable"] is False
             if harnesses["claude-code"]["available"]:
-                assert "no lane runs it" in harnesses["claude-code"]["reason"]
+                assert "no active lane runs it" in harnesses["claude-code"]["reason"]
             else:
                 assert harnesses["claude-code"]["reason"] == "not installed"
 
@@ -410,4 +489,40 @@ def test_dashboard_shows_harness_select_on_grid_backend():
     assert 'id="harness-select-group"' in html
     assert 'updateHarnessSelect()' in html
     assert 'info.selectable' in html
+
+
+@pytest.mark.asyncio
+async def test_risk_rating_lands_on_a_grid_task(grid, monkeypatch):
+    """The rating of a held task is stored in the runner's task (its "meta") and shows on the
+    task like any metadata; before, only the package's own store kept it, so a grid install
+    never saw a rating."""
+    from types import SimpleNamespace
+
+    from fleet.core.settings import FleetSettings
+
+    monkeypatch.setattr(app_module, "_current_settings", FleetSettings(autonomy_level="safe_auto"))
+    real_cfg = app_module.load_config()
+    cfg = SimpleNamespace(**{k: getattr(real_cfg, k) for k in type(real_cfg).model_fields})
+    cfg.approval = SimpleNamespace(assess_url="http://127.0.0.1:19999/v1")
+    monkeypatch.setattr(app_module, "load_config", lambda: cfg)
+
+    async def fake_assess(text, c, transport=None):
+        return {"level": "high", "reason": "drops a table", "model": "m", "at": "t"}
+
+    monkeypatch.setattr(app_module._risk, "assess", fake_assess)
+    async with _client() as c:
+        created = (await c.post("/api/fleet/tasks", json={"text": "Drop the old users table"})).json()
+        assert created["status"] == "awaiting_approval"
+        shown = (await c.get(f"/api/fleet/tasks/{created['id']}")).json()
+    assert shown["metadata"]["risk"]["level"] == "high"
+    assert _dispatcher()._find(created["id"])["meta"]["risk"]["reason"] == "drops a table"
+
+
+def test_an_older_runner_without_meta_keeps_no_rating(grid):
+    from fleet.core.backends import GridBackend
+    import sys
+    import os
+    gb = GridBackend(os.environ["FLEET_GRID_RUNNER_DIR"])
+    del sys.modules["dispatcher"].update_task_meta
+    assert gb.update_metadata("t1", {"risk": {}}) is False
 

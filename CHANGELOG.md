@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-10-25
+### Fixed
+- Grid backend: a harness or model chosen in the dashboard was refused ("a lane needs a
+  coordinator intent") and the dashboard showed nothing; only Auto + Auto worked. The daemon
+  now maps the pair to the runner lane that runs exactly it (the router picks among the active
+  ones) and hands it to the runner as `lane_choice`, while triage still writes the task (needs
+  the runner's `create_task(lane_choice=, lane_note=)`; an older runner gets a clear error).
+  A bare `lane` without an intent works the same way.
+- A refused dispatch shows the server's reason under the prompt.
+- The model picker listed grid lanes, so harness-welded lanes ("Qwen3.6-35B via goose") sat
+  next to the harness picker and contradictory pairs could be chosen. It lists models now,
+  once each; models no active lane runs come last.
+- Smart approval on the grid backend: the risk rating of a held task was stored only in the
+  package's own task store, so a grid install never showed it. Each backend now stores it
+  where the task lives; on the grid that is the runner task's `meta` (needs the runner's
+  `update_task_meta`; an older runner keeps no rating, as before).
+
+### Changed
+- `/api/fleet/models` on the grid backend: a pair no active runner lane runs is not
+  compatible ("no active lane runs this pair"), each model says whether it is `available`,
+  and `lanes` names each runner lane's harnesses (in step order), model and active state.
+- Dashboard Agents: one card per model with its harnesses as chips (router pass rate per
+  pair, ~ before the first runs); tap one to dispatch with that pair. A harness readiness
+  strip, per-pair rows with minutes per correct result, and the runner's lanes fleet.toml does
+  not describe in a fold, still switchable. The task form's pair card uses display names;
+  presets that cannot run are greyed out with the reason (the Claude Code preset is now agy).
+- README "Which harness can run which model": why a pair is greyed out and how to open it up
+  on each backend (the `[models]` trap: one entry replaces the lane-derived models); the
+  `[models.<name>]` row named a field `api_kind` that does not exist, it is `provider`.
+- The Auto card names the best pair with real runs ("BEST MEASURED"), not a new model whose
+  prior ranks first while the router explores it, and only pairs that can run here.
+
 ## [0.6.3] - 2026-10-23
 ### Added
 - Loop detection: an agent run that keeps printing the same output while the worktree does
