@@ -6752,7 +6752,7 @@
         categoryLabel: "MCP & CLIENTS",
         question: "How do coordinators (Claude Code, Cursor, Claude Desktop, Goose) use the fleet?",
         tags: ["mcp", "claude", "cursor", "antigravity", "goose", "agent", "coordinator", "receipt"],
-        answer: "Through the MCP server (python3 -m fleet.api.mcp_server, stdio). A coordinator queues tasks with a contract (fleet_dispatch_task with an intent: project, title, acceptance criteria, allowed paths, a test as gate), follows them (fleet_list_tasks, fleet_get_task_status, fleet_get_task_receipt), acts on them (fleet_approve_task, fleet_reject_task, fleet_cancel_task, fleet_retry_task, fleet_clear_spool) and reads the fleet (fleet_system_health, fleet_lane_health, fleet_issue_intake). Errors come back as tool errors with the daemon's reason.",
+        answer: "Through the MCP server (python3 -m fleet.api.mcp_server, stdio). A coordinator queues tasks with a contract (fleet_dispatch_task with an intent: project, title, acceptance criteria, allowed paths, a test as gate), follows them (fleet_list_tasks, fleet_get_task_status, fleet_get_task_receipt), acts on them (fleet_approve_task, fleet_reject_task, fleet_cancel_task, fleet_retry_task, fleet_clear_spool) and reads the fleet (fleet_system_health, fleet_lane_health, fleet_issue_intake, fleet_get_budgets). With fleet_tighten_budget it can make a provider's budget policy stricter, for example to keep a subscription free; it can never loosen one, that stays with you in the dashboard. Errors come back as tool errors with the daemon's reason.",
         snippet: "claude mcp add sovereign-fleet -- python3 -m fleet.api.mcp_server",
         snippetLabel: "Add it to Claude Code"
       },
@@ -6772,7 +6772,7 @@
         categoryLabel: "ROUTING & LANES",
         question: "How does the router pick a (harness, model) pair or lane?",
         tags: ["router", "lane", "pair", "harness", "model", "thompson", "quota", "cost", "pass rate", "qwen", "free", "sensitive"],
-        answer: "The router supports both named lanes ([lanes.<name>]) and decoupled (harness, model) pairs ([models.<name>] + HarnessPlugin). Compatibility is computed from declared capabilities (API kind, tool calling, subscription login). For pair routing, Thompson sampling ranks compatible pairs by cost-weighted minutes per correct result (seeded from routing.priors_file or bakeoff_priors.json); for lane routing, lanes are ranked by measured pass rate per task category over cost (local and free count 1, paid 3), with a hang penalised as four attempts. Tasks marked sensitive/is_sensitive stay strictly on private sovereign endpoints. A provider limit rests the lane or model (120 s, or until midnight US/Pacific for a daily quota), max_parallel keeps full lanes behind lanes with room, dead and retired lanes are left out, and a failed attempt hands the worktree to the next choice after one repair pass.",
+        answer: "The router supports both named lanes ([lanes.<name>]) and decoupled (harness, model) pairs ([models.<name>] + HarnessPlugin). Compatibility is computed from declared capabilities (API kind, tool calling, subscription login). For pair routing, Thompson sampling ranks compatible pairs by cost-weighted minutes per correct result (seeded from routing.priors_file or bakeoff_priors.json); for lane routing, lanes are ranked by measured pass rate per task category over cost (local and free count 1, paid 3), with a hang penalised as four attempts. Tasks marked sensitive/is_sensitive stay strictly on private sovereign endpoints. Budgets come on top: lanes of a provider in reserve are tried only after every other lane, lanes of a provider on manual only when you name the lane. A provider limit rests the lane or model (120 s, or until midnight US/Pacific for a daily quota), max_parallel keeps full lanes behind lanes with room, dead and retired lanes are left out, and a failed attempt hands the worktree to the next choice after one repair pass.",
         snippet: "fleet router rank --category bugfix\nfleet harnesses list\nfleet harnesses test goose",
         snippetLabel: "Inspect router ranking & harness conformance"
       },
@@ -6941,8 +6941,8 @@
         category: "architecture",
         categoryLabel: "ROUTING & LANES",
         question: "How do Budgets decide how much of each provider the fleet may use?",
-        tags: ["budget", "budgets", "quota", "policy", "provider", "recommended", "settings"],
-        answer: "Settings, Budgets shows one row per provider of your lanes. The segmented control lists the policies the API returns (loosest to strictest). Normal: the router ranks the lane by measured quality. Reserve: only after every normal lane failed. Manual: never automatic; only when you pick that lane. A marker shows the recommended default; Use recommended clears your override. The summary and each live line use measured week counts only. A coordinator may only tighten a policy through MCP; loosening stays in the dashboard.",
+        tags: ["budget", "budgets", "quota", "policy", "provider", "recommended", "settings", "subscription", "free tier", "reserve", "coordinator"],
+        answer: "Settings, Budgets lists every provider of your lanes, grouped by what it costs you: on this machine, subscriptions, free tiers and free plans, paid per use. Each has one of three policies. Normal: the router ranks its lanes by measured quality. Reserve: its lanes are tried only after every other lane failed. Manual: never automatic, only when you name the lane. The recommended default is marked: paid per use is manual, a subscription is normal unless it belongs to the coordinator you chose at the top of Settings (then reserve, so the coordinator keeps its quota), free and local are normal. Pick another policy, add an optional reason, and it saves at once; Use recommended goes back to the default. Every change is logged with who, when and why, and the line under each provider shows only measured numbers (tasks this week, passed, resting until, last change). A coordinator agent may tighten a policy over MCP but never loosen one.",
         snippet: "curl -s -H \"Authorization: Bearer $TOKEN\" https://<host>:8444/api/fleet/budgets",
         snippetLabel: "List budget policies"
       },
@@ -6950,11 +6950,11 @@
         id: "faq-subscription-harnesses",
         category: "architecture",
         categoryLabel: "ROUTING & LANES",
-        question: "How do Claude Code and the Antigravity CLI run with my own subscription?",
-        tags: ["claude code", "antigravity", "agy", "subscription", "login", "harness", "gemini"],
-        answer: "Both log in with your own account instead of an API key, so the daemon never handles a key for them. Log in once in a terminal (claude, agy); the sandbox lets each CLI write only its own state directories. Claude Code runs claude -p with its fixed model. The Antigravity CLI runs agy -p with the model each lane names, from agy's own catalog, and approves its tool calls itself inside the sandbox (option skip_permissions, default on). A subscription model pairs only with the CLI that reaches it. Check a CLI with fleet harnesses test agy before you give it work.",
-        snippet: "[lanes.antigravity_gemini]\ncost = \"paid\"\nmax_parallel = 1\n[[lanes.antigravity_gemini.steps]]\nharness = \"agy\"\nmodel = \"gemini-4-argon-medium\"",
-        snippetLabel: "A lane on the Antigravity CLI"
+        question: "How do Claude Code, the Antigravity CLI and Cursor run with my own account?",
+        tags: ["claude code", "antigravity", "agy", "cursor", "subscription", "login", "setup-token", "harness", "gemini"],
+        answer: "They log in with your own account, not with an API key, and use your subscription or plan. The Antigravity CLI uses its own Google login (log in once with agy) and runs agy -p with the model each lane names from its catalog. Claude Code takes a one-year login token from claude setup-token as the lane's key (CLAUDE_CODE_OAUTH_TOKEN); it then runs in its own config directory under the fleet root, so an agent never sees your ~/.claude with your sessions and memory. Cursor gets a user key in CURSOR_API_KEY, because its keyring login cannot refresh inside the sandbox; a free plan runs only Auto. A used-up window rests the lane until its reset, and Budgets decides how much of each subscription the fleet may use. Check a CLI with fleet harnesses test <name> before you give it work.",
+        snippet: "[lanes.claude_code]\nkey_env = \"CLAUDE_CODE_OAUTH_TOKEN\"\nkey_file = \"claude_oauth.key\"\ncost = \"paid\"\nmax_parallel = 1\n[[lanes.claude_code.steps]]\nharness = \"claude-code\"",
+        snippetLabel: "A Claude Code lane on your subscription"
       }
     ];
 

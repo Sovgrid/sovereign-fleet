@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `reserve` by default; with the grid backend the coordinator is the runner's setting.
 - Settings tab in the order you set it up: Coordinator, Budgets (saves per change), the settings
   form with Save at its end, Issue sources.
+- Help: Budgets (cost groups, defaults, the coordinator's reserve), subscriptions on your own
+  account (agy, Claude Code lane token, Cursor), the budget MCP tools and their effect on routing.
 - `cursor` harness (Cursor CLI, binary `agent`): `-p --trust --force --model <id>` with stream output turned
   into text plus the model Cursor reports (`auto_model`); its key comes from the lane (`key_env =
   "CURSOR_API_KEY"`), because the CLI's keyring login cannot refresh inside the sandbox. A free plan runs
