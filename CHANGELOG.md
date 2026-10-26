@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-10-26
+### Added
+- `[sandbox] egress = "allowlist"` (opt-in): each agent run gets its own egress proxy
+  (`core/egress_proxy.py`), Landlock lets it connect only to that proxy and the local model ports,
+  and the proxy reaches only package registries, GitHub, the run's own model provider and
+  `allowed_domains`. CONNECT and plain HTTP are covered, everything else gets 403, and each
+  decision is one JSON line in `<root>/egress/<task>.jsonl`. Checked live with curl, git, Python,
+  Node, goose, aider, opencode and Pi: all of them go through the proxy, and a direct connection
+  is refused by the kernel.
+
+### Fixed
+- A harness given a model endpoint received the model twice (adapter and command line);
+  opencode then exits with "e.split is not a function". The command line gets the model only
+  when the adapter does not set it.
+
 ## [0.6.4] - 2026-10-25
 ### Fixed
 - Grid backend: a harness or model chosen in the dashboard was refused ("a lane needs a

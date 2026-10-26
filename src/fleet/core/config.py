@@ -65,6 +65,10 @@ class SandboxSection(_Strict):
     read_only: List[str] = Field(default_factory=list)   # extra paths agents may read
     writable: List[str] = Field(default_factory=list)    # extra paths agents may write
     gate_writable: List[str] = Field(default_factory=list)  # extra paths gates may write (caches)
+    # "ports": agents may connect to 443, 80, 53 and `ports` (any host). "allowlist": each agent run gets
+    # its own egress proxy and reaches only allowlisted names through it (core/egress_proxy.py).
+    egress: Literal["ports", "allowlist"] = "ports"
+    allowed_domains: List[str] = Field(default_factory=list)  # with egress = "allowlist": names besides the defaults
 
     @field_validator("memory_max")
     @classmethod

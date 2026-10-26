@@ -118,6 +118,28 @@ async def test_harness_command_is_wrapped_by_the_sandbox(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("harness, flag", [(OpenCodeHarness, "-m"), (PiHarness, "--model"),
+                                           (AiderHarness, "--model")])
+async def test_an_endpoint_selects_the_model_once(monkeypatch, harness, flag):
+    """The adapter puts the model on the command line; build_command must not add it again."""
+    from fleet.core import sandbox
+    from fleet.core.config import ModelEndpoint
+    monkeypatch.setattr(sandbox, "abi_version", lambda: 7)
+    seen = {}
+
+    async def fake_exec(*argv, **kw):
+        seen["argv"] = argv
+        return fake_process(b"", b"", returncode=0)
+
+    monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
+    ep = ModelEndpoint(provider="openrouter", model_id="openrouter/openrouter/free", key_env="OPENROUTER_API_KEY")
+    await harness().execute_task({"text": "x"}, "/tmp/wt", endpoint=ep)
+    cli = list(seen["argv"])
+    cli = cli[cli.index("--") + 1:]        # the command after the sandbox wrapper (python -m ...)
+    assert cli.count(flag) == 1
+
+
+@pytest.mark.asyncio
 async def test_a_timeout_ends_the_whole_process_tree(tmp_path):
     """A CLI that spawns children must not outlive its timeout through them."""
     import time

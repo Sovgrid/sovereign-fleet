@@ -462,10 +462,11 @@ class FleetEngine:
             except (ValueError, TypeError):
                 pass
             exec_res = await harness.execute_task(
-                {"text": prompt}, worktree_dir, timeout=self.timeout, **kwargs
+                {"id": task.id, "text": prompt}, worktree_dir, timeout=self.timeout, **kwargs
             )
         else:
-            exec_res = await harness.execute_task({"text": prompt}, worktree_dir, timeout=self.timeout)
+            exec_res = await harness.execute_task({"id": task.id, "text": prompt}, worktree_dir,
+                                                  timeout=self.timeout)
         if exec_res.get("exit_code") != 0:
             return "failed", exec_res
 
@@ -536,7 +537,8 @@ class FleetEngine:
                 continue
             self._report(task, current={"lane": lane, "harness": step.harness, "model": step.model,
                                         "started_at": time.time()})
-            res = await harness.execute_task({"text": prompt}, str(wt), timeout=self.timeout, model=step.model,
+            res = await harness.execute_task({"id": task.id if task else "", "text": prompt}, str(wt),
+                                             timeout=self.timeout, model=step.model,
                                              args=step.args, pass_env=[*spec.pass_env, *([spec.key_env] if spec.key_env else [])],
                                              env=env)
             res["step"] = {"harness": step.harness, "model": step.model}

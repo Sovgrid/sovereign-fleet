@@ -21,6 +21,24 @@ python3 -c "from fleet.core.sandbox import abi_version; print('Landlock ABI:', a
 
 The output must be `6` or greater. You can also inspect your kernel version with `uname -r`.
 
+#### Egress allowlist (optional)
+
+By default the sandbox lets agents connect to ports 443, 80 and 53 on any host (plus `[sandbox] ports` for local model servers).
+
+With `[sandbox] egress = "allowlist"` in `fleet.toml` each agent run gets its own local proxy; the agent may connect only to that proxy and the local model ports.
+
+Through the proxy it reaches package registries (PyPI, npm), GitHub, the model catalogs, its own model provider, and the names in `allowed_domains`.
+
+Every attempt, allowed or refused, is one JSON line in `<fleet root>/egress/<task id>.jsonl`.
+
+A CLI that talks to its own service (for example agy) needs those names in `allowed_domains`; run it once and read the refused names from that log.
+
+```toml
+[sandbox]
+egress = "allowlist"
+allowed_domains = ["daily-cloudcode-pa.googleapis.com"]   # one of the names agy needs
+```
+
 ### Python
 
 - **Python >= 3.11**: Check with `python3 --version`.

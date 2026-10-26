@@ -29,6 +29,12 @@ ports = []
 read_only = []                    # extra paths agents may read, e.g. your other repositories
 writable = []                     # extra paths agents may write; keep this short
 gate_writable = []                # extra paths gates may write (tool caches); gates run sandboxed too
+# "ports" (default): agents may connect to 443/80/53 on any host. "allowlist": each agent run gets
+# its own egress proxy and reaches only package registries, GitHub, its model provider and the
+# names below; the attempts land in <root>/egress/<task>.jsonl. Subscription CLIs (Claude Code,
+# agy) talk to their own services: list those names here before switching their lanes over.
+# egress = "allowlist"
+# allowed_domains = ["docs.rs"]
 # Memory ceiling per agent run and gate (systemd MemoryMax); "" or "0" switches the limit off.
 # memory_max = "8G"
 # Switching the sandbox off is not a config value: only FLEET_SANDBOX=0 in the environment.

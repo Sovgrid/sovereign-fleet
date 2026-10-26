@@ -16,7 +16,9 @@ from fleet.core.gates import kill_group
 from fleet.core.memlimit import GroupWatch, scope_prefix
 from fleet.core.models import ModelAdapterResult, ModelEndpoint
 from fleet.core.quirks import resolve_opencode_model
-from fleet.core.sandbox import SandboxUnavailable, make_sandbox, policy_for_worktree
+from fleet.core.egress_proxy import EgressProxy
+from fleet.core.sandbox import (SandboxUnavailable, egress_allowlist, egress_audit_path, egress_env,
+                                make_sandbox, policy_for_worktree, sandbox_disabled)
 from fleet.plugins.base import HarnessPlugin, PluginKind, PluginMeta
 
 logger = logging.getLogger("fleet.plugins.harness")
@@ -133,12 +135,15 @@ class CliHarness(HarnessPlugin):
         HarnessSection overrides: _section.binary (override binary), _section.args (append),
         _section.env (merge into run env), _section.state_paths (extra sandbox writable paths).
         """
+        provider_model = model or (endpoint.model_id if endpoint is not None else "")
         if endpoint is not None:
             adapted = self.adapt_model(endpoint)
             args = [*adapted.args, *args]
             pass_env = [*adapted.pass_env, *pass_env]
             env = {**adapted.env, **(env or {})}
-            if not model and endpoint.model_id:
+            # Only a CLI whose adapter does not select the model gets it on its own command line:
+            # opencode given `-m` twice reads an array and exits ("e.split is not a function").
+            if not model and endpoint.model_id and not adapted.args and not adapted.env:
                 model = endpoint.model_id
         # Effective binary, extra args, extra state_paths from HarnessSection
         section = self._section
@@ -171,45 +176,59 @@ class CliHarness(HarnessPlugin):
         if loop > timeout:
             loop = timeout
 
-        sandbox = make_sandbox(policy_for_worktree(worktree_dir, effective_paths))
+        # egress = "allowlist": this run's own proxy, the only way out besides the local models.
+        base_url = endpoint.base_url if endpoint is not None else ""
+        egress = None
+        if load_config().sandbox.egress == "allowlist" and not sandbox_disabled():
+            egress = EgressProxy(egress_allowlist(provider_model, [base_url, *args, *section_args]),
+                                 audit_path=egress_audit_path(str(task.get("id", ""))))
+            await egress.start()
         try:
-            argv = sandbox.wrap([*self.build_command(task.get("text", ""), model), *section_args, *args])
-        except SandboxUnavailable as e:
-            return self._result(126, "", f"refused to run unsandboxed: {e}")
-        memory_max = load_config().sandbox.memory_max
-        argv = [*scope_prefix(memory_max), *argv]
-        run_env = sandbox.build_safe_env()
-        run_env.update({k: os.environ[k] for k in pass_env if k in os.environ})
-        run_env.update(env or {})
-        run_env.update(section_env or {})
-        run_env.update(self.model_env(model) if model else {})
-        # Some CLIs (opencode) take their project directory from $PWD, not from the process's
-        # cwd: the inherited PWD would point them at the directory the daemon was started in.
-        run_env["PWD"] = str(Path(worktree_dir).resolve())
+            sandbox = make_sandbox(policy_for_worktree(worktree_dir, effective_paths,
+                                                       egress_port=egress.port if egress else None))
+            try:
+                argv = sandbox.wrap([*self.build_command(task.get("text", ""), model), *section_args, *args])
+            except SandboxUnavailable as e:
+                return self._result(126, "", f"refused to run unsandboxed: {e}")
+            memory_max = load_config().sandbox.memory_max
+            argv = [*scope_prefix(memory_max), *argv]
+            run_env = sandbox.build_safe_env()
+            run_env.update({k: os.environ[k] for k in pass_env if k in os.environ})
+            run_env.update(env or {})
+            run_env.update(section_env or {})
+            run_env.update(self.model_env(model) if model else {})
+            # Some CLIs (opencode) take their project directory from $PWD, not from the process's
+            # cwd: the inherited PWD would point them at the directory the daemon was started in.
+            run_env["PWD"] = str(Path(worktree_dir).resolve())
+            if egress is not None:
+                run_env.update(egress_env(egress.port, base_url))
 
-        logger.info("Running %s harness in %s", self.name, worktree_dir)
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *argv,
-                cwd=worktree_dir,
-                env=run_env,
-                stdin=asyncio.subprocess.DEVNULL,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                start_new_session=True,  # its own process group, so a timeout ends every child
-            )
-        except OSError as e:
-            return self._result(127, "", f"cannot start {effective_binary}: {e}")
-        # The floor under the systemd scope, and the only limit where there is none.
-        watch = GroupWatch(process.pid, memory_max)
-        watch.start()
-        try:
-            result = await self._finish(process, worktree_dir, timeout, stall, loop)
+            logger.info("Running %s harness in %s", self.name, worktree_dir)
+            try:
+                process = await asyncio.create_subprocess_exec(
+                    *argv,
+                    cwd=worktree_dir,
+                    env=run_env,
+                    stdin=asyncio.subprocess.DEVNULL,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    start_new_session=True,  # its own process group, so a timeout ends every child
+                )
+            except OSError as e:
+                return self._result(127, "", f"cannot start {effective_binary}: {e}")
+            # The floor under the systemd scope, and the only limit where there is none.
+            watch = GroupWatch(process.pid, memory_max)
+            watch.start()
+            try:
+                result = await self._finish(process, worktree_dir, timeout, stall, loop)
+            finally:
+                await watch.stop()
+            if watch.fired:
+                return self._result(137, result["stdout"], watch.message())
+            return result
         finally:
-            await watch.stop()
-        if watch.fired:
-            return self._result(137, result["stdout"], watch.message())
-        return result
+            if egress is not None:
+                await egress.stop()
 
     async def _finish(self, process, worktree_dir: str, timeout: int, stall: int,
                        loop: int) -> Dict[str, Any]:

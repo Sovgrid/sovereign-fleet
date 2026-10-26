@@ -11,7 +11,9 @@ cannot be undone:
   --rw paths writable. Everything else is invisible to open(): secrets, ~/.ssh,
   ~/.git-credentials, browser profiles, other CLIs' auth.
 - no_new_privs: setuid binaries (sudo) no longer elevate.
-- TCP connect only to the --port list (Landlock ABI >= 4).
+- TCP connect only to the --port list (Landlock ABI >= 4). With sandbox.egress = "allowlist"
+  that list is the run's egress proxy plus the local model ports, so the internet is reachable
+  only by name, through the proxy (core/egress_proxy.py).
 - Scoped (ABI >= 6): no signals to, and no abstract unix sockets of, processes outside.
 - seccomp: socket(AF_UNIX) and io_uring_setup fail with EACCES. Landlock does not cover
   connect() to pathname unix sockets, so without this an agent could reach the session D-Bus
@@ -28,10 +30,12 @@ import ctypes
 import importlib.metadata
 import logging
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Protocol, Sequence, runtime_checkable
+from typing import Dict, List, Optional, Protocol, Sequence, runtime_checkable
+from urllib.parse import urlsplit
 
 from fleet.core.config import _expand, load_config
 
@@ -66,6 +70,23 @@ ALWAYS_RW = [_HOME / ".cache", _HOME / ".npm"]
 # https, http, dns. Local model servers are added per install: sandbox.ports in fleet.toml
 # (or FLEET_SANDBOX_PORTS).
 DEFAULT_PORTS = (443, 80, 53)
+
+# egress = "allowlist": what every agent run may reach besides its own model provider and
+# sandbox.allowed_domains. Package installs, reading public git repos, the model catalogs CLIs load
+# at start (goose: models.dev; opencode: models.opencode.ai, it exits without it).
+DEFAULT_EGRESS_DOMAINS = (
+    "pypi.org", "files.pythonhosted.org", "registry.npmjs.org",
+    "github.com", "codeload.github.com", "objects.githubusercontent.com", "raw.githubusercontent.com",
+    "models.dev", "models.opencode.ai",
+)
+# A model id's provider prefix (`openrouter/...`) -> the API host it talks to.
+PROVIDER_DOMAINS = {
+    "openrouter": "openrouter.ai", "groq": "api.groq.com", "mistral": "api.mistral.ai",
+    "cerebras": "api.cerebras.ai", "nvidia": "integrate.api.nvidia.com", "deepseek": "api.deepseek.com",
+    "google": "generativelanguage.googleapis.com", "gemini": "generativelanguage.googleapis.com",
+    "anthropic": "api.anthropic.com", "openai": "api.openai.com", "opencode": "opencode.ai",
+}
+_LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
 
 # Variables a sandboxed agent never needs; its CLI reads its own credentials from its state dir.
 _SECRET_ENV = {
@@ -231,8 +252,10 @@ def worktree_gitdir(worktree: Path) -> Path | None:
     return None
 
 
-def policy_for_worktree(worktree_dir: str, state_paths: Sequence[Path] = ()) -> SandboxPolicy:
+def policy_for_worktree(worktree_dir: str, state_paths: Sequence[Path] = (),
+                        egress_port: Optional[int] = None) -> SandboxPolicy:
     """Writes: the worktree, the CLI's state, caches. Reads: tools and the repo's git data.
+    With `egress_port` (egress = "allowlist") the only ports are that proxy and the local models.
 
     The git dirs stay read-only, the worktree's own one included: the engine runs git outside
     the sandbox after the agent, so an agent that could write git config (fsmonitor, hooks)
@@ -246,8 +269,52 @@ def policy_for_worktree(worktree_dir: str, state_paths: Sequence[Path] = ()) -> 
     gitdir = worktree_gitdir(wt)
     if gitdir and len(gitdir.parents) >= 3:
         ro.append(gitdir.parents[1])  # <repo>/.git: objects, refs, this worktree's index
+    ports = [egress_port] if egress_port else list(DEFAULT_PORTS)
     return SandboxPolicy(read_write_paths=[str(p) for p in rw], read_paths=[str(p) for p in ro],
-                         ports=list(DEFAULT_PORTS) + extra_ports())
+                         ports=ports + extra_ports())
+
+
+# ── egress = "allowlist" ──────────────────────────────────────────────────────
+
+def egress_allowlist(model: str = "", urls: Sequence[str] = ()) -> List[str]:
+    """The names one run may reach: the defaults, sandbox.allowed_domains, and its own model
+    provider, from the model id's prefix and from URLs the run is given (the endpoint's base URL,
+    an `--openai-api-base` in the lane's args). Local hosts are not on it: the agent reaches them
+    directly (NO_PROXY), on the ports in sandbox.ports."""
+    names = [*DEFAULT_EGRESS_DOMAINS, *load_config().sandbox.allowed_domains]
+    hosts = []
+    for url in urls:
+        value = url.split("=", 1)[-1]          # --api-base=https://... as well as the bare URL
+        if value.startswith(("http://", "https://")) and urlsplit(value).hostname:
+            hosts.append(urlsplit(value).hostname)
+    provider = model.partition("/")[0].lower() if "/" in model else ""
+    # with an explicit base URL, litellm's "openai/" prefix only picks the client (as lane_health)
+    if provider in PROVIDER_DOMAINS and not (provider == "openai" and hosts):
+        names.append(PROVIDER_DOMAINS[provider])
+    names += [h for h in hosts if h not in _LOCAL_HOSTS]
+    return list(dict.fromkeys(names))
+
+
+def egress_env(proxy_port: int, base_url: str = "") -> Dict[str, str]:
+    """Proxy variables for every client the agent may start: curl, git, pip, Python, Rust
+    (reqwest, so goose) read the *_PROXY pair; Node 24 needs NODE_USE_ENV_PROXY. A model server
+    on this machine or the tailnet stays direct (NO_PROXY)."""
+    url = f"http://127.0.0.1:{proxy_port}"
+    direct = list(_LOCAL_HOSTS)
+    host = urlsplit(base_url).hostname if base_url else None
+    if host and host not in direct and urlsplit(base_url).port in extra_ports():
+        direct.append(host)
+    no_proxy = ",".join(direct)
+    return {"HTTP_PROXY": url, "HTTPS_PROXY": url, "http_proxy": url, "https_proxy": url,
+            "NO_PROXY": no_proxy, "no_proxy": no_proxy, "NODE_USE_ENV_PROXY": "1"}
+
+
+def egress_audit_path(task_id: str) -> Path:
+    """One JSON-lines file per task under <fleet root>/egress/."""
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", task_id or "run")
+    path = load_config().root / "egress" / f"{safe}.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 @runtime_checkable
@@ -385,7 +452,7 @@ def status() -> Dict[str, object]:
             "abi": abi_version(),
             "detail": f"unknown sandbox backend {name!r}; known: {', '.join(sorted(known))}",
         }
-    return {"backend": name, **cls.status()}
+    return {"backend": name, "egress": load_config().sandbox.egress, **cls.status()}
 
 
 def main(argv: Sequence[str]) -> int:

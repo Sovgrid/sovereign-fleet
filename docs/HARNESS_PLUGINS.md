@@ -191,6 +191,8 @@ Every harness runs inside a Linux Landlock ABI 6+ kernel sandbox:
 4. **Read-Only System & Checkouts**: All system directories (`/usr`, `/lib`, `/bin`) and main project git checkouts (`~/code`) are strictly read-only.
 5. **Secrets & Network Isolation**: Secrets outside `pass_env` and network interfaces outside allowed ports are blocked at the kernel level.
 
+**Network (egress allowlist)**: with `[sandbox] egress = "allowlist"` the CLI reaches the internet only through the run's egress proxy, via HTTP_PROXY/HTTPS_PROXY (Node also gets NODE_USE_ENV_PROXY=1); local model servers stay direct through NO_PROXY. The proxy allows the run's own provider, taken from the model id's prefix (`openrouter/...`) and from any base URL in the lane's args. A harness whose CLI talks to its own service (a subscription login, a model catalog) works only when those names are in `allowed_domains`: run it once and read the refused names from `<fleet root>/egress/<task id>.jsonl`.
+
 ### Headless Context Isolation (`CONTEXT_FILE_NAMES`)
 
 When running agent CLIs unattended in ephemeral worktrees, tools like Goose default to scanning parent and working directories for context files (`AGENTS.md`, `.goosecontext`, `CONVENTIONS.md`). In multi-agent or developer workspaces, these files frequently contain human-in-the-loop guidelines (e.g. "ask the user before destructive ops", "prompt the operator for interactive choices").

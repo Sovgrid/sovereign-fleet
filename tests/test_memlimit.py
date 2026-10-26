@@ -301,6 +301,7 @@ def _memory_max_100M(monkeypatch, module) -> None:
 
     class _Sandbox:
         memory_max = "100M"
+        egress = "ports"
         gate_writable = []
         ports = []
         read_only = []

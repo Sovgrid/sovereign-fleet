@@ -70,7 +70,11 @@ what it can reach instead of trusting it.
     `~/.local/bin`, ...) and the repository's git data are read-only. Everything else, such as
     `~/.ssh`, other credentials and the rest of your home, cannot be opened.
   - Landlock TCP rule: outgoing connections only to ports 443, 80, 53 and `FLEET_SANDBOX_PORTS`
-    (for local model servers).
+    (for local model servers). A port is not a host, so with `[sandbox] egress = "allowlist"` each
+    agent run gets its own egress proxy instead: the agent may connect only to that proxy and the
+    local model ports, and the proxy reaches only allowlisted names (package registries, GitHub,
+    the run's own model provider, `allowed_domains`). An agent holding an OpenRouter key can then
+    reach OpenRouter and nothing else, and every attempt is a line in `<root>/egress/<task>.jsonl`.
   - Landlock scope: no signals to processes outside, no abstract unix sockets.
   - `no_new_privs`: `sudo` and other setuid programs do not elevate.
   - seccomp: `socket(AF_UNIX)` and `io_uring_setup` fail, so an agent cannot reach the session
@@ -178,7 +182,7 @@ fleet config check     # repos exist, TLS files readable, token file private, no
 | `[fleet]` | `root` (spool and worktrees), `coordinator` (name in the dashboard) |
 | `[daemon]` | `host`, `port`, `tls_cert`, `tls_key`, `token_file` |
 | `[backend]` | `kind` (`local` or `grid`), `grid_runner_dir`, `max_concurrent` |
-| `[sandbox]` | `ports` agents may reach besides 443/80/53, extra `read_only` and `writable` paths, `memory_max` (systemd `MemoryMax` ceiling per agent run and gate where systemd is available, process-group watchdog elsewhere, default "8G"; "" or "0" switches it off) |
+| `[sandbox]` | `ports` agents may reach besides 443/80/53, `egress` (`"ports"`, or `"allowlist"` for the per-run egress proxy) with `allowed_domains`, extra `read_only` and `writable` paths, `memory_max` (systemd `MemoryMax` ceiling per agent run and gate where systemd is available, process-group watchdog elsewhere, default "8G"; "" or "0" switches it off) |
 | `[secrets]` | `dir` where the roster looks for key files (it checks they exist, never reads them) |
 | `[grid_status]` | optional `url` and `token_file` of an API that reports quota-blocked lanes |
 | `[gitea]` | `url`, `token_file`: pull requests and issue intake on a Gitea |
