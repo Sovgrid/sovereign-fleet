@@ -71,11 +71,29 @@ backends raise ``SandboxUnavailable`` and ``fleet config check`` reports the pro
 
 ### Built-in subscription harnesses
 
-Claude Code (`claude-code`) and the Antigravity CLI (`agy`) log in with their own account and bring their own
+Claude Code (`claude-code`), the Antigravity CLI (`agy`) and the Cursor CLI (`cursor`) log in with their own account and bring their own
 model catalog (`own_login`). Their lanes are subscription models that only that CLI reaches: a lane with the step
 `{harness = "agy", model = "gemini-4-argon-medium"}` passes the model as `--model` (`agy models` lists them).
 `agy` runs headless with `-p` and approves its tools (`[harnesses.agy.options] skip_permissions = false` turns
 that off); the fleet's sandbox lets it write `~/.gemini/antigravity-cli`, `~/.gemini/config` and open a PTY.
+
+The Cursor CLI (`cursor`, binary `agent`) also uses its own account, but its keyring login cannot refresh inside the sandbox, so the lane gives it a user API key: `key_env = "CURSOR_API_KEY"`, `key_file = "cursor_api.key"`. It runs `agent -p <task> --trust --force --output-format stream-json --model <id>`; a free Cursor plan accepts only `auto`, which is also the default (the CLI otherwise falls back to the last model it was given). The run's output starts with `[cursor model: ...]`, the model Cursor reports. A plan limit rests the lane like a daily quota.
+
+### Claude Code on your subscription
+
+With a lane token, Claude Code runs in its own config directory under the fleet root, so an agent never sees your `~/.claude` (session transcripts, memory, settings). The token is a one-year token from `claude setup-token` on your own Claude subscription, not an API key. Without a lane token it uses your own login as before.
+
+```toml
+[lanes.claude_code]
+key_env = "CLAUDE_CODE_OAUTH_TOKEN"
+key_file = "claude_oauth.key"
+max_parallel = 1
+cost = "paid"
+[[lanes.claude_code.steps]]
+harness = "claude-code"
+```
+
+With `[sandbox] egress = "allowlist"` it needs only api.anthropic.com (the harness declares it).
 
 ---
 

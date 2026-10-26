@@ -202,6 +202,26 @@ TOOLS: List[Dict[str, Any]] = [
                        "description": "Only tasks with this status."},
         }},
     },
+    {
+        "name": "fleet_get_budgets",
+        "description": ("How much of each provider's quota the fleet may use: per provider its budget policy "
+                        "(normal: routed by measured quality; reserve: only after every other lane; manual: "
+                        "never automatic), whether that is the recommended default and why, its lanes and "
+                        "this week's measured tasks."),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    {
+        "name": "fleet_tighten_budget",
+        "description": ("Make a provider's budget policy stricter (normal, then reserve, then manual), e.g. to "
+                        "keep a scarce subscription free. This tool can only make a policy stricter; loosening "
+                        "is only possible for the operator in the dashboard. A request that would not tighten "
+                        "is refused and changes nothing."),
+        "inputSchema": {"type": "object", "properties": {
+            "provider": {"type": "string", "description": "The provider, as fleet_get_budgets lists it."},
+            "policy": {"type": "string", "description": "The stricter policy: reserve or manual."},
+            "reason": {"type": "string", "description": "Why, for the operator (1 to 200 characters)."},
+        }, "required": ["provider", "policy", "reason"]},
+    },
 ]
 
 
@@ -414,6 +434,34 @@ def tool_clear(args: Dict[str, Any]) -> str:
     return f"Cleared {res.get('cleared_count', 0)} tasks (filter: {res.get('filter') or 'all finished'})."
 
 
+def _budget_line(e: Dict[str, Any]) -> str:
+    week = e.get("week") or {}
+    line = (f"- {e.get('provider')}: {e.get('policy')}"
+            f"{' (recommended)' if e.get('is_default') else ' (recommended: ' + str(e.get('default')) + ')'}"
+            f", {e.get('cost')}, lanes {', '.join(e.get('lanes') or [])}; "
+            f"{week.get('tasks', 0)} tasks this week, {week.get('passed', 0)} passed. {e.get('reason', '')}")
+    if e.get("resting_until") and e["resting_until"] > time.time():
+        line += f" Resting until {_when(e['resting_until'])}: {e.get('resting_reason') or 'limit reached'}."
+    return line
+
+
+def tool_budgets(args: Dict[str, Any]) -> str:
+    view = _api_request("GET", "/api/fleet/budgets")
+    s = view.get("summary") or {}
+    return "\n".join([f"# Budgets: this week {s.get('local', 0)} tasks local, {s.get('subscription', 0)} on "
+                      f"subscriptions, {s.get('free', 0)} free, {s.get('paid', 0)} paid per use"]
+                     + [_budget_line(e) for e in view.get("providers") or []])
+
+
+def tool_tighten_budget(args: Dict[str, Any]) -> str:
+    provider = str(args.get("provider") or "").strip()
+    if not provider:
+        raise ApiError("provider is required")
+    e = _api_request("POST", f"/api/fleet/budgets/{urllib.parse.quote(provider, safe='')}/tighten",
+                     {"policy": str(args.get("policy") or ""), "reason": str(args.get("reason") or "")})
+    return f"Tightened {provider}: {e.get('previous')} -> {e.get('policy')}.\n{_budget_line(e)}"
+
+
 HANDLERS: Dict[str, Callable[[Dict[str, Any]], str]] = {
     "fleet_dispatch_task": tool_dispatch,
     "fleet_list_tasks": tool_list,
@@ -427,6 +475,8 @@ HANDLERS: Dict[str, Callable[[Dict[str, Any]], str]] = {
     "fleet_lane_health": tool_lanes,
     "fleet_issue_intake": tool_intake,
     "fleet_clear_spool": tool_clear,
+    "fleet_get_budgets": tool_budgets,
+    "fleet_tighten_budget": tool_tighten_budget,
 }
 assert set(HANDLERS) == {t["name"] for t in TOOLS}
 _SCHEMAS = {t["name"]: t["inputSchema"] for t in TOOLS}

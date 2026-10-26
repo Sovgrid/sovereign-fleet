@@ -10,7 +10,7 @@ import logging
 import os
 import tempfile
 from pathlib import Path
-from typing import Optional, List, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
 
@@ -38,6 +38,12 @@ class FleetSettings(BaseModel):
     auto_review: Literal["off", "features", "all"] = "features"
     # Auto-fix severity threshold: critical or high findings trigger an automated fix task
     review_autofix: Literal["off", "critical", "high"] = "high"
+    # Per-provider budget policy overrides: keys are provider names (from lane_provider),
+    # values one of fleet.core.budget.POLICIES. Empty dict: every provider uses its default.
+    # Stored as plain str so a broken JSON file never raises on load (we validate at read time).
+    budget_policies: Dict[str, str] = Field(default_factory=dict)
+    # Audit log of budget policy changes; kept to the last 200 entries.
+    budget_log: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 def settings_file() -> Path:

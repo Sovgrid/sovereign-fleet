@@ -3,6 +3,7 @@
 import asyncio
 from collections import deque
 import hashlib
+import json
 import logging
 import os
 import re
@@ -76,8 +77,11 @@ class CliHarness(HarnessPlugin):
 
     name: str = ""
     binary: str = ""
+    label: str = ""          # short name for menus (the dashboard's harness picker)
     description: str = ""
     state_paths: Tuple[Path, ...] = ()
+    # Names the CLI's own service needs when [sandbox] egress = "allowlist" (subscription logins).
+    egress_domains: Tuple[str, ...] = ()
     _OPTION_DEFAULTS: Dict[str, Any] = {}
 
     supported_api_kinds: Tuple[str, ...] = ("openai_compatible", "openai", "vllm_local")
@@ -118,6 +122,10 @@ class CliHarness(HarnessPlugin):
         """Turn a ModelEndpoint into extra CLI args, environment variables, and passed env vars."""
         return ModelAdapterResult()
 
+    def run_state(self, env: Mapping[str, str]) -> Tuple[Tuple[Path, ...], Dict[str, str]]:
+        """(writable state paths, extra environment) for one run with the run's environment."""
+        return self.state_paths, {}
+
     @classmethod
     def _args_default(cls) -> List[str]:
         """Default extra args from _OPTION_DEFAULTS (for list_harnesses display)."""
@@ -151,7 +159,8 @@ class CliHarness(HarnessPlugin):
         section_args = (section.args or []) if section is not None else []
         section_env = (section.env or {}) if section is not None else {}
         section_paths = (section.state_paths or []) if section is not None else []
-        effective_paths = self.state_paths + tuple(Path(p) for p in section_paths)
+        state_paths, state_env = self.run_state({**(env or {}), **section_env})
+        effective_paths = state_paths + tuple(Path(p) for p in section_paths)
         # Stall detection: [harnesses.<name>.options] stall_seconds, read like
         # permission_mode for Claude Code. Default default_stall_seconds, 0 switches it off, never larger
         # than the run's timeout.
@@ -180,7 +189,8 @@ class CliHarness(HarnessPlugin):
         base_url = endpoint.base_url if endpoint is not None else ""
         egress = None
         if load_config().sandbox.egress == "allowlist" and not sandbox_disabled():
-            egress = EgressProxy(egress_allowlist(provider_model, [base_url, *args, *section_args]),
+            egress = EgressProxy([*egress_allowlist(provider_model, [base_url, *args, *section_args]),
+                                  *self.egress_domains],
                                  audit_path=egress_audit_path(str(task.get("id", ""))))
             await egress.start()
         try:
@@ -196,6 +206,7 @@ class CliHarness(HarnessPlugin):
             run_env.update({k: os.environ[k] for k in pass_env if k in os.environ})
             run_env.update(env or {})
             run_env.update(section_env or {})
+            run_env.update(state_env)
             run_env.update(self.model_env(model) if model else {})
             # Some CLIs (opencode) take their project directory from $PWD, not from the process's
             # cwd: the inherited PWD would point them at the directory the daemon was started in.
@@ -400,6 +411,7 @@ def _decode(data: bytes | None) -> str:
 class ClaudeCodeHarness(CliHarness):
     name = "claude-code"
     binary = "claude"
+    label = "Claude Code"
     description = "Claude Code CLI"
     state_paths = (_HOME / ".claude", _HOME / ".claude.json", _HOME / ".config/claude",
                    _HOME / ".local/share/claude")
@@ -408,6 +420,22 @@ class ClaudeCodeHarness(CliHarness):
     model_fixed: bool = True
     default_stall_seconds = 0  # `-p` prints only the final answer
     supported_api_kinds: Tuple[str, ...] = ("anthropic", "subscription")
+    # With a token from `claude setup-token` the CLI talks to the API only; telemetry and the
+    # updater stay off (CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).
+    egress_domains = ("api.anthropic.com",)
+    TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
+
+    def run_state(self, env: Mapping[str, str]) -> Tuple[Tuple[Path, ...], Dict[str, str]]:
+        """With a lane token (key_env = "CLAUDE_CODE_OAUTH_TOKEN", one year, from `claude
+        setup-token`) the CLI gets a config directory of its own under the fleet root, so an agent
+        never sees the operator's ~/.claude (session transcripts, memory, settings). Without one,
+        the operator's login as before."""
+        if not env.get(self.TOKEN_ENV):
+            return self.state_paths, {}
+        home = load_config().root / "claude-config"
+        home.mkdir(parents=True, exist_ok=True)
+        binary_home = _HOME / ".local/share/claude"   # where the native installer's symlink points
+        return (home, binary_home), {"CLAUDE_CONFIG_DIR": str(home), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
 
     _OPTION_DEFAULTS: Dict[str, Any] = {"permission_mode": "acceptEdits"}
 
@@ -428,10 +456,14 @@ class AgyHarness(CliHarness):
     names the model and the step passes it with --model."""
     name = "agy"
     binary = "agy"
+    label = "Antigravity (agy)"
     description = "Antigravity CLI (own login, models from its catalog)"
     # Measured 2026-10-22 (agy 1.4.5): it writes its sessions under ~/.gemini/antigravity-cli and a
     # project file under ~/.gemini/config/projects; its terminal tool opens a PTY (/dev/ptmx).
     state_paths = (_HOME / ".gemini/antigravity-cli", _HOME / ".gemini/config", Path("/dev/ptmx"))
+    # Found with the egress audit (2026-10-26): the rest of what it tries (docs MCP, avatars,
+    # telemetry) stays blocked without harm.
+    egress_domains = ("daily-cloudcode-pa.googleapis.com", "www.googleapis.com", "antigravity-unleash.goog")
 
     own_login: bool = True
     model_fixed: bool = False
@@ -454,9 +486,68 @@ class AgyHarness(CliHarness):
                 *(["--model", model] if model else [])]
 
 
+class CursorHarness(CliHarness):
+    """Cursor's CLI (`agent`). Its own login cannot refresh inside the sandbox (the fresh tokens sit
+    in the keyring, over D-Bus), so the lane gives it a user API key as CURSOR_API_KEY (key_env).
+    A free plan runs only "auto"; Cursor then picks the model per request and names it in the
+    stream's first event, which the result shows (`auto_model`), so it is never a black box."""
+    name = "cursor"
+    binary = "agent"
+    label = "Cursor"
+    description = "Cursor CLI (own account; free plan: Auto only, Cursor picks the model)"
+    state_paths = (_HOME / ".cursor", _HOME / ".config/cursor", _HOME / ".local/share/cursor-agent")
+    egress_domains = ("*.cursor.sh",)  # api2 and the agent host; its updater stays blocked
+
+    own_login: bool = True
+    model_fixed: bool = False
+    default_stall_seconds = 0  # stream-json arrives in bursts; the loop and timeout limits stay
+    supported_api_kinds: Tuple[str, ...] = ("subscription",)
+
+    def adapt_model(self, endpoint: ModelEndpoint) -> ModelAdapterResult:
+        return ModelAdapterResult()
+
+    def build_command(self, prompt: str, model: str = "") -> List[str]:
+        # --trust: without it -p stops at the workspace trust prompt; --force: commands without
+        # asking, like the other CLIs (the sandbox confines them).
+        # --model always: the CLI keeps the last model it was given as its default, and a free
+        # plan refuses any named one ("Named models unavailable"), so "auto" is passed explicitly.
+        return [self.effective_binary, "-p", prompt, "--trust", "--force", "--output-format", "stream-json",
+                "--model", model or "auto"]
+
+    async def execute_task(self, task: Dict[str, Any], worktree_dir: str, **kwargs: Any) -> Dict[str, Any]:
+        res = await super().execute_task(task, worktree_dir, **kwargs)
+        text, auto_model = cursor_stream_text(res.get("stdout", ""))
+        if auto_model:
+            res["auto_model"] = auto_model
+            text = f"[cursor model: {auto_model}]\n{text}"
+        res["stdout"] = text
+        return res
+
+
+def cursor_stream_text(stream: str) -> Tuple[str, str]:
+    """(readable output, model Cursor chose) from `agent --output-format stream-json`; lines that
+    are not JSON (errors) pass through as they are."""
+    model, parts = "", []
+    for line in stream.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            if line.strip():
+                parts.append(line)
+            continue
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") == "system" and event.get("model"):
+            model = str(event["model"])
+        elif event.get("type") == "result" and event.get("result"):
+            parts.append(str(event["result"]))
+    return "\n".join(parts), model
+
+
 class OpenCodeHarness(CliHarness):
     name = "opencode"
     binary = "opencode"
+    label = "opencode"
     description = "OpenCode CLI (local or remote models)"
     state_paths = (_HOME / ".config/opencode", _HOME / ".local/share/opencode",
                    _HOME / ".local/state/opencode")
@@ -495,6 +586,7 @@ _GOOSE_HEADLESS_SYSTEM = (
 class GooseHarness(CliHarness):
     name = "goose"
     binary = "goose"
+    label = "goose"
     description = "Block Goose CLI with MCP extensions"
     state_paths = (_HOME / ".config/goose", _HOME / ".local/share/goose",
                    _HOME / ".local/state/goose")
@@ -587,6 +679,7 @@ class GooseHarness(CliHarness):
 class PiHarness(CliHarness):
     name = "pi"
     binary = "pi"
+    label = "Pi"
     description = "Pi coding agent CLI"
     state_paths = (_HOME / ".pi", _HOME / ".config/pi", _HOME / ".local/share/pi")
 
@@ -616,6 +709,7 @@ _AIDER_APPLIED = re.compile(r"^Applied edit to ", re.MULTILINE)
 class AiderHarness(CliHarness):
     name = "aider"
     binary = "aider"
+    label = "aider"
     description = "Aider CLI (the engine commits, not aider)"
     state_paths = (_HOME / ".aider", _HOME / ".aider.conf.yml",
                    _HOME / ".aider.model-settings.yml")
@@ -694,4 +788,4 @@ def provider_failure(res: Dict[str, Any]) -> Dict[str, Any]:
 
 
 ALL_HARNESSES: Sequence[type] = (ClaudeCodeHarness, OpenCodeHarness, GooseHarness, PiHarness,
-                                 AiderHarness, AgyHarness)
+                                 AiderHarness, AgyHarness, CursorHarness)

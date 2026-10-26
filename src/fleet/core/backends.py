@@ -25,7 +25,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from fleet.core.config import _expand, load_config
+from fleet.core.config import _expand, builtin_harnesses, load_config
 from fleet.core.taskstore import FleetTask, TaskStore, TransitionError
 
 logger = logging.getLogger("fleet.core.backends")
@@ -253,8 +253,8 @@ def _accepts(fn: Any, name: str) -> bool:
 
 
 def _record_decision(task_id: str, intent: Dict[str, Any], picked: Dict[str, Any]) -> None:
-    """One line per lane the package router picked for a runner task: the live evidence the
-    migration needs before the runner's dispatcher goes (docs/MIGRATION.md, phase 6)."""
+    """One line per lane the package router picked for a runner task: live evidence of how the
+    router would decide, next to what the runner did."""
     try:
         path = load_config().root / "router_decisions.jsonl"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -304,7 +304,7 @@ class GridBackend:
                 h_name = lane_id[6:]
                 mapping[h_name] = lane_id
                 mapping[h_name.replace("_", "-")] = lane_id
-            elif lane_id in ("goose", "aider", "pi", "opencode", "claude-code", "agy"):
+            elif lane_id in {cls.name for cls in builtin_harnesses()}:
                 mapping[lane_id] = lane_id
 
         return mapping

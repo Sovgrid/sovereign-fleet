@@ -65,6 +65,24 @@ def test_claude_share_claude_is_writable_state():
 
 
 @pytest.mark.asyncio
+async def test_claude_with_a_lane_token_never_sees_the_operators_claude_dir():
+    """A lane token (claude setup-token) runs the CLI in its own config dir under the fleet root:
+    the agent cannot read the operator's ~/.claude (transcripts, memory, settings)."""
+    from fleet.core.config import load_config
+    harness = ClaudeCodeHarness()
+    paths, env = harness.run_state({"CLAUDE_CODE_OAUTH_TOKEN": "sk-test"})
+    home = load_config().root / "claude-config"
+    assert env["CLAUDE_CONFIG_DIR"] == str(home) and home.is_dir()
+    assert Path.home() / ".claude" not in paths and home in paths
+    assert harness.run_state({}) == (harness.state_paths, {})      # no token: the login as before
+    mock_proc = fake_process(b"done", b"", returncode=0)
+    with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
+        await harness.execute_task({"text": "x"}, "/tmp/test-wt", env={"CLAUDE_CODE_OAUTH_TOKEN": "sk-test"})
+    run_env = mock_exec.call_args.kwargs["env"]
+    assert run_env["CLAUDE_CONFIG_DIR"] == str(home) and run_env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-test"
+
+
+@pytest.mark.asyncio
 async def test_goose_harness_execution_mocked():
     harness = GooseHarness()
     mock_proc = fake_process(b"Goose task executed", b"", returncode=0)

@@ -27,12 +27,11 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
-from fleet.core.config import FleetConfig, LaneSpec, _expand, active_credential_plugin, lane_key, load_config
+from fleet.core.config import (FleetConfig, LaneSpec, _expand, active_credential_plugin, harness_binary, lane_key,
+                               load_config)
 
 logger = logging.getLogger("fleet.core.roster")
 
-_BINARIES = {"claude-code": "claude", "opencode": "opencode", "goose": "goose", "pi": "pi", "aider": "aider",
-             "agy": "agy"}
 _NIM_HOSTS = ("integrate.api.nvidia.com",)
 
 
@@ -150,7 +149,7 @@ class RosterManager:
         for name, spec in lanes.items():
             rec = records.get(name) or {}
             badge, reason = "[ONLINE]", None
-            binary = _BINARIES.get(spec.steps[0].harness, spec.steps[0].harness)
+            binary = harness_binary(spec.steps[0].harness)
             if name in self.disabled or not spec.enabled:
                 badge, reason = "[DISABLED]", "switched off" if name in self.disabled else "enabled = false in fleet.toml"
             elif rec.get("status") in lane_health.UNAVAILABLE:

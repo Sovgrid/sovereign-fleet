@@ -22,7 +22,11 @@
 ## 4. Honesty
 - README, llms.txt, dashboard texts and the health endpoint describe what the code does today. No status value is hardcoded; anything not implemented is labelled as such.
 
-## 5. Current work
-- Migration from the grid runner: `docs/MIGRATION.md`. Phases 0 to 6 (6a to 6g: local daemon executor loop, crash recovery and worktree pruning, process-group cancellation, failure autopsies and atomic receipts, cross-lane review loop, Matrix output notifications and approvals-by-reply, and per-project `backend = "local"` strangler migration via `CompositeBackend`) are complete and verified in `docs/MIGRATION.md`.
+## 5. One source per fact
+- A harness's facts (binary, label, own login) live on its class in `plugins/harness_base.py`; read them through `config.builtin_harnesses()`, `harness_binary()`, `own_login_harnesses()`.
+- Budget policies and their defaults live in `core/budget.py` (`POLICIES`, `effective_policy`); the dashboard gets the list from `GET /api/fleet/budgets`.
+- `tests/test_harness_single_source.py` and `tests/test_budget_api.py` fail on a hand-kept list of either.
+
+## 6. Current work
 - Review history: the maintainer's handover notes (outside this repository) and CHANGELOG.md, section "Corrected".
 - A claim is not done until a test that fails without the change passes with it.

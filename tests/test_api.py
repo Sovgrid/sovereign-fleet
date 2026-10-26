@@ -130,8 +130,7 @@ async def test_dashboard_html_view():
         assert "TASKS" in html
         assert "AGENTS" in html
         assert "SETTINGS" in html
-        assert "value=\"goose\"" in html
-        assert "value=\"pi\"" in html
+        assert 'id="harness-select"' in html   # its options come from /api/fleet/plugins
         assert "HEALTH" in html
         assert "kpi-card" in html
         assert "AGENT SUCCESS RATE" in html

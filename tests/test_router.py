@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from fleet.core.budget import set_policy
 from fleet.core.config import LaneSpec, Project, RoutingSection
 from fleet.core.engine import FleetEngine
 from fleet.core.router import Attempt, Router, history_from_grid, history_from_tasks, shadow
@@ -26,6 +27,7 @@ def test_measured_pass_rate_over_cost_decides():
     lanes = {"local": lane("local"), "free": lane("free"), "paid": lane("paid")}
     history = ([Attempt("local", "bugfix", True)] * 3 + [Attempt("local", "bugfix", False)] * 3
                + [Attempt("free", "bugfix", False)] * 6 + [Attempt("paid", "bugfix", True)] * 8)
+    set_policy("paid", "normal", "test the cost weight", by="dashboard")   # paid is manual by default
     ranked = [c.lane for c in Router(lanes, history).rank("bugfix")]
     # local 4/8 = 0.5; paid 9/10 / 3 = 0.3; free 1/8 = 0.125
     assert ranked == ["local", "paid", "free"]

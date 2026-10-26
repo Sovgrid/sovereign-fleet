@@ -332,7 +332,23 @@ def _step_base_url(step: Optional["LaneStep"]) -> str:
 
 
 # Harnesses that log in with their own account and bring their own model catalog.
-OWN_LOGIN_HARNESSES = ("claude-code", "agy")
+# Facts about a harness (its binary, whether it logs in with its own account) live on its class
+# in fleet.plugins.harness_base and nowhere else: hand-kept copies of them missed "cursor" on
+# 2026-10-26 (KeyError in the executor). tests/test_harness_single_source.py keeps it that way.
+
+def builtin_harnesses() -> Tuple[type, ...]:
+    from fleet.plugins.harness_base import ALL_HARNESSES  # lazy: harness_base imports this module
+    return tuple(ALL_HARNESSES)
+
+
+def harness_binary(harness: str) -> str:
+    """The CLI a built-in harness starts (its class's `binary`), else the harness name."""
+    return {cls.name: cls.binary for cls in builtin_harnesses()}.get(harness, harness)
+
+
+def own_login_harnesses() -> Tuple[str, ...]:
+    """Harnesses whose CLI uses its own account (a subscription): their lanes share one quota."""
+    return tuple(cls.name for cls in builtin_harnesses() if getattr(cls, "own_login", False))
 
 
 def models_from_lanes(lanes: Dict[str, "LaneSpec"]) -> Dict[str, ModelEndpoint]:
@@ -362,7 +378,7 @@ def _derive_models(lanes: Dict[str, "LaneSpec"]) -> Tuple[Dict[str, ModelEndpoin
             continue
         step = lane.steps[0] if lane.steps else None
         model_id = step.model if step else lane_name
-        own_login = any(s.harness in OWN_LOGIN_HARNESSES for s in lane.steps)
+        own_login = any(s.harness in own_login_harnesses() for s in lane.steps)
         if own_login:
             provider = "subscription"
         elif lane.cost == "local":

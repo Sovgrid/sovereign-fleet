@@ -114,11 +114,6 @@ def test_dashboard_html_no_invented_labels():
 
     # New factual labels must exist
     assert "Auto: the router picks" in html
-    assert 'value="opencode"' in html
-    assert 'value="goose"' in html
-    assert 'value="pi"' in html
-    assert 'value="aider"' in html
-    assert 'value="claude-code"' in html
 
     # Grid hint text must exist
     assert "The grid runner picks the CLI by lane; choose a lane instead." in html
@@ -133,13 +128,23 @@ def test_dashboard_html_harness_select_structure():
     from pathlib import Path
     html = (Path(__file__).parents[1] / "src/fleet/api/dashboard.html").read_text(encoding="utf-8")
 
-    # Check the select options
+    # Only "Auto" is static; every harness option is built from the API (one source: the classes)
     assert '<option value="auto" selected>Auto: the router picks</option>' in html
-    assert '<option value="claude-code">Claude Code</option>' in html
-    assert '<option value="opencode">opencode</option>' in html
-    assert '<option value="goose">goose</option>' in html
-    assert '<option value="pi">Pi</option>' in html
-    assert '<option value="aider">aider</option>' in html
+    assert '<option value="goose">' not in html
+    assert "opt.textContent = h.label || h.id;" in html
+
+
+def test_plugins_api_gives_every_harness_its_label():
+    """The menu reads id and label from /api/fleet/plugins; a new harness needs no dashboard edit."""
+    from fastapi.testclient import TestClient
+    from conftest import TEST_TOKEN
+    from fleet.api import app as app_module
+    from fleet.plugins.harness_base import ALL_HARNESSES
+    client = TestClient(app_module.app)
+    res = client.get("/api/fleet/plugins", headers={"Authorization": f"Bearer {TEST_TOKEN}"})
+    labels = {h["id"]: h["label"] for h in res.json()["harnesses"]}
+    for cls in ALL_HARNESSES:
+        assert labels.get(cls.name) == cls.label
 
 
 if __name__ == "__main__":

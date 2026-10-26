@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from fleet.core import gates, landing, quirks, review
-from fleet.core.config import (OWN_LOGIN_HARNESSES, LaneSpec, ModelEndpoint, Project, RoutingSection,
+from fleet.core.config import (LaneSpec, ModelEndpoint, Project, RoutingSection, own_login_harnesses,
                                active_credential_plugin, lane_key, model_key)
 from fleet.core.settings import load_settings
 from fleet.core.gateguard import GateGuard
@@ -37,7 +37,11 @@ _DAILY_QUOTA_PATTERNS = (
     re.compile(r"daily (?:request |token )?limit reached", re.IGNORECASE),
     re.compile(r"quota exceeded for quota metric", re.IGNORECASE),
     re.compile(r"daily quota exceeded", re.IGNORECASE),
+    # Cursor's plan limits ("You've hit your usage limit", "usage limit reached")
+    re.compile(r"(?:hit|reached) your (?:\w+ )?(?:usage )?limit|usage limit (?:reached|exceeded)", re.IGNORECASE),
 )
+# A free Cursor plan asked for a named model: a lane set up wrongly, not a limit that resets.
+_NOT_A_LIMIT = re.compile(r"named models unavailable", re.IGNORECASE)
 
 _RATE_LIMIT_PATTERNS = (
     re.compile(r"(?:status|code|http)[:\s]*429\b", re.IGNORECASE),
@@ -79,6 +83,8 @@ def classify_failure(stderr: str, stdout: str = "") -> Optional[str]:
     if not text:
         text = (stdout or "")[-500:]
 
+    if _NOT_A_LIMIT.search(text):
+        return None
     for pat in _DAILY_QUOTA_PATTERNS:
         if pat.search(text):
             return "daily_quota"
@@ -563,7 +569,7 @@ class FleetEngine:
         """The lane and every other lane whose steps all run the same own-login CLI: they share
         one subscription quota (both agy lanes hit it on 2026-10-23)."""
         harnesses = {step.harness for step in self.lanes[lane].steps}
-        if len(harnesses) != 1 or not harnesses <= set(OWN_LOGIN_HARNESSES):
+        if len(harnesses) != 1 or not harnesses <= set(own_login_harnesses()):
             return [lane]
         return [name for name, spec in self.lanes.items()
                 if name == lane or {step.harness for step in spec.steps} == harnesses]
@@ -639,17 +645,21 @@ class FleetEngine:
         """Walk the router's ranking: each lane gets the task (and the last failure), one repair
         pass on a verification failure, then the next lane continues in the same worktree."""
         category = task.metadata.get("category", "")
-        ranking = self.router.rank(category, sensitive=_is_sensitive(task.metadata))
+        ranking = self.router.rank(category, sensitive=_is_sensitive(task.metadata), explicit=task.lane or "")
         if task.lane:  # a lane the caller chose goes first, if it may run this task
             ranking.sort(key=lambda c: c.lane != task.lane)
         ranking = ranking[:self.routing.max_lanes]
         if not ranking:
+            manual = sorted(set(why.split()[1] for why in self.router.skipped.values()))
+            hint = f"; budget policy manual for: {', '.join(manual)}" if manual else ""
             return "failed", {"error": "no lane can take this task (none configured, enabled, "
-                                       "available and allowed for it)", "exit_code": 1}
+                                       "available and allowed for it)" + hint, "exit_code": 1}
         if any(step.harness == "opencode" for c in ranking for step in self.lanes[c.lane].steps):
             await quirks.refresh_opencode_models()
         ranked = [c.as_dict() for c in ranking]
-        attempts: List[Dict[str, Any]] = []
+        # Lanes the budget policy left out: on the record, never against the lane (skipped)
+        attempts: List[Dict[str, Any]] = [{"lane": lane, "passed": False, "skipped": True, "error": why}
+                                          for lane, why in self.router.skipped.items()]
         failure = ""
         last: Dict[str, Any] = {}
         for idx, choice in enumerate(ranking):
@@ -691,7 +701,7 @@ class FleetEngine:
                         task.id, lane, failure[-200:], next_lane)
             attempts.append({**outcome, "passed": False, "error": failure[-300:]})
         return "failed", {**{k: v for k, v in last.items() if k not in ("exit_code", "error")},
-                          "error": f"{len(attempts)} lane(s) failed; last: {failure[-300:]}",
+                          "error": f"{sum(not a.get('skipped') for a in attempts)} lane(s) failed; last: {failure[-300:]}",
                           "exit_code": last.get("exit_code") or 1, "attempts": attempts, "ranking": ranked}
 
     async def _verify(self, task: FleetTask, wt: Path, exec_res: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:

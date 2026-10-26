@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-10-26
+
+### Added
+- Budget policies per provider (`core/budget.py`, the one place that knows the policies and their
+  defaults): `normal` ranks a lane by measured quality, `reserve` puts it after every normal lane,
+  `manual` leaves it out of automatic routing (a lane the task names still runs, eligibility and the
+  sensitive-task rule included). The provider is the unit; defaults are derived from cost and own
+  login, only the operator's deviations are stored, with a log of who changed what and why.
+  Router: `Choice.policy`, settings read once per ranking, lanes left out by policy on the attempt
+  record as `skipped: <provider> manual`. API: `GET /api/fleet/budgets`,
+  `PUT/DELETE /api/fleet/budgets/{provider}`, `POST .../tighten`. MCP: `fleet_get_budgets` and
+  `fleet_tighten_budget`, which can only make a policy stricter. Dashboard: Settings > Budgets, one
+  row per provider with a three-way control built from the API, the recommended default marked, an
+  optional reason, and a line of measured numbers, grouped by what a provider costs (on this machine,
+  subscriptions, free tiers and free plans, paid per use). The coordinator's own subscription is
+  `reserve` by default; with the grid backend the coordinator is the runner's setting.
+- Settings tab in the order you set it up: Coordinator, Budgets (saves per change), the settings
+  form with Save at its end, Issue sources.
+- `cursor` harness (Cursor CLI, binary `agent`): `-p --trust --force --model <id>` with stream output turned
+  into text plus the model Cursor reports (`auto_model`); its key comes from the lane (`key_env =
+  "CURSOR_API_KEY"`), because the CLI's keyring login cannot refresh inside the sandbox. A free plan runs
+  only `auto`: the harness always passes `--model` (the CLI otherwise falls back to the last model it was
+  given, which a free plan refuses).
+- Harnesses declare the names their own service needs (`egress_domains`: agy, cursor), so
+  `egress = "allowlist"` works for them without `allowed_domains`.
+- Cursor's plan limits ("You've hit your usage limit") rest the lane like a daily quota; "Named models
+  unavailable" (a named model on a free plan) is a lane set up wrongly, not a limit.
+- Claude Code on your own subscription without exposing `~/.claude`: with a lane token
+  (`key_env = "CLAUDE_CODE_OAUTH_TOKEN"`, one year, from `claude setup-token`; a login, not an API
+  key) the harness runs in its own config directory under the fleet root, with non-essential
+  traffic off; `egress_domains` = api.anthropic.com. `CliHarness.run_state(env)` is the hook.
+
+### Changed
+- Every fact about a harness (binary, label, own login) comes from its class; the router, the roster,
+  the backends and the dashboard's harness menu derive from them, and a test fails on any hand-kept
+  list. The Cursor harness had been missing from four such lists.
+- README: a Vision section; the migration history is no longer part of the public docs.
+
+### Fixed
+- The settings route merged a save onto a copy taken at start-up and wrote it back, so it could undo
+  changes written by other routes; it now merges onto the file.
+- A bare model id (no `/`) no longer counts as a provider.
+- Small muted text (`--text-subtle`) had 4.0:1 contrast on the cards; now 5.4:1 (WCAG AA asks 4.5:1).
+- No dashboard text below 0.7rem (11 px); 43 labels were 0.6 to 0.68rem.
+
 ## [0.6.5] - 2026-10-26
 ### Added
 - `[sandbox] egress = "allowlist"` (opt-in): each agent run gets its own egress proxy

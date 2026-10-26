@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import re
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -27,6 +28,7 @@ from pydantic import BaseModel, Field
 from fleet import __version__
 from fleet.api import auth, background
 from fleet.core import lane_health, memlimit, sandbox, risk as _risk
+from fleet.core import budget
 from fleet.core.backends import BackendError, LocalBackend, make_backend
 from fleet.core.config import get_credential_plugin, load_config
 from fleet.core.models import compatible_harnesses_for_model
@@ -361,6 +363,9 @@ def service_worker_view():
 
 # ── SETTINGS ──
 
+_BUDGET_FIELDS = ("budget_policies", "budget_log")
+
+
 @app.get("/api/fleet/settings", response_model=FleetSettings)
 def get_settings():
     return _current_settings
@@ -368,9 +373,13 @@ def get_settings():
 
 @app.post("/api/fleet/settings", response_model=FleetSettings)
 def update_settings(settings: FleetSettings):
-    """Fields the request leaves out keep their value (the settings form does not send all)."""
+    """Fields the request leaves out keep their value (the settings form does not send all). The
+    budget fields change only through /api/fleet/budgets, so every change is in the budget log;
+    the rest is merged onto the file, which the budget routes write too (a cached copy would undo
+    their changes)."""
     global _current_settings
-    settings = _current_settings.model_copy(update={k: getattr(settings, k) for k in settings.model_fields_set})
+    fields = settings.model_fields_set - set(_BUDGET_FIELDS)
+    settings = load_settings().model_copy(update={k: getattr(settings, k) for k in fields})
     save_settings(settings)
     _current_settings = settings
     return _current_settings
@@ -378,8 +387,11 @@ def update_settings(settings: FleetSettings):
 
 @app.post("/api/fleet/settings/reset", response_model=FleetSettings)
 def reset_settings():
+    """Everything back to the defaults except the budget policies and their log: those have their
+    own "use recommended" per provider, and the log is the record of who changed what."""
     global _current_settings
-    _current_settings = FleetSettings()
+    kept = load_settings()
+    _current_settings = FleetSettings(**{k: getattr(kept, k) for k in _BUDGET_FIELDS})
     save_settings(_current_settings)
     return _current_settings
 
@@ -515,6 +527,7 @@ def get_system_health():
             reason = None if selectable else "not installed"
         harnesses_info.append({
             "id": h.name,
+            "label": getattr(h, "label", "") or h.name,
             "name": h.description,
             "available": h.is_available(),
             "binary": h.binary,
@@ -730,6 +743,115 @@ def check_lanes(req: Optional[CheckLanesRequest] = None):
                                              for n, r in probes.items()}, **_lanes_view()}
 
 
+# ── BUDGET POLICIES (reviews/specs/budget-policies.md) ──
+# Policies, defaults and the provider of a lane come from fleet.core.budget only. The dashboard
+# may move a policy either way; a coordinator (MCP) may only tighten it.
+
+def _budget_view(only: Optional[str] = None) -> Dict[str, Any]:
+    """One entry per provider of the configured lanes and the week's tasks by cost kind; only
+    measured numbers. Unknown *only* -> 404."""
+    from fleet.core.config import _expand
+    from fleet.core.router import history_from_grid, history_from_tasks
+    cfg = load_config()
+    lanes = cfg.lanes
+    providers: Dict[str, List[str]] = {}
+    for name, spec in lanes.items():
+        providers.setdefault(budget.lane_provider(name, spec), []).append(name)
+    if only is not None and only not in providers:
+        raise HTTPException(404, f"no lane uses the provider '{only}'")
+    history = history_from_tasks(task_store.load_tasks(), cfg.routing.history_exclude)
+    if cfg.routing.history:
+        history += history_from_grid(Path(_expand(cfg.routing.history)), cfg.routing.history_exclude)
+    since = time.time() - 7 * 86400
+    week = [a for a in history if a.at >= since and a.lane in lanes]
+    settings = load_settings()
+    coordinator = _coordinator()
+    entries, summary = [], dict.fromkeys(budget.KINDS, 0)
+    for provider, names in sorted(providers.items()):
+        cost, own_login, _ = budget.provider_facts(provider, lanes)
+        policy, reason, is_default = budget.effective_policy(provider, cost, own_login, settings=settings,
+                                                             coordinator=coordinator)
+        default = budget.default_policy(provider, cost, own_login, budget.coordinator_provider(coordinator))[0]
+        kind = budget.provider_kind(cost, own_login)
+        ran = [a for a in week if a.lane in names]
+        summary[kind] += len(ran)
+        blocks = [lane_block_info(n) for n in names]
+        until, why = max(blocks) if blocks else (0, "")
+        last = next((e for e in reversed(settings.budget_log) if e.get("provider") == provider), None)
+        entries.append({
+            "provider": provider, "policy": policy, "default": default, "is_default": is_default,
+            "reason": reason, "lanes": sorted(names), "cost": cost, "own_login": own_login, "kind": kind,
+            "week": {"tasks": len(ran), "passed": sum(a.passed for a in ran)},
+            "resting_until": until, "resting_reason": why if until else "",
+            "last_change": {k: last.get(k) for k in ("at", "by", "reason", "from", "to")} if last else None,
+        })
+    if only is not None:
+        return next(e for e in entries if e["provider"] == only)
+    return {"policies": list(budget.POLICIES), "kinds": list(budget.KINDS), "providers": entries,
+            "summary": summary}
+
+
+def _coordinator() -> Optional[str]:
+    """Who coordinates now (the grid runner's setting with the grid backend), for the defaults."""
+    try:
+        return backend().coordinators()["current"]
+    except Exception:  # noqa: BLE001 - no coordinator known: the defaults without one
+        logging.getLogger("fleet.api.app").warning("budget: coordinator unknown", exc_info=True)
+        return None
+
+
+def _budget_written() -> None:
+    global _current_settings
+    _current_settings = load_settings()
+
+
+@app.get("/api/fleet/budgets")
+def get_budgets():
+    """Per provider: its policy (the operator's or the recommended default), why, its kind, lanes
+    and this week's measured tasks; `policies` lists the choices loosest first, `kinds` the kinds in
+    the order to show them (local, subscription, free, paid per use), `summary` the week's tasks per kind."""
+    return _budget_view()
+
+
+class BudgetRequest(BaseModel):
+    policy: str = Field(max_length=32)
+    reason: str = Field(default="", max_length=200)
+
+
+@app.put("/api/fleet/budgets/{provider}")
+def put_budget(provider: str, req: BudgetRequest):
+    """Dashboard: set a provider's policy, either way."""
+    _budget_view(provider)                                 # 404 for a provider no lane uses
+    if req.policy not in budget.POLICIES:
+        raise HTTPException(422, f"unknown policy '{req.policy}' (one of: {', '.join(budget.POLICIES)})")
+    budget.set_policy(provider, req.policy, req.reason.strip() or "set in the dashboard", by="dashboard")
+    _budget_written()
+    return _budget_view(provider)
+
+
+@app.delete("/api/fleet/budgets/{provider}")
+def delete_budget(provider: str):
+    """Dashboard: back to the recommended default."""
+    _budget_view(provider)
+    budget.reset_policy(provider, by="dashboard")
+    _budget_written()
+    return _budget_view(provider)
+
+
+@app.post("/api/fleet/budgets/{provider}/tighten")
+def tighten_budget(provider: str, req: BudgetRequest):
+    """Coordinator (MCP): only a stricter policy than the one in effect, default included; a
+    reason is required. Anything else is refused with 409 and changes nothing."""
+    current = _budget_view(provider)["policy"]
+    try:
+        budget.tighten_policy(provider, req.policy, req.reason.strip(), by="mcp", coordinator=_coordinator())
+    except ValueError as e:
+        raise HTTPException(409, f"refused: {e}; the policy stays '{current}'. Only the operator can "
+                                 "loosen a policy, in the dashboard.") from e
+    _budget_written()
+    return {**_budget_view(provider), "previous": current}
+
+
 # ── ISSUE INTAKE ──
 
 def intake_service():
@@ -758,7 +880,7 @@ def pause_intake(project: str, req: IntakePauseRequest):
     global _current_settings
     project = _intake_project(project)
     paused = [p for p in _current_settings.intake_paused if p != project] + ([project] if req.paused else [])
-    _current_settings = _current_settings.model_copy(update={"intake_paused": paused})
+    _current_settings = load_settings().model_copy(update={"intake_paused": paused})
     save_settings(_current_settings)
     return {"projects": intake_service().status()}
 

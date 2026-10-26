@@ -45,12 +45,14 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Set, Tuple
 
-from fleet.core.config import LaneSpec, ModelEndpoint
+from fleet.core.budget import effective_policy, lane_provider, provider_facts
+from fleet.core.config import LaneSpec, ModelEndpoint, harness_binary
 from fleet.core.quota import (
     is_lane_quota_throttled,
     lane_block_info,
     lane_blocked_until,
 )
+from fleet.core.settings import load_settings
 
 MIN_CATEGORY_ATTEMPTS = 5
 PRIOR_WEIGHT = 2          # the fleet's average counts as this many attempts of a lane
@@ -61,8 +63,6 @@ COST_WEIGHT = {"local": 1.0, "free": 1.0, "paid": 3.0}
 # (a push, a merge or a rebase onto a moved main is not the lane's doing).
 _SUCCESS = ("success", "completed", "merged", "landed", "pr_merged", "pr_opened", "pr_updated",
             "pushed", "push_failed", "merge_failed", "rebase_failed")
-_BINARIES = {"claude-code": "claude", "opencode": "opencode", "goose": "goose", "pi": "pi", "aider": "aider",
-             "agy": "agy"}
 
 
 @dataclass(frozen=True)
@@ -88,6 +88,7 @@ class Choice:
     block_reason: str = ""
     full: bool = False    # running max_parallel tasks already
     hang_rate: float = 0.0            # smoothed share of attempts that ran until the timeout
+    policy: str = "normal"           # the budget policy of the lane's provider (fleet.core.budget)
 
     def as_dict(self) -> Dict:
         return asdict(self)
@@ -220,8 +221,12 @@ def running_lanes() -> Dict[str, int]:
 class Router:
     def __init__(self, lanes: Dict[str, LaneSpec], history: Iterable[Attempt] = (),
                  unavailable: Iterable[str] = (), spool_dir: Optional[Path] = None,
-                 live: bool = True, running: Optional[Dict[str, int]] = None):
+                 live: bool = True, running: Optional[Dict[str, int]] = None,
+                 coordinator: Optional[str] = None):
         self.lanes = lanes
+        # who coordinates (budget defaults keep its own subscription in reserve); None: the
+        # dashboard's setting. The grid runner keeps its own and passes it.
+        self.coordinator = coordinator
         # tasks running per lane for max_parallel: this process's own, unless the caller
         # knows better (the grid backend counts the runner's tasks)
         self.running = running
@@ -300,19 +305,44 @@ class Router:
             return False
         return spec.private or not sensitive
 
+    def policies(self) -> Dict[str, str]:
+        """Lane -> budget policy of its provider, the one effective_policy the API shows (the
+        provider's facts over all its lanes), with the settings read once."""
+        settings = load_settings()
+        by_provider: Dict[str, str] = {}
+        out = {}
+        for lane, spec in self.lanes.items():
+            provider = lane_provider(lane, spec)
+            if provider not in by_provider:
+                cost, own_login, _ = provider_facts(provider, self.lanes)
+                by_provider[provider] = effective_policy(provider, cost, own_login, settings=settings,
+                                                         coordinator=self.coordinator)[0]
+            out[lane] = by_provider[provider]
+        return out
+
     def rank(self, category: str = "", sensitive: bool = False, exclude: Sequence[str] = (),
-             include_blocked: bool = False) -> List[Choice]:
+             include_blocked: bool = False, explicit: str = "") -> List[Choice]:
+        """Lanes for a task, best first. A lane whose provider is `manual` is left out unless it is
+        the *explicit* lane the caller chose (eligibility still applies to it); `reserve` lanes
+        come after every other lane. Left-out lanes are in `self.skipped` with the reason."""
+        policies = self.policies()
+        self.skipped: Dict[str, str] = {}
         out = []
         for lane, spec in self.lanes.items():
             if lane in exclude:
                 continue
+            policy = policies[lane]
             until, reason = lane_block_info(lane, self.spool_dir) if self.live else (0, "")
             if until:
                 if include_blocked:
                     p, n, basis = self.estimate(lane, category)
-                    out.append(Choice(lane, 0.0, round(p, 4), n, basis, blocked_until=until, block_reason=reason))
+                    out.append(Choice(lane, 0.0, round(p, 4), n, basis, blocked_until=until, block_reason=reason,
+                                      policy=policy))
                 continue
             if not self.eligible(lane, category, sensitive):
+                continue
+            if policy == "manual" and lane != explicit:
+                self.skipped[lane] = f"skipped: {lane_provider(lane, spec)} manual"
                 continue
             p, n, basis = self.estimate(lane, category)
             score = p / COST_WEIGHT[spec.cost]
@@ -322,8 +352,9 @@ class Router:
                 score *= THROTTLED_FACTOR
             busy = (self.running if self.running is not None else _running).get(lane, 0)
             full = self.live and bool(spec.max_parallel) and busy >= spec.max_parallel
-            out.append(Choice(lane, round(score, 4), round(p, 4), n, basis, full=full, hang_rate=round(hang, 3)))
-        return sorted(out, key=lambda c: (c.full, -c.score, self.lane_order.get(c.lane, 999)))
+            out.append(Choice(lane, round(score, 4), round(p, 4), n, basis, full=full, hang_rate=round(hang, 3),
+                              policy=policy))
+        return sorted(out, key=lambda c: (c.policy == "reserve", c.full, -c.score, self.lane_order.get(c.lane, 999)))
 
     def blocked_lanes(self) -> Dict[str, Dict[str, Any]]:
         """Returns lanes currently blocked by quota/rate-limits with until and reason."""
@@ -471,7 +502,8 @@ def rank_pairs(
 
 
 def rank_active(active: Sequence[str], category: str = "", sensitive: bool = False,
-                exclude: Sequence[str] = (), running: Optional[Dict[str, int]] = None) -> List[Choice]:
+                exclude: Sequence[str] = (), running: Optional[Dict[str, int]] = None,
+                coordinator: Optional[str] = None) -> List[Choice]:
     """The router's ranking among the lanes another executor (the grid runner) has active: the
     lanes of fleet.toml (retired models replaced by their successors) that it runs, learned from
     routing.history without routing.history_exclude, dead lanes left out. The grid backend picks
@@ -487,13 +519,13 @@ def rank_active(active: Sequence[str], category: str = "", sensitive: bool = Fal
                if cfg.routing.history else [])
     since = lane_health.fresh_since(cfg)
     history = [a for a in history if a.lane not in since or a.at >= since[a.lane]]
-    return Router(lanes, history, lane_health.dead_lanes(cfg), running=running or {}).rank(
+    return Router(lanes, history, lane_health.dead_lanes(cfg), running=running or {}, coordinator=coordinator).rank(
         category, sensitive=sensitive, exclude=exclude)
 
 
 def missing_clis(lanes: Dict[str, LaneSpec]) -> Set[str]:
     """Lanes whose first step's CLI is not installed: they cannot run here."""
-    return {lane for lane, spec in lanes.items() if not shutil.which(_BINARIES[spec.steps[0].harness])}
+    return {lane for lane, spec in lanes.items() if not shutil.which(harness_binary(spec.steps[0].harness))}
 
 
 # ── history ───────────────────────────────────────────────────────────────────
