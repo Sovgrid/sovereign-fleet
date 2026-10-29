@@ -174,7 +174,7 @@ async def test_execute_task_puts_memory_prefix_first(monkeypatch, tmp_path):
     assert body[:3] == [sys.executable, "-m", "fleet.core.sandbox"]
     assert "--" in body
     dash = body.index("--")
-    assert body[dash + 1:] == ["opencode", "run", "--auto", "Fix the bug"]
+    assert body[dash + 1:] == ["opencode", "run", "--auto", "--format", "json", "Fix the bug"]
 
 
 @pytest.mark.asyncio

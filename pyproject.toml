@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sovereign-fleet"
-version = "0.6.7"
+version = "0.6.8"
 description = "Task queue, Landlock sandbox and dashboard for running coding-agent CLIs on your own machine"
 readme = "README.md"
 requires-python = ">=3.11"

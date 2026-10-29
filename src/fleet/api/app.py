@@ -743,6 +743,34 @@ def check_lanes(req: Optional[CheckLanesRequest] = None):
                                              for n, r in probes.items()}, **_lanes_view()}
 
 
+# ── LEDGER (reviews/specs/usage-ledger.md) ──
+
+def _ledger_view() -> Dict[str, Any]:
+    """This week's token usage and list-price range; never raises."""
+    from fleet.core.catalog import load as catalog_load
+    from fleet.core import ledger as _ledger
+    cfg = load_config()
+    tasks = [{"id": t.id, "status": t.status, "created_at": t.created_at,
+              "result": t.result} for t in backend().list_tasks()]
+    ref = load_settings().ledger_reference or cfg.ledger.reference
+    price: Optional[Dict[str, float]] = None
+    if ref:
+        try:
+            catalog = catalog_load(cfg.root, cfg.routing.catalog, refresh=False)
+            price = _ledger.reference_price(catalog, ref)
+        except Exception:  # noqa: BLE001 - broken catalog gives price None, never a 500
+            pass
+    view = _ledger.week_ledger(tasks, _ledger.lane_classes(cfg.lanes), price, ref, time.time())
+    return view
+
+
+@app.get("/api/fleet/ledger")
+def get_ledger():
+    """This week's token usage, list-price range and paid amount: what the fleet's work
+    would cost at a reference model's API list prices, next to what was actually paid."""
+    return _ledger_view()
+
+
 # ── BUDGET POLICIES (reviews/specs/budget-policies.md) ──
 # Policies, defaults and the provider of a lane come from fleet.core.budget only. The dashboard
 # may move a policy either way; a coordinator (MCP) may only tighten it.

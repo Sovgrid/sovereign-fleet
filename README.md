@@ -27,9 +27,9 @@ Sovereign Fleet runs coding-agent CLIs (**Goose**, **Claude Code**, **OpenCode**
 
 - **Unattended without Docker overhead (`Landlock ABI 6 + seccomp`):** Agent CLIs run with unattended flags (`--no-session`, `acceptEdits`, `--auto`, `--yes-always`) because the kernel restricts filesystem writes to the task worktree, blocks `~/.ssh` and `AF_UNIX` sockets, and enforces an outbound TCP port allow-list.
 - **Decoupled `(Harness × Model)` Router with Quota Windows:** Routes across local model servers (vLLM, SGLang, Ollama), free cloud tiers, and subscription CLIs alike. Thompson sampling ranks compatible `(harness, model)` pairs by cost-weighted minutes per correct result (`bakeoff_priors.json`), automatically rests rate-limited lanes until their quota reset, and replaces retired models with probed same-family successors.
-- **Spend Quota Deliberately (Budgets):** Local models, free tiers, your own subscriptions and paid-per-use providers each get a policy (`normal`, `reserve`, `manual`) with sensible defaults; the coordinator's own subscription stays in reserve, and a coordinator agent can tighten a policy over MCP but never loosen one.
+- **Spend Quota Deliberately (Budgets):** Local models, free tiers, your own subscriptions and paid-per-use providers each get a policy (`normal`, `reserve`, `manual`) with sensible defaults; the coordinator's own subscription stays in reserve, and a coordinator agent can tighten a policy over MCP but never loosen one. A weekly ledger shows the tokens your agents used and what they would have cost at a reference model's API list prices.
 - **Verify Before Claim (Sandboxed Quality Gates):** An agent's report is a claim, not proof. Every run must pass scope checks (`allowed_paths` + companion tests), AST syntax checks, the repository's own gate (`scripts/verify.sh` or `pytest`), and the task gate inside a credential-free sandbox before merging or opening a PR.
-- **Steer from Anywhere:** Dispatch and approve tasks from the installable mobile Web PWA (`/#token=...`), from coordinator agents via the 14-tool **MCP server**, by replying `!fleet approve <id>` in **Matrix**, or by labelling **GitHub / Gitea issues** with a ```` ```fleet ```` contract block.
+- **Steer from Anywhere:** Dispatch and approve tasks from the installable mobile Web PWA (`/#token=...`), from coordinator agents via the 15-tool **MCP server**, by replying `!fleet approve <id>` in **Matrix**, or by labelling **GitHub / Gitea issues** with a ```` ```fleet ```` contract block.
 
 ### In our own use
 
@@ -59,6 +59,7 @@ Status: **alpha** (the current release is on [PyPI](https://pypi.org/project/sov
 | **Your own subscriptions** | CLIs that log in with your account, not an API key. agy uses its own Google login and model catalog. Claude Code with a lane token (`key_env = "CLAUDE_CODE_OAUTH_TOKEN"`, one year, from `claude setup-token`) runs in its own config directory under the fleet root, so an agent never sees your `~/.claude`. Cursor gets a user key in `CURSOR_API_KEY`, because its keyring login cannot refresh inside the sandbox; a free plan runs only `auto`, and the log names the model Cursor picked. A used-up window rests the lane until its reset. |
 | **Router (Lanes & Harness × Model Pairs)** | Supports both named lanes (`[lanes.<name>]`) and decoupled `(harness, model)` pairs (`[models.<name>]` + `HarnessPlugin`). Compatibility is computed from declared capabilities; Thompson sampling ranks pairs by cost-weighted minutes per correct result (seeded from `routing.priors_file` or `bakeoff_priors.json`), while named lanes rank by measured pass rate per task category over cost; a failed attempt hands the same worktree to the next choice with one repair pass. Sensitive tasks (`is_sensitive`) stay strictly on private sovereign endpoints. A provider limit rests the lane (120 s, or until midnight US/Pacific for a daily quota); `max_parallel` keeps a full lane behind lanes with room; a local lane runs only while its model server answers and can load its model on demand. `fleet router shadow` replays a grid runner's history against its dispatcher; each pick is logged to `<root>/router_decisions.jsonl`. |
 | **Budgets** | How much of each provider's quota the fleet may use, set per provider in Settings > Budgets, grouped by what it costs you (on this machine, subscriptions, free tiers and free plans, paid per use): `normal` (ranked by measured quality), `reserve` (only after every normal lane) or `manual` (never picked automatically; a lane you name still runs, within its usual limits). Defaults are derived, never stored: paid per use is `manual`, a subscription is `normal` unless it is the coordinator's own (`reserve`, so the coordinator keeps its quota), free and local are `normal`. Only your deviations are stored, each with who, when and why. A coordinator can tighten a policy over MCP (`fleet_tighten_budget`) but never loosen one. |
+| **Usage ledger** | Every agent run's tokens, read from the CLI's own output: OpenCode (`--format json`), goose (`--output-format stream-json`), Aider and the Cursor CLI; the JSON is turned back into readable text for the log and the loop check. Claude Code, Pi and agy are not measured yet. Each task keeps its runs (`usage_runs`: lane, harness, time, tokens) and their sum (`usage`). The ledger adds up the last seven days: tokens per cost class, tokens of failed attempts, what you paid where a provider reports cost, and a list-price range at a reference model's API prices from the models.dev catalog (the low end prices input of runs without cache reads, such as a local vLLM, at the cache-read price). Set the reference as `ledger_reference` in settings.json or `[ledger] reference` in fleet.toml (settings win); see it with `fleet ledger`, `GET /api/fleet/ledger`, the MCP tool `fleet_get_ledger` or the line at the top of Settings > Budgets. |
 | **Lane health** | `fleet lanes check`, and daily in the daemon (`routing.health_hour`): one tiny request per API lane with its real key, `probe_url` for local lanes, `opencode models` for opencode lanes. A dead lane (key rejected, credit used up) leaves the ranking until a check passes. A retired model (HTTP 410, or gone from the provider's list and deprecated on [models.dev](https://models.dev)) is replaced by the newest same-family successor that passes the probe; without one the lane stays out. New free models no lane uses are listed, and with `routing.discover` become lanes. The dashboard and the MCP tools `fleet_system_health` and `fleet_lane_health` show why and since when. |
 | **Issue intake & Matrix** | Per project (`[projects.<name>.intake]`): issues of Gitea (API) or GitHub (`gh`) become tasks. Only a listed author's issue with a valid ```` ```fleet ```` block runs unattended; everything else waits for an approval. One task per issue; the result (pull request with `Closes #n`, landed commit, or the failing gate) goes back to the issue. With `[matrix]` enabled in `fleet.toml`, `MatrixOutputPlugin` posts structured receipts, autopsies, and `[APPROVAL REQUIRED]` prompts to a Matrix room and polls for `!fleet approve|reject|retry|status` replies. |
 | **Goose Recipes & Evals** | Goose recipes (recipe format `1.0.0`) in `recipes/*/recipe.yaml` (`fleet-ab-proposal-eval/recipe.yaml`, `fleet-self-improvement/recipe.yaml`, `fleet-bench-runner/recipe.yaml`) for deterministic A/B proposal evaluation, self-improvement loops, and benchmark execution. Loaded on demand via `goose run --recipe` with zero context overhead on regular tasks ([docs/EVALS_AND_BENCHMARKS.md](https://github.com/Sovgrid/sovereign-fleet/blob/main/docs/EVALS_AND_BENCHMARKS.md)). |
@@ -86,6 +87,8 @@ what it can reach instead of trusting it.
     local model ports, and the proxy reaches only allowlisted names (package registries, GitHub,
     the run's own model provider, `allowed_domains`). An agent holding an OpenRouter key can then
     reach OpenRouter and nothing else, and every attempt is a line in `<root>/egress/<task>.jsonl`.
+    An allowed name must resolve to public addresses only, and the proxy connects to the address it
+    checked, so a name pointing into the LAN (or one that changes its answer) is refused.
   - Landlock scope: no signals to processes outside, no abstract unix sockets.
   - `no_new_privs`: `sudo` and other setuid programs do not elevate.
   - seccomp: `socket(AF_UNIX)` and `io_uring_setup` fail, so an agent cannot reach the session
@@ -201,6 +204,7 @@ fleet config check     # repos exist, TLS files readable, token file private, no
 | `[matrix]` | `enabled`, `homeserver`, `room_id`, `token_file`, `poll_interval_sec`: Matrix notifications and approvals |
 | `[plugins]` | `credentials`: a credential plugin (`package.module:Class` or `entrypoint`) |
 | `[approval]` | `assess_url` (OpenAI-compatible base URL; empty: off), `assess_model`, `assess_key_env` (optional env var), `assess_timeout` (default 30): risk assessment for tasks waiting approval |
+| `[ledger]` | `reference`: the "provider/model" whose API list prices the ledger uses (`ledger_reference` in settings.json wins) |
 | `[routing]` | `max_lanes`, `repair`, `history`, `switch_command`, `switch_local`, `health_hour`, `catalog`, `discover`, `priors` |
 | `[lanes.<name>]` | a lane: `cost`, `private`, `categories`, `provider`, `key_env`, `key_file`, `max_parallel`, `probe_url`, `switch_to`, `steps` (harness, model, args) |
 | `[models.<name>]` | reusable model endpoint: `provider`, `model_id`, `base_url`, `key_env`, `key_file`, `cost`, `private`, `probe_url`, `context`, `tool_calling`, `reasoning`, `harnesses` |
@@ -324,6 +328,7 @@ All routes except `/`, `/health`, `/manifest.json`, `/sw.js` and `/static/*` nee
 | `POST /api/fleet/tasks/archive-completed` | Archive all completed |
 | `GET/POST /api/fleet/settings`, `POST /api/fleet/settings/reset` | Validated, persisted settings (budget policies change only through the budget routes; reset keeps them) |
 | `GET /api/fleet/budgets`, `PUT/DELETE /api/fleet/budgets/{provider}` | Per provider: policy, recommended default and why, lanes, this week's measured tasks, resting state, last change; set a policy either way, or back to the default |
+| `GET /api/fleet/ledger` | This week's tokens, list-price range at the reference model, paid amount, failed-attempt tokens and tokens per cost class |
 | `POST /api/fleet/budgets/{provider}/tighten` | Only a stricter policy than the one in effect, reason required; anything else is 409 and changes nothing (what the MCP tool calls) |
 | `GET /api/fleet/status/health` | Task KPIs, sandbox state, installed harness CLIs, lane health, all measured |
 | `GET /api/fleet/lanes`, `POST /api/fleet/lanes/check` | Lane health of the lanes the fleet runs (successors, discovered lanes) and new free models; check now (stores the outcome) |
@@ -361,7 +366,10 @@ extensions:
     timeout: 300
 ```
 
-It reads the token like the daemon does (`FLEET_API_TOKEN` or the token file). Tools:
+It reads the token like the daemon does (`FLEET_API_TOKEN` or the token file). Over `https` a host name
+gets full certificate verification; a daemon reached by IP address (its certificate names a host, not
+the IP) is pinned to exactly the daemon's own certificate, from `FLEET_TLS_CERT` or `daemon.tls_cert`,
+and refused without one. `FLEET_INSECURE_SKIP_VERIFY=1` switches the check off. Tools:
 
 | Tool | What it does |
 | :--- | :--- |
@@ -375,6 +383,7 @@ It reads the token like the daemon does (`FLEET_API_TOKEN` or the token file). T
 | `fleet_clear_spool` | Purge (local) or archive (grid) finished tasks |
 | `fleet_get_budgets` | Per provider: budget policy, the recommended default and this week's tasks |
 | `fleet_tighten_budget` | Make a provider's budget policy stricter (loosening only in the dashboard) |
+| `fleet_get_ledger` | This week's tokens and what they would have cost at the reference model's API list prices |
 
 Errors come back as tool errors (`isError`) with the daemon's reason.
 
@@ -448,7 +457,9 @@ that shows when it is reached:
 Shipped recently: stall and loop detection end a stuck attempt early (0.6.2/0.6.3), smart
 approval rates risk on the approval card (0.6.3), `egress = "allowlist"` reaches the internet by
 name through a per-run proxy (0.6.5), and budget policies per provider with a coordinator that can
-only tighten them (0.6.6). Measured and not needed: stopping abandoned generations, since
+only tighten them (0.6.6), TLS pinning for the MCP client and an egress check against private
+addresses after a security audit (0.6.7), and a usage ledger with every agent run's tokens at API
+list prices (0.6.8). Measured and not needed: stopping abandoned generations, since
 vLLM aborts a request as soon as the agent's connection closes.
 
 Next, each behind a measurement:

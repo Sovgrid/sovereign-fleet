@@ -27,6 +27,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fleet.core.config import _expand, builtin_harnesses, load_config
 from fleet.core.taskstore import FleetTask, TaskStore, TransitionError
+from fleet.core.usage import summarize_runs
 
 logger = logging.getLogger("fleet.core.backends")
 
@@ -386,6 +387,7 @@ class GridBackend:
         for key in ("autopsy", "tried_lanes", "runtime_s", "handover"):
             if t.get(key):
                 result[key] = t[key]
+        result.update(summarize_runs(t.get("usage")))
         try:
             created = float(t.get("created_at") or 0)
         except (TypeError, ValueError):

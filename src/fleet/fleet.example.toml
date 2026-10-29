@@ -57,6 +57,11 @@ token_file = ""                   # a token with repository write access (issues
 # It is used only while the dashboard setting "Credential plugin" is on.
 credentials = ""                  # (FLEET_PLUGINS_CREDENTIALS)
 
+[ledger]
+# The "provider/model" whose API list prices the weekly ledger uses (models.dev catalog).
+# `ledger_reference` in settings.json wins over this value.
+# reference = "anthropic/claude-sonnet-5-5"
+
 [routing]
 max_lanes = 3                     # lanes tried per task before it fails
 repair = true                     # one repair pass with the failure, on the same lane

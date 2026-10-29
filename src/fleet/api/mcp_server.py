@@ -264,6 +264,13 @@ TOOLS: List[Dict[str, Any]] = [
             "reason": {"type": "string", "description": "Why, for the operator (1 to 200 characters)."},
         }, "required": ["provider", "policy", "reason"]},
     },
+    {
+        "name": "fleet_get_ledger",
+        "description": ("Read the fleet's usage ledger: tokens used this week, what that work would have "
+                        "cost at a reference model's API list prices, and what was actually paid. "
+                        "Measured coverage (how many of how many tasks) and by-class breakdown too."),
+        "inputSchema": {"type": "object", "properties": {}},
+    },
 ]
 
 
@@ -504,6 +511,12 @@ def tool_tighten_budget(args: Dict[str, Any]) -> str:
     return f"Tightened {provider}: {e.get('previous')} -> {e.get('policy')}.\n{_budget_line(e)}"
 
 
+def tool_ledger(args: Dict[str, Any]) -> str:
+    from fleet.core import ledger as _ledger
+    view = _api_request("GET", "/api/fleet/ledger")
+    return "\n".join(_ledger.format_ledger(view))
+
+
 HANDLERS: Dict[str, Callable[[Dict[str, Any]], str]] = {
     "fleet_dispatch_task": tool_dispatch,
     "fleet_list_tasks": tool_list,
@@ -519,6 +532,7 @@ HANDLERS: Dict[str, Callable[[Dict[str, Any]], str]] = {
     "fleet_clear_spool": tool_clear,
     "fleet_get_budgets": tool_budgets,
     "fleet_tighten_budget": tool_tighten_budget,
+    "fleet_get_ledger": tool_ledger,
 }
 assert set(HANDLERS) == {t["name"] for t in TOOLS}
 _SCHEMAS = {t["name"]: t["inputSchema"] for t in TOOLS}

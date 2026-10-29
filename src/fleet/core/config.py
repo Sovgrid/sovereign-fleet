@@ -112,6 +112,27 @@ class ApprovalSection(_Strict):
     assess_timeout: int = Field(30, ge=1, le=300)  # seconds
 
 
+class LedgerSection(_Strict):
+    """Optional reference model for the list-price ledger.
+
+    When set the ledger shows what this week's tokens would have cost at the
+    reference model's list prices.  The value must be "provider/model", meaning it
+    contains a "/" with text on both sides."""
+    reference: Optional[str] = None
+
+    @field_validator("reference")
+    @classmethod
+    def _reference(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        if "/" not in v:
+            raise ValueError("reference must be 'provider/model' (contains '/')")
+        provider, model = v.split("/", 1)
+        if not provider or not model:
+            raise ValueError("reference must be 'provider/model' with text on both sides of '/'")
+        return v
+
+
 class HarnessSection(_Strict):
     """Per-harness configuration from [harnesses.<name>]."""
     binary: str = ""                # override the class binary (empty: use the class default)
@@ -269,6 +290,7 @@ class FleetConfig(_Strict):
     lanes: Dict[str, LaneSpec] = Field(default_factory=dict)
     models: Dict[str, ModelEndpoint] = Field(default_factory=dict)
     harnesses: Dict[str, HarnessSection] = Field(default_factory=dict)
+    ledger: LedgerSection = Field(default_factory=LedgerSection)
     projects: Dict[str, Project] = Field(default_factory=dict)
 
     @field_validator("projects")

@@ -454,6 +454,10 @@ def main(argv: Optional[list] = None) -> None:
     intake_sync.add_argument("--project", default=None)
     intake_sync.add_argument("--dry-run", action="store_true", help="Show what would be queued; change nothing")
 
+    # ledger
+    ledger_parser = subparsers.add_parser("ledger", help="Read the fleet's weekly usage ledger")
+    ledger_parser.add_argument("--json", action="store_true", help="Output raw JSON")
+
     args = parser.parse_args(argv)
 
     if args.subcommand == "config":
@@ -464,6 +468,16 @@ def main(argv: Optional[list] = None) -> None:
         sys.exit(lanes_command(args))
     if args.subcommand == "intake":
         sys.exit(intake_command(args))
+    if args.subcommand == "ledger":
+        from fleet.core import ledger as _ledger
+        from fleet.api.app import _ledger_view
+        view = _ledger_view()
+        if getattr(args, "json", False):
+            print(json.dumps(view, indent=2))
+        else:
+            for line in _ledger.format_ledger(view):
+                print(line)
+        return 0
     if args.subcommand == "daemon":
         cfg = fleet_config.load_config().daemon
         run_daemon(

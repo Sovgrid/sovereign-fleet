@@ -377,6 +377,31 @@ def test_grid_lanes_get_the_dashboards_roster_categories():
     assert grid_category({"provider": "x", "cost": "", "category": "free_tier"}) == "subscription"  # no cost: not free
 
 
+def test_the_runners_usage_runs_become_result_usage():
+    from fleet.core.usage import summarize_runs as _usage_of
+    runs = [{"lane": "nim_glm", "harness": "aider", "at": 1, "usage": None},
+            {"lane": "local_qwen", "harness": "goose", "at": 2,
+             "usage": {"input": 100, "output": 5, "cache_read": 0, "cache_write": 0, "reported_cost": None}},
+            {"lane": "x", "harness": "opencode", "at": 3,
+             "usage": {"input": 10, "output": 1, "cache_read": 2, "cache_write": 0, "reported_cost": 0.5}},
+            "garbage"]
+    out = _usage_of(runs)
+    assert len(out["usage_runs"]) == 3
+    assert out["usage"] == {"input": 110, "output": 6, "cache_read": 2, "cache_write": 0, "reported_cost": 0.5}
+    assert _usage_of([{"lane": "a", "usage": None}]) == {"usage_runs": [{"lane": "a", "usage": None}]}
+    assert _usage_of(None) == {} and _usage_of("x") == {} and _usage_of([]) == {}
+
+
+@pytest.mark.asyncio
+async def test_the_task_api_shows_the_measured_usage(grid):
+    async with _client() as c:
+        tid = (await c.post("/api/fleet/tasks", json={"text": "x"})).json()["id"]
+        _dispatcher().TASKS[-1]["usage"] = [{"lane": "local_qwen", "harness": "goose", "at": 1,
+                                             "usage": {"input": 7, "output": 1}}]
+        t = next(t for t in (await c.get("/api/fleet/tasks")).json() if t["id"] == tid)
+    assert t["result"]["usage"]["input"] == 7 and t["result"]["usage_runs"][0]["harness"] == "goose"
+
+
 def test_a_grid_task_names_the_issue_it_came_from():
     from fleet.core.backends import _issue_of
     text = "Fix it\n\n(From issue owner/repo#1: http://gitea.local/owner/repo/issues/1)"

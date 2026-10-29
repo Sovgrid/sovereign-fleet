@@ -166,6 +166,29 @@ def test_a_task_that_passed_after_a_retry_shows_no_old_failure(api):
     assert "Commit: abc" in text and "Why it failed" not in text
 
 
+def test_fleet_get_ledger(api):
+    routes, calls = api
+    routes[("GET", "/api/fleet/ledger")] = {
+        "tokens": {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0, "total": 12345},
+        "tasks": 5, "measured": 3, "runs": 10, "runs_measured": 4,
+        "failed_attempt_tokens": 0,
+        "by_class": {"local": 10000, "free": 2000, "subscription": 0, "paid": 345, "unknown": 0},
+        "paid_usd": 0.05,
+        "list_price_usd": {"low": 0.01, "high": 0.30},
+        "reference": "anthropic/claude-sonnet-5-5",
+        "days": 7,
+    }
+    text, err = call("fleet_get_ledger")
+    assert not err
+    assert "This week: 12.3 k tokens" in text
+    assert "measured on 3 of 5 tasks" in text
+    assert "anthropic/claude-sonnet-5-5 list prices: $0.01 to $0.30" in text
+    assert "Paid: $0.05." in text
+    assert "By class:" in text
+    assert ("POST", "/api/fleet/ledger", None) in calls or \
+           ("GET", "/api/fleet/ledger", None) in calls
+
+
 # ── TLS: an IP address is pinned to the daemon's own certificate ─────────────
 
 _PEM = Path(__file__).parent / "fixtures" / "selfsigned.pem"

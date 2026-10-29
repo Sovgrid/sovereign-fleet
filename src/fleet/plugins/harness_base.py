@@ -17,6 +17,7 @@ from fleet.core.gates import kill_group
 from fleet.core.memlimit import GroupWatch, scope_prefix
 from fleet.core.models import ModelAdapterResult, ModelEndpoint
 from fleet.core.quirks import resolve_opencode_model
+from fleet.core import usage as _usage
 from fleet.core.egress_proxy import EgressProxy
 from fleet.core.sandbox import (SandboxUnavailable, egress_allowlist, egress_audit_path, egress_env,
                                 make_sandbox, policy_for_worktree, sandbox_disabled)
@@ -94,6 +95,8 @@ class CliHarness(HarnessPlugin):
     # Loop detection default: same output repeating without worktree change.
     # 0 switches it off. Default 300 s, capped at the run timeout.
     default_loop_seconds: int = 300
+    # fleet.core.usage parser for this CLI's output ("" = its output carries no token usage).
+    usage_format: str = ""
 
     def __init__(self, _section=None) -> None:  # noqa: ANN001 - HarnessSection, injected by registry
         self._section = _section
@@ -341,7 +344,7 @@ class CliHarness(HarnessPlugin):
                         loop_read[idx] = len(buf)
                         *lines, loop_tail[idx] = chunk.split(b"\n")
                         for raw in lines:
-                            line = raw.decode(errors="replace").strip()
+                            line = (self._loop_line(raw.decode(errors="replace")) or "").strip()
                             if len(line) >= 8:
                                 loop_events.append((now_ts, line))
                                 loop_counts[line] = loop_counts.get(line, 0) + 1
@@ -372,8 +375,21 @@ class CliHarness(HarnessPlugin):
 
         return bytes(stdout_buf), bytes(stderr_buf)
 
+    def _loop_line(self, line: str) -> Optional[str]:
+        """An output line as the loop check compares it: JSON events differ by timestamp and id,
+        so a harness with JSON output is compared on its readable text (None: nothing to read)."""
+        return _usage.render_event(self.usage_format, line) if self.usage_format else line
+
     def _result(self, exit_code: int, stdout: str, stderr: str) -> Dict[str, Any]:
-        return {"harness": self.name, "exit_code": exit_code, "stdout": stdout, "stderr": stderr}
+        """The run's result. A harness with a usage_format also reports the tokens its output
+        carries (`usage`, None when it carries none) and gets its output back as readable text
+        (reviews/specs/usage-ledger.md U2)."""
+        res = {"harness": self.name, "exit_code": exit_code, "stdout": stdout, "stderr": stderr}
+        if self.usage_format:
+            found = _usage.parse_usage(self.usage_format, stdout)
+            res["usage"] = found.to_dict() if found else None
+            res["stdout"] = _usage.render_text(self.usage_format, stdout)
+        return res
 
 
 def _worktree_fingerprint(worktree_dir: str) -> str:
@@ -492,6 +508,7 @@ class CursorHarness(CliHarness):
     A free plan runs only "auto"; Cursor then picks the model per request and names it in the
     stream's first event, which the result shows (`auto_model`), so it is never a black box."""
     name = "cursor"
+    usage_format = "cursor"
     binary = "agent"
     label = "Cursor"
     description = "Cursor CLI (own account; free plan: Auto only, Cursor picks the model)"
@@ -546,6 +563,7 @@ def cursor_stream_text(stream: str) -> Tuple[str, str]:
 
 class OpenCodeHarness(CliHarness):
     name = "opencode"
+    usage_format = "opencode"
     binary = "opencode"
     label = "opencode"
     description = "OpenCode CLI (local or remote models)"
@@ -572,7 +590,7 @@ class OpenCodeHarness(CliHarness):
         auto_val = (self._section.options.get("auto") if self._section else None)
         auto_str = "--auto" if (auto_val is None or auto_val) else "--no-auto"
         effective = self.effective_binary
-        return [effective, "run", auto_str, *(["-m", model] if model else []), prompt]
+        return [effective, "run", auto_str, "--format", "json", *(["-m", model] if model else []), prompt]
 
 
 _GOOSE_HEADLESS_SYSTEM = (
@@ -585,6 +603,7 @@ _GOOSE_HEADLESS_SYSTEM = (
 
 class GooseHarness(CliHarness):
     name = "goose"
+    usage_format = "goose"
     binary = "goose"
     label = "goose"
     description = "Block Goose CLI with MCP extensions"
@@ -636,6 +655,7 @@ class GooseHarness(CliHarness):
                       "--system", _GOOSE_HEADLESS_SYSTEM]
         parts += ["--max-turns", str(max_turns),
                   "--max-tool-repetitions", str(max_tr),
+                  "--output-format", "stream-json",
                   "--text", prompt]
         return parts
 
@@ -708,6 +728,7 @@ _AIDER_APPLIED = re.compile(r"^Applied edit to ", re.MULTILINE)
 
 class AiderHarness(CliHarness):
     name = "aider"
+    usage_format = "aider"
     binary = "aider"
     label = "aider"
     description = "Aider CLI (the engine commits, not aider)"

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-10-29
+### Added
+- Token usage per agent run, read from the CLI's own output: OpenCode now runs with
+  `--format json`, goose with `--output-format stream-json`, Aider and the Cursor CLI report from
+  their text. The JSON is rendered back to readable lines for the task log and the loop check.
+  Each task keeps `usage_runs` (lane, harness, time, tokens) and the sum in `usage`, in the
+  package engine and through the grid backend alike.
+- Usage ledger for the last seven days: tokens per cost class, tokens of failed attempts, the paid
+  amount and a list-price range at a reference model's API prices (models.dev catalog). Reference
+  as `ledger_reference` in settings.json or `[ledger] reference` in fleet.toml (settings win, so
+  an older MCP server keeps reading the config). `fleet ledger [--json]`, `GET /api/fleet/ledger`,
+  the MCP tool `fleet_get_ledger` and a line at the top of Settings > Budgets.
+
+### Fixed
+- Usage parsing skips a malformed event instead of losing the whole run.
+
 ## [0.6.7] - 2026-10-29
 ### Security
 - MCP server: an `https` daemon URL with an IP address switched certificate verification off. It now

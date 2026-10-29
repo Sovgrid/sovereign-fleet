@@ -299,3 +299,30 @@ harness = "myharness"
     problems = fc.check(fc.load_config())
     unknown_problems = [p for p in problems if "unknown harness" in p]
     assert len(unknown_problems) == 0, f"unexpected unknown harness: {unknown_problems}"
+
+
+def test_ledger_reference_requires_slash(tmp_path):
+    """A reference without '/' is rejected."""
+    _write('''
+[ledger]
+reference = "claude-sonnet-5-5"
+''')
+    with pytest.raises(fc.ConfigError):
+        fc.load_with_sources()
+    _write('''
+[ledger]
+reference = "/claude"
+''')
+    with pytest.raises(fc.ConfigError):
+        fc.load_with_sources()
+
+
+def test_ledger_reference_is_valid(tmp_path):
+    """A proper provider/model reference is accepted."""
+    _write('''
+[ledger]
+reference = "anthropic/claude-sonnet-5-5"
+''')
+    cfg, sources = fc.load_with_sources()
+    assert cfg.ledger.reference == "anthropic/claude-sonnet-5-5"
+    assert "ledger.reference" in sources

@@ -26,6 +26,7 @@ from fleet.core.quota import QuotaLadder, block_lane_until, next_pacific_midnigh
 from fleet.core.receipts import build_receipt, generate_autopsy
 from fleet.core.router import Attempt, Router, lane_finished, lane_started, running_lanes
 from fleet.core.taskstore import FleetTask, TaskStore
+from fleet.core.usage import summarize_runs
 from fleet.core.worktree import WorktreeManager
 from fleet.plugins.base import CredentialPlugin, HarnessPlugin, OutputPlugin
 from fleet.plugins.harness_base import DEFAULT_TIMEOUT_SECONDS
@@ -125,6 +126,7 @@ class FleetEngine:
     ):
         self.repo_path = repo_path
         self.timeout = timeout
+        self._usage_runs: Dict[str, List[Dict[str, Any]]] = {}  # task id -> agent runs (ledger)
         self.project = project      # fleet.toml entry: repo gate, its timeout, dependency links
         self.repo_gate = repo_gate  # run the repository's own check after the agent
         self.providers = providers  # pull request providers by name, overriding the built-in ones
@@ -194,6 +196,14 @@ class FleetEngine:
         # General default -> OpenCode
         return "opencode"
 
+    def _note_usage(self, task: Optional[FleetTask], lane: str, res: Dict[str, Any]) -> None:
+        """One agent run for the ledger, as the grid runner books it: {lane, harness, at, usage},
+        usage None when the harness reported none. Failed runs count too: their tokens were spent."""
+        if task is not None:
+            self._usage_runs.setdefault(task.id, []).append(
+                {"lane": lane, "harness": res.get("harness", ""), "at": int(time.time()),
+                 "usage": res.get("usage")})
+
     async def run_single_task(self, task: FleetTask) -> Dict[str, Any]:
         """Runs one task: worktree, sandboxed harness, GateGuard, then keeps the work.
 
@@ -251,6 +261,7 @@ class FleetEngine:
             if self.task_store.get_task(task.id).status != "cancelled":
                 self.task_store.transition(task.id, "cancelled", allowed_from=("queued", "in_progress"))
         finally:
+            result = {**result, **summarize_runs(self._usage_runs.pop(task.id, []))}
             result = await self._keep_work(task, worktree_dir, result, land_it=(status == "completed"))
             if (result.get("landing") or {}).get("status") in ("pr_opened", "failed"):
                 status = "awaiting_approval"  # a human merges the PR or lands the kept branch
@@ -473,6 +484,7 @@ class FleetEngine:
         else:
             exec_res = await harness.execute_task({"id": task.id, "text": prompt}, worktree_dir,
                                                   timeout=self.timeout)
+        self._note_usage(task, f"pair:{harness_name}/{model_name}" if model_name else harness_name, exec_res)
         if exec_res.get("exit_code") != 0:
             return "failed", exec_res
 
@@ -547,6 +559,7 @@ class FleetEngine:
                                              timeout=self.timeout, model=step.model,
                                              args=step.args, pass_env=[*spec.pass_env, *([spec.key_env] if spec.key_env else [])],
                                              env=env)
+            self._note_usage(task, lane, res)
             res["step"] = {"harness": step.harness, "model": step.model}
             res["steps_tried"] = tried
             if res.get("exit_code") == 0:

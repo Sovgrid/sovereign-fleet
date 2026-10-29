@@ -44,6 +44,11 @@ class FleetSettings(BaseModel):
     budget_policies: Dict[str, str] = Field(default_factory=dict)
     # Audit log of budget policy changes; kept to the last 200 entries.
     budget_log: List[Dict[str, Any]] = Field(default_factory=list)
+    # Usage ledger reference model, "provider/model" (wins over fleet.toml [ledger] reference).
+    # Here and not only in fleet.toml: an older client reading the strict fleet.toml rejects a
+    # section it does not know, while this file's unknown keys are ignored (2026-10-29).
+    # Stored as plain str like budget_policies; the ledger validates it when pricing.
+    ledger_reference: Optional[str] = Field(None, max_length=200)
 
 
 def settings_file() -> Path:

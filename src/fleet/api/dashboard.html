@@ -4007,6 +4007,7 @@
           <span class="panel-badge" id="budgets-hint">…</span>
         </summary>
         <div class="panel-body">
+          <p class="budget-summary ledger-line" id="ledger-line" title="Low: input of runs without reported cache reads priced as cache reads (local engines report none). High: all of it as uncached input."></p>
           <p class="health-meta" id="budgets-explainer">How much of each provider's quota the fleet may use. Normal: the router decides by measured quality. Reserve: only when everything else failed. Manual: never automatic, only when you pick the lane. A change saves at once.</p>
           <p class="budget-summary" id="budgets-summary"></p>
           <div class="budgets-list" id="budgets-list"></div>
@@ -4542,6 +4543,7 @@
       if (tab === 'settings') {
         loadSettings();
         loadBudgets();
+        loadLedger();
       }
     }
 
@@ -4583,6 +4585,7 @@
         if (res.ok) {
           renderCoordinator(await res.json());
           loadBudgets();   // the coordinator's own account changes its budget default
+          loadLedger();
         } else {
           const note = document.getElementById('coord-note');
           if (note) note.textContent = `Not saved (${res.status}).`;
@@ -5876,6 +5879,52 @@
     const budgetPending = {};
     const budgetErrors = {};
 
+    // Ledger (Settings): this week's token usage from GET /api/fleet/ledger.
+    let ledgerData = null;
+
+    function ledgerTokens(n) {
+      if (n < 1000) return String(n);
+      if (n < 1000000) return (n / 1000).toFixed(1).replace(/\.?0+$/, '') + ' k';
+      return (n / 1000000).toFixed(2).replace(/\.?0+$/, '') + ' M';
+    }
+
+    async function loadLedger() {
+      try {
+        const res = await fetch('/api/fleet/ledger');
+        if (!res.ok) return;
+        ledgerData = await res.json();
+        renderLedger();
+      } catch (err) {
+        console.error('Failed to load ledger', err);
+      }
+    }
+
+    function renderLedger() {
+      const el = document.getElementById('ledger-line');
+      if (!el || !ledgerData) return;
+      const d = ledgerData;
+      const tokens = (d.tokens || {}).total || 0;
+      const t = ledgerTokens(tokens);
+      const paid = d.paid_usd || 0;
+      const measured = d.measured || 0;
+      const tasks = d.tasks || 0;
+      const ref = d.reference;
+      const lp = d.list_price_usd;
+      if (lp && ref) {
+        el.textContent = 'This week: ' + t + ' tokens, $' + lp.low.toFixed(2)
+          + ' to $' + lp.high.toFixed(2) + ' at ' + ref + ' list prices, $' + paid.toFixed(2)
+          + ' paid. Measured on ' + measured + ' of ' + tasks + ' tasks.';
+      } else if (ref) {
+        el.textContent = 'This week: ' + t + ' tokens, $' + paid.toFixed(2) + ' paid.'
+          + ' Reference ' + ref + ' is not in the model catalog.'
+          + ' Measured on ' + measured + ' of ' + tasks + ' tasks.';
+      } else {
+        el.textContent = 'This week: ' + t + ' tokens, $' + paid.toFixed(2) + ' paid.'
+          + ' Measured on ' + measured + ' of ' + tasks + ' tasks.'
+          + ' For a list-price value set [ledger] reference = "provider/model" in fleet.toml.';
+      }
+    }
+
     function budgetPolicyLabel(id) {
       const s = String(id || '');
       return s ? s.charAt(0).toUpperCase() + s.slice(1) : '';
@@ -6762,7 +6811,7 @@
         categoryLabel: "MCP & CLIENTS",
         question: "How do I configure it as JSON (Claude Desktop, Cursor)?",
         tags: ["mcp", "claude", "desktop", "cursor", "config", "json"],
-        answer: "On the machine the daemon runs on, the server finds the daemon and its token by itself (fleet.toml and ~/.config/sovereign-fleet/api_token). Set FLEET_API_URL only for another address; keep the token out of client config files where you can.",
+        answer: "On the machine the daemon runs on, the server finds the daemon and its token by itself (fleet.toml and ~/.config/sovereign-fleet/api_token). Set FLEET_API_URL only for another address; keep the token out of client config files where you can. Over https by IP address the server trusts only the daemon's own certificate (FLEET_TLS_CERT or daemon.tls_cert).",
         snippet: "{\n  \"mcpServers\": {\n    \"sovereign-fleet\": {\n      \"command\": \"python3\",\n      \"args\": [\"-m\", \"fleet.api.mcp_server\"]\n    }\n  }\n}",
         snippetLabel: "Client configuration"
       },
@@ -7131,6 +7180,7 @@
       loadTasks();
       loadSettings();
       loadBudgets();
+      loadLedger();
       loadPlugins();
       loadModels();
       loadRouterPairs();
