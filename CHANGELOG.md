@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-10-29
+### Security
+- MCP server: an `https` daemon URL with an IP address switched certificate verification off. It now
+  trusts exactly the daemon's own certificate there (`FLEET_TLS_CERT`, else `daemon.tls_cert` in
+  fleet.toml; the leaf only, no CA and no other certificate of the file), and refuses an IP URL
+  without one with a message that says what to set. Host names keep full verification;
+  `FLEET_INSECURE_SKIP_VERIFY=1` stays the explicit opt-out.
+- Egress proxy (`[sandbox] egress = "allowlist"`): an allowed name was reached whatever it resolved
+  to, and resolved a second time for the connection. A name with any private or local answer is now
+  refused (403, in the audit log), and the proxy connects to the address it checked, so a name that
+  changes its answer (DNS rebinding) cannot reach the LAN. Local and tailnet endpoints stay direct
+  through `NO_PROXY`; an IP literal on the allowlist is reached as listed.
+
+### Fixed
+- Grid backend: a manual retry of a failed task started on the last failover lane with no attempts
+  left; it now starts fresh on the task's first lane through the runner's `retry_task`.
+
+### Documentation
+- README: "In our own use", measured shares from the fleet's own task history.
+
 ## [0.6.6] - 2026-10-26
 
 ### Added

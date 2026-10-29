@@ -4,6 +4,7 @@ Inside the fleet sandbox, Landlock refuses connect() to ports off its list, so t
 tests skip there and run everywhere else (CI, a developer shell).
 """
 
+import asyncio
 import json
 import socket
 import socketserver
@@ -13,6 +14,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
+from fleet.core import egress_proxy
 from fleet.core.egress_proxy import EgressProxy, host_allowed
 
 
@@ -163,10 +165,10 @@ def test_upstream_that_does_not_answer_gives_502(start_proxy):
 
 def test_get_is_forwarded_with_host_and_without_proxy_headers(start_proxy, web):
     proxy = start_proxy(web)
-    out = _ask(proxy, (f"GET http://localhost:{web}/a?b=1 HTTP/1.1\r\nHost: localhost:{web}\r\n"
+    out = _ask(proxy, (f"GET http://127.0.0.1:{web}/a?b=1 HTTP/1.1\r\nHost: 127.0.0.1:{web}\r\n"
                        "Proxy-Authorization: Basic c2VjcmV0\r\n\r\n").encode())
     assert out.startswith(b"HTTP/1.0 200") or out.startswith(b"HTTP/1.1 200")
-    assert out.endswith(f"GET /a?b=1 host=localhost:{web} proxyauth=None".encode())
+    assert out.endswith(f"GET /a?b=1 host=127.0.0.1:{web} proxyauth=None".encode())
 
 
 def test_post_body_reaches_the_upstream(start_proxy, web):
@@ -204,3 +206,34 @@ def test_stop_ends_an_open_tunnel_quickly(start_proxy, echo):
     s.close()
     with pytest.raises(OSError):
         socket.create_connection(("127.0.0.1", proxy.port), timeout=1)
+
+
+# ── names must resolve to public addresses; the checked address is the one used ──
+
+def _resolve_to(monkeypatch, *addrs):
+    async def fake(self, host, port, **kwargs):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (a, port)) for a in addrs]
+    monkeypatch.setattr(asyncio.BaseEventLoop, "getaddrinfo", fake)
+
+
+def test_an_allowed_name_that_resolves_to_loopback_is_refused(start_proxy, echo):
+    proxy = start_proxy(echo)  # "localhost" is on the list, and it is 127.0.0.1
+    assert _ask(proxy, f"CONNECT localhost:{echo} HTTP/1.1\r\n\r\n".encode()).startswith(b"HTTP/1.1 403")
+    assert _audit(proxy)[0]["status"] == 403
+
+
+def test_a_name_with_one_private_answer_among_public_ones_is_refused(start_proxy, echo, monkeypatch):
+    proxy = start_proxy(echo, allowlist=("rebind.example.net",))
+    _resolve_to(monkeypatch, "93.184.215.14", "127.0.0.1")
+    assert _ask(proxy, f"CONNECT rebind.example.net:{echo} HTTP/1.1\r\n\r\n".encode()).startswith(b"HTTP/1.1 403")
+
+
+def test_the_tunnel_goes_to_the_address_that_was_checked(start_proxy, echo, monkeypatch):
+    proxy = start_proxy(echo, allowlist=("api.example.org",))
+    _resolve_to(monkeypatch, "127.0.0.1")
+    monkeypatch.setattr(egress_proxy, "_is_public", lambda addr: addr == "127.0.0.1")
+    with socket.create_connection(("127.0.0.1", proxy.port), timeout=5) as s:
+        s.sendall(f"CONNECT api.example.org:{echo} HTTP/1.1\r\n\r\n".encode())
+        assert s.recv(4096).startswith(b"HTTP/1.1 200")
+        s.sendall(b"ping")
+        assert s.recv(4096) == b"ping"

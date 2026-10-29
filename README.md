@@ -31,6 +31,14 @@ Sovereign Fleet runs coding-agent CLIs (**Goose**, **Claude Code**, **OpenCode**
 - **Verify Before Claim (Sandboxed Quality Gates):** An agent's report is a claim, not proof. Every run must pass scope checks (`allowed_paths` + companion tests), AST syntax checks, the repository's own gate (`scripts/verify.sh` or `pytest`), and the task gate inside a credential-free sandbox before merging or opening a PR.
 - **Steer from Anywhere:** Dispatch and approve tasks from the installable mobile Web PWA (`/#token=...`), from coordinator agents via the 14-tool **MCP server**, by replying `!fleet approve <id>` in **Matrix**, or by labelling **GitHub / Gitea issues** with a ```` ```fleet ```` contract block.
 
+### In our own use
+
+The fleet builds its own code and our other projects, with a frontier model as coordinator. Since October 2026:
+
+- **95 %** of finished tasks ran on a local model or a free tier, **5 %** on our own subscriptions, **0 %** on a pay-per-use API.
+- **About 1 %** of a week's tasks ran on the coordinator's own subscription: the frontier model writes the specs and reviews, cheaper models do the typing.
+- **16 %** of all tasks were stopped by the gates (files outside their scope, red tests, broken syntax) before anything landed; the next lane or a repair pass still finished **half** of them. One stopped run had tried to weaken the script that decides what goes into a public export.
+
 Status: **alpha** (the current release is on [PyPI](https://pypi.org/project/sovereign-fleet/); changes in the [changelog](https://github.com/Sovgrid/sovereign-fleet/blob/main/CHANGELOG.md)). Read [What works today](#what-works-today) before relying on it.
 
 ---

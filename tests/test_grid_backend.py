@@ -526,3 +526,27 @@ def test_an_older_runner_without_meta_keeps_no_rating(grid):
     del sys.modules["dispatcher"].update_task_meta
     assert gb.update_metadata("t1", {"risk": {}}) is False
 
+
+
+@pytest.mark.asyncio
+async def test_retry_uses_the_runners_fresh_start_when_it_has_one(grid):
+    async with _client() as c:
+        tid = (await c.post("/api/fleet/tasks", json={"text": "x"})).json()["id"]
+        d = _dispatcher()
+        d.TASKS[0]["status"] = "failed"
+        d.TASKS[0]["intent"] = {"assigned_lane": "gemini_studio_flash", "first_lane": "local_qwen"}
+
+        def retry_task(task_id, log_entry="Re-queued"):
+            d.CALLS.append(("retry_task", task_id))
+            t = next(t for t in d.TASKS if t["id"] == task_id)
+            t.update(status="pending", retry_count=0)
+            t["intent"]["assigned_lane"] = t["intent"]["first_lane"]
+            return t
+
+        d.retry_task = retry_task
+        r = (await c.post(f"/api/fleet/tasks/{tid}/retry")).json()
+        assert r["status"] == "queued" and r["lane"] == "local_qwen"
+        assert ("retry_task", tid) in d.CALLS
+        # a running task is not retried
+        d.TASKS[0]["status"] = "running"
+        assert (await c.post(f"/api/fleet/tasks/{tid}/retry")).status_code == 400

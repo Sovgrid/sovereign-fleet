@@ -1,0 +1,62 @@
+
+    __( O)>  ● new session · openai qwen3.6-35b
+   \____)    20261029_1 · /work
+     L L     goose is ready
+{
+  "messages": [
+    {
+      "id": null,
+      "role": "user",
+      "created": 1793255963,
+      "content": [
+        {
+          "type": "text",
+          "text": "Reply with the single word ok. Do not use tools."
+        }
+      ],
+      "metadata": {
+        "userVisible": true,
+        "agentVisible": true
+      }
+    },
+    {
+      "id": "chatcmpl-9f1c9df8949d92cd",
+      "role": "assistant",
+      "created": 1793255964,
+      "content": [
+        {
+          "type": "thinking",
+          "thinking": "The user wants me to reply with only the word \"ok\" and not use any tools. This is straightforward.\n",
+          "signature": ""
+        },
+        {
+          "type": "text",
+          "text": "\n\nok"
+        }
+      ],
+      "metadata": {
+        "userVisible": true,
+        "agentVisible": true,
+        "inference": {
+          "provider": "openai",
+          "requestedModel": "qwen3.6-35b"
+        },
+        "operations": {
+          "llm": {
+            "advertised_tools": [
+              "load_skill"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "metadata": {
+    "total_tokens": 3258,
+    "input_tokens": 3230,
+    "output_tokens": 28,
+    "cache_read_input_tokens": 0,
+    "cache_write_input_tokens": 0,
+    "status": "completed"
+  }
+}

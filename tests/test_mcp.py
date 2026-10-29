@@ -2,7 +2,9 @@
 
 import io
 import json
+import ssl
 import urllib.error
+from pathlib import Path
 
 import pytest
 
@@ -162,3 +164,37 @@ def test_a_task_that_passed_after_a_retry_shows_no_old_failure(api):
         "result": {"exit_code": 0, "commit_hash": "abc", "autopsy": {"root_cause": "Gate exit 4"}}}
     text, _ = call("fleet_get_task_status", task_id="t8")
     assert "Commit: abc" in text and "Why it failed" not in text
+
+
+# ── TLS: an IP address is pinned to the daemon's own certificate ─────────────
+
+_PEM = Path(__file__).parent / "fixtures" / "selfsigned.pem"
+
+
+def test_a_host_name_gets_full_verification(monkeypatch):
+    monkeypatch.delenv("FLEET_INSECURE_SKIP_VERIFY", raising=False)
+    ctx = mcp_server._ssl_context("https://fleet.example.org:8444/api")
+    assert ctx.check_hostname and ctx.verify_mode == ssl.CERT_REQUIRED
+
+
+def test_an_ip_address_trusts_only_the_daemon_certificate(monkeypatch, tmp_path):
+    monkeypatch.delenv("FLEET_INSECURE_SKIP_VERIFY", raising=False)
+    chain = tmp_path / "chain.pem"
+    chain.write_text(_PEM.read_text() + "-----BEGIN CERTIFICATE-----\nnot a cert\n-----END CERTIFICATE-----\n")
+    monkeypatch.setenv("FLEET_TLS_CERT", str(chain))
+    ctx = mcp_server._ssl_context("https://172.16.5.20:8444/api")
+    assert ctx.verify_mode == ssl.CERT_REQUIRED
+    assert len(ctx.get_ca_certs()) == 1  # the leaf only: no system CA, no second certificate of the file
+
+
+def test_an_ip_address_without_a_known_certificate_is_refused(monkeypatch):
+    monkeypatch.delenv("FLEET_INSECURE_SKIP_VERIFY", raising=False)
+    monkeypatch.delenv("FLEET_TLS_CERT", raising=False)
+    monkeypatch.setattr(mcp_server, "_daemon_cert", lambda: "")
+    with pytest.raises(mcp_server.ApiError, match="FLEET_TLS_CERT"):
+        mcp_server._ssl_context("https://172.16.5.20:8444/api")
+
+
+def test_skip_verify_is_an_explicit_switch(monkeypatch):
+    monkeypatch.setenv("FLEET_INSECURE_SKIP_VERIFY", "1")
+    assert mcp_server._ssl_context("https://172.16.5.20:8444/api").verify_mode == ssl.CERT_NONE

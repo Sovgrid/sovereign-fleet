@@ -537,8 +537,18 @@ class GridBackend:
         return self._set(task_id, "cancelled", "Cancelled in sovereign-fleet", _GRID_ACTIVE)
 
     def retry(self, task_id: str) -> Optional[FleetTask]:
-        return self._set(task_id, "pending", "Re-queued in sovereign-fleet",
-                         ("failed", "rejected", "cancelled", "skipped"))
+        # A runner with retry_task starts the task fresh: its first lane, failover attempts reset.
+        # A plain status flip left it on the last failover lane with no attempts left (2026-10-28).
+        retry_fn = getattr(self.d, "retry_task", None)
+        if retry_fn is None:
+            return self._set(task_id, "pending", "Re-queued in sovereign-fleet",
+                             ("failed", "rejected", "cancelled", "skipped"))
+        raw = self._raw(task_id)
+        if raw is None:
+            return None
+        if raw.get("status") not in ("failed", "rejected", "cancelled", "skipped"):
+            raise BackendError(f"Task {task_id} is '{raw.get('status')}', cannot become 'pending'")
+        return self._to_task(retry_fn(task_id, "Re-queued in sovereign-fleet") or raw)
 
     def delegate_local(self, task_id: str) -> Optional[FleetTask]:
         if self._raw(task_id) is None:

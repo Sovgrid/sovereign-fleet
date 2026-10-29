@@ -11,14 +11,18 @@ This proxy is the per-domain rule: an agent gets HTTPS_PROXY/HTTP_PROXY pointing
 
 Every decision is one JSON line in the audit log, so the log shows what an agent tried to reach.
 
-Opt-in and not wired into the sandbox yet. Known limit: an allowed name that resolves to a
-private address is still reached; the allowlist is about names. Stdlib only (asyncio).
+An allowed name must resolve to public addresses only, and the proxy connects to the address it
+checked: a name pointing into the LAN or loopback (or one that changes its answer, DNS rebinding)
+is refused. Local and tailnet endpoints never come here, they stay direct (NO_PROXY); an IP
+literal on the allowlist is the operator's own choice and is reached as listed. Stdlib only.
 """
 
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
+import socket
 import logging
 import threading
 import time
@@ -138,11 +142,12 @@ class EgressProxy:
         method, host, port, path, version = parsed
 
         allowed = host_allowed(host, self.allowlist) and port in self.allowed_ports
-        if not allowed:
+        address = await self._checked_address(host, port) if allowed else None
+        if address is None:
             self._audit(method, host, port, False, 403)
             return await self._answer(writer, 403)
         try:
-            up_reader, up_writer = await asyncio.wait_for(asyncio.open_connection(host, port),
+            up_reader, up_writer = await asyncio.wait_for(asyncio.open_connection(address, port),
                                                           CONNECT_TIMEOUT_S)
         except (OSError, asyncio.TimeoutError):
             self._audit(method, host, port, True, 502)
@@ -156,6 +161,20 @@ class EgressProxy:
             request = [f"{method} {path} {version}", *headers, "Connection: close", "", ""]
             up_writer.write("\r\n".join(request).encode("latin-1"))
         await asyncio.gather(_pipe(reader, up_writer), _pipe(up_reader, writer))
+
+    async def _checked_address(self, host: str, port: int) -> Optional[str]:
+        """The address to connect to, or None: an IP literal as listed; a name only when every
+        address it resolves to is public, and then the first of them."""
+        if _is_ip(host):
+            return host
+        try:
+            infos = await asyncio.get_running_loop().getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        except OSError:
+            return None
+        addrs = [info[4][0] for info in infos]
+        if not addrs or not all(_is_public(a) for a in addrs):
+            return None
+        return addrs[0]
 
     async def _answer(self, writer: asyncio.StreamWriter, status: int, close: bool = True) -> None:
         extra = "" if status == 200 else "Content-Length: 0\r\nConnection: close\r\n"
@@ -171,6 +190,18 @@ class EgressProxy:
                            "allowed": allowed, "status": status})
         with open(self.audit_path, "a", encoding="utf-8") as f:
             f.write(line + "\n")
+
+
+def _is_ip(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+        return True
+    except ValueError:
+        return False
+
+
+def _is_public(addr: str) -> bool:
+    return ipaddress.ip_address(addr.split("%", 1)[0]).is_global
 
 
 def _parse_request_line(line: str) -> Optional[Tuple[str, str, int, str, str]]:

@@ -42,16 +42,58 @@ def _get_api_url() -> str:
         return "http://127.0.0.1:8444"
 
 
+def _daemon_cert() -> str:
+    """Path of the daemon's own certificate: FLEET_TLS_CERT, else daemon.tls_cert in fleet.toml."""
+    env_cert = os.environ.get("FLEET_TLS_CERT", "")
+    if env_cert:
+        return env_cert
+    try:
+        from fleet.core.config import load_config
+        return load_config().daemon.tls_cert or ""
+    except Exception:
+        return ""
+
+
+def _first_pem(path: str) -> str:
+    """The leaf certificate of a PEM file (a full-chain file lists it first)."""
+    with open(path, encoding="ascii") as f:
+        text = f.read()
+    end = "-----END CERTIFICATE-----"
+    start = text.find("-----BEGIN CERTIFICATE-----")
+    stop = text.find(end, start)
+    if start < 0 or stop < 0:
+        raise ValueError(f"no certificate in {path}")
+    return text[start:stop + len(end)] + "\n"
+
+
 def _ssl_context(url: str) -> Optional[ssl.SSLContext]:
+    """Full verification for a host name. An IP address is not in the daemon's certificate, so
+    there the connection is pinned to exactly that certificate (no CA, no other certificate
+    verifies); certificate verification used to be switched off for every IP address."""
     if not url.startswith("https://"):
         return None
-    ctx = ssl.create_default_context()
-    parsed = urllib.parse.urlparse(url)
-    hostname = parsed.hostname or ""
-    is_ip = any(c.isdigit() for c in hostname) and all(c.isdigit() or c in ".:" for c in hostname)
-    if is_ip or os.environ.get("FLEET_INSECURE_SKIP_VERIFY", "0") == "1":
+    if os.environ.get("FLEET_INSECURE_SKIP_VERIFY", "0") == "1":
+        ctx = ssl.create_default_context()
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
+        return ctx
+    hostname = urllib.parse.urlparse(url).hostname or ""
+    is_ip = any(c.isdigit() for c in hostname) and all(c.isdigit() or c in ".:" for c in hostname)
+    if not is_ip:
+        return ssl.create_default_context()
+    cert = _daemon_cert()
+    if not cert:
+        raise ApiError(f"{url} is an IP address, which the daemon's certificate does not name: "
+                       "use its host name, or set FLEET_TLS_CERT to the daemon's certificate "
+                       "(FLEET_INSECURE_SKIP_VERIFY=1 switches the check off)")
+    try:
+        leaf = _first_pem(cert)
+    except (OSError, ValueError) as e:
+        raise ApiError(f"cannot read the daemon's certificate {cert}: {e}") from e
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    ctx.check_hostname = False  # the only trusted certificate is the daemon's own
+    ctx.verify_flags |= ssl.VERIFY_X509_PARTIAL_CHAIN
+    ctx.load_verify_locations(cadata=leaf)
     return ctx
 
 
