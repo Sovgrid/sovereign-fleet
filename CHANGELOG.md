@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-04
+### Security
+- Dashboard: a task's `metadata.risk.level` and a string `exit_code` reached the task card
+  unescaped, so an API client could run script in the operator's session. Both are escaped now.
+- Dashboard: issue links accept web links only (`javascript:` and `data:` URLs counted as reachable),
+  and the link comes from the intake's own line, not from one an issue's author planted in the body.
+
+### Changed
+- Clearing without a status (`DELETE /api/fleet/tasks`, `fleet_clear_spool`, the dashboard button)
+  removes finished tasks only, as the MCP tool and the README already said. It used to delete
+  queued, running and waiting tasks on the local backend too. Naming a status still removes that
+  status. The dashboard button is now "Clear finished" instead of "Clear queue".
+
+### Fixed
+- Task list: one task with a non-text `metadata.source` turned every list request into a 500.
+- Composite backend: clearing a status other than completed deleted the local tasks and then
+  answered 400, because the grid refuses that status. It now clears the local tasks and succeeds.
+- Dashboard: clearing the spool blanked the list, which stayed blank if the server had nothing to
+  clear (304). The list now comes from the server only.
+- Dashboard: the new-task form had no project, so every task from it failed at once on the local
+  backend. It now asks where a project has to be named, and refuses before queuing instead of after.
+- Ledger, tokens that were spent stay counted: a run killed for a stall, a loop, the timeout or
+  memory keeps its usage and output, a retry keeps its earlier runs, cancelling keeps the runs that
+  finished (the run the cancel kills is still lost), and archiving a task no longer drops it from
+  the week. Cancelled tasks and tasks waiting on a PR count once an agent ran for them.
+- Ledger, paid: pair-routed runs get their model's cost class. Without a reported cost a paid run
+  is priced at its own model's catalog price; tokens with no price at all are named
+  (`paid_unpriced_tokens`) instead of reading as $0.00. Runs on a harness without a model stay unknown.
+- Usage: aider's output with prompt caching is parsed, a stored usage without token fields is not
+  measured, broken stored values (Infinity, NaN, negatives) no longer fail the task list or the
+  ledger, and a goose stream that ended early no longer blocks the daemon while it is parsed.
+
 ## [0.6.8] - 2026-10-29
 ### Added
 - Token usage per agent run, read from the CLI's own output: OpenCode now runs with

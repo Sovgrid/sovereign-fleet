@@ -173,10 +173,13 @@ class TaskStore:
         return bool(self._mutate(change))
 
     def clear_tasks(self, status: Optional[str] = None) -> int:
-        """Deletes tasks from the store. If status is provided, only deletes matching tasks."""
+        """Deletes the tasks of one status; without a status, the finished ones. Unfinished work
+        is only ever deleted by naming its status."""
+        doomed = self._ARCHIVABLE if status is None else (status,)
+
         def change(tasks: List[FleetTask]) -> int:
             before = len(tasks)
-            tasks[:] = [t for t in tasks if status is not None and t.status != status]
+            tasks[:] = [t for t in tasks if t.status not in doomed]
             return before - len(tasks)
 
         deleted = self._mutate(change) or 0

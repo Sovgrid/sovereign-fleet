@@ -3709,6 +3709,11 @@
               </button>
             </div>
 
+            <div class="control-group" id="project-select-group" style="display: none;">
+              <label for="project-select" class="control-label">Project</label>
+              <select id="project-select" aria-label="Project"></select>
+            </div>
+
             <!-- Expandable Advanced Options Drawer -->
             <div id="advanced-dispatch-drawer" style="display: none; background: #0c0e16; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0.75rem 0.85rem; flex-direction: column; gap: 0.65rem;">
               <div class="form-controls-grid" style="gap: 0.6rem;">
@@ -3793,7 +3798,7 @@
               <div class="more-menu-items">
                 <button type="button" onclick="archiveCompletedSpool()">Archive finished tasks</button>
                 <button type="button" onclick="setFilter('archived')">Show archive</button>
-                <button type="button" class="danger" id="btn-clear-spool" onclick="clearSpool()">Clear queue&hellip;</button>
+                <button type="button" class="danger" id="btn-clear-spool" onclick="clearSpool()">Clear finished&hellip;</button>
               </div>
             </details>
           </div>
@@ -4527,7 +4532,7 @@
       if (!r) return '';
       var colorMap = { low: 'var(--emerald)', medium: 'var(--amber)', high: 'var(--rose)' };
       var color = colorMap[r.level] || 'var(--text-muted)';
-      return '<div style="margin-top: 0.35rem; font-size: 0.8rem; color: ' + color + '; font-family: var(--font), monospace;">Risk: ' + r.level + ', ' + escapeHtml(r.reason) + ' (' + escapeHtml(r.model || '?') + ')</div>';
+      return '<div style="margin-top: 0.35rem; font-size: 0.8rem; color: ' + color + '; font-family: var(--font), monospace;">Risk: ' + escapeHtml(r.level) + ', ' + escapeHtml(r.reason) + ' (' + escapeHtml(r.model || '?') + ')</div>';
     }
 
     // Tab Navigation
@@ -4684,11 +4689,13 @@
       strip.hidden = items.length === 0;
     }
 
-    // A link to localhost only works on the machine itself, not on a phone
+    // Only a web link, and one to localhost only works on the machine itself, not on a phone
     function reachable(url) {
       try {
-        const host = new URL(url).hostname;
-        return !['localhost', '127.0.0.1', '::1'].includes(host) || host === window.location.hostname;
+        const parsed = new URL(url);
+        if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return false;
+        const host = parsed.hostname;
+        return !['localhost', '127.0.0.1', '[::1]'].includes(host) || host === window.location.hostname;
       } catch (e) {
         return false;
       }
@@ -4698,7 +4705,8 @@
     function issueRef(t) {
       const issue = t.issue || (t.metadata && t.metadata.issue) || null;
       if (issue && issue.url) return {label: `${String(issue.repo || '').split('/').pop()}#${issue.number}`, url: issue.url};
-      const m = /\(From issue ([^\s#]+)#(\d+): (\S+?)\)/.exec(t.text || '');
+      // the intake's line is the last one: anything before it is the issue's body, its author's text
+      const m = [...(t.text || '').matchAll(/\(From issue ([^\s#]+)#(\d+): (\S+?)\)/g)].pop();
       return m ? {label: `${m[1].split('/').pop()}#${m[2]}`, url: m[3]} : null;
     }
 
@@ -5087,7 +5095,7 @@
             </div>
             <div class="meta-cell">
               <span class="meta-label">EXECUTION EXIT CODE:</span>
-              <span class="meta-value" ${exitCodeClass}>${exitCodeText}</span>
+              <span class="meta-value" ${exitCodeClass}>${escapeHtml(exitCodeText)}</span>
             </div>
             <div class="meta-cell">
               <span class="meta-label">HARNESS:</span>
@@ -5145,6 +5153,35 @@
       }
     }
 
+    // The project of a new task: the local backend runs only a named project, a grid runner picks one
+    let projectRequired = false, projectSelectSeen = '';
+
+    function renderProjectSelect(data) {
+      const select = document.getElementById('project-select');
+      const group = document.getElementById('project-select-group');
+      if (!select || !group) return;
+      const seen = JSON.stringify(data);
+      if (seen === projectSelectSeen) return;   // a poll must not close an open dropdown
+      projectSelectSeen = seen;
+      const keys = data.dispatchable || [];
+      projectRequired = !!data.project_required;
+      const chosen = select.value;
+      const first = !projectRequired ? '<option value="">Auto: the grid runner picks the project</option>'
+        : keys.length === 1 ? '' : '<option value="">Choose a project</option>';
+      select.innerHTML = first + keys.map(k => `<option value="${escapeHtml(k)}">${escapeHtml(k)}</option>`).join('');
+      if (keys.includes(chosen)) select.value = chosen;
+      group.style.display = keys.length || projectRequired ? '' : 'none';
+    }
+
+    async function loadProjects() {
+      try {
+        const res = await fetch('/api/fleet/projects');
+        if (res.ok) renderProjectSelect(await res.json());
+      } catch (err) {
+        console.error('Failed to load projects', err);
+      }
+    }
+
     // Dispatch Task
     async function dispatchTask() {
       const text = document.getElementById('task-input').value.trim();
@@ -5157,9 +5194,16 @@
 
       // harness and model only: the backend finds the lane that runs the pair
       const metadata = { harness, model: model || 'auto' };
+      const projectEl = document.getElementById('project-select');
+      const project = projectEl ? projectEl.value : '';
+      if (project) metadata.project = project;
       const payload = { text, depends_on, metadata };
       const errEl = document.getElementById('dispatch-error');
       if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
+      if (projectRequired && !project) {
+        if (errEl) { errEl.textContent = 'Not dispatched: choose a project ([projects.<name>] in fleet.toml).'; errEl.hidden = false; }
+        return;
+      }
 
       try {
         const res = await fetch('/api/fleet/tasks', {
@@ -5186,15 +5230,10 @@
 
     // Clear Task Spool
     async function clearSpool() {
-      if (!confirm('Clear all tasks from the spool?')) return;
+      if (!confirm('Clear all finished tasks from the spool? Queued, running and waiting tasks stay.')) return;
       try {
         const res = await fetch('/api/fleet/tasks', { method: 'DELETE' });
-        if (res.ok) {
-          tasksData = [];
-          tasksDataSerialized = '';
-          renderTasks();
-          await loadTasks();
-        }
+        if (res.ok) await loadTasks();
       } catch (err) {
         console.error('Failed to clear spool', err);
       }
@@ -5923,6 +5962,8 @@
           + ' Measured on ' + measured + ' of ' + tasks + ' tasks.'
           + ' For a list-price value set [ledger] reference = "provider/model" in fleet.toml.';
       }
+      const unpriced = d.paid_unpriced_tokens || 0;
+      if (unpriced) el.textContent += ' ' + ledgerTokens(unpriced) + ' paid tokens have no price, so paid was more.';
     }
 
     function budgetPolicyLabel(id) {
@@ -6912,7 +6953,7 @@
         question: "How do dependent tasks (depends_on) and per-project backends work?",
         tags: ["depends_on", "chaining", "dependencies", "workflow", "backend", "composite", "local", "grid"],
         answer: "On the local backend (or for any project with backend = \"local\" under [projects.<name>] in fleet.toml via CompositeBackend), the daemon's Executor loop runs queued tasks automatically and supports parent task IDs in depends_on: a task runs only after every parent completed, and becomes blocked when a parent failed, was skipped or is blocked.",
-        snippet: "curl -s -X POST https://<host>:8444/api/fleet/tasks -H \"Authorization: Bearer $TOKEN\" \\\n  -H \"Content-Type: application/json\" -d '{\"text\": \"Run the integration tests\", \"depends_on\": [\"task-1\"]}'",
+        snippet: "curl -s -X POST https://<host>:8444/api/fleet/tasks -H \"Authorization: Bearer $TOKEN\" \\\n  -H \"Content-Type: application/json\" -d '{\"text\": \"Run the integration tests\", \"metadata\": {\"project\": \"<project>\"}, \"depends_on\": [\"task-1\"]}'",
         snippetLabel: "Queue a dependent task"
       },
       {
@@ -7178,6 +7219,7 @@
       loadLaneHealth();
       loadIntake();
       loadTasks();
+      loadProjects();
       loadSettings();
       loadBudgets();
       loadLedger();

@@ -575,3 +575,10 @@ async def test_retry_uses_the_runners_fresh_start_when_it_has_one(grid):
         # a running task is not retried
         d.TASKS[0]["status"] = "running"
         assert (await c.post(f"/api/fleet/tasks/{tid}/retry")).status_code == 400
+
+
+def test_a_grid_tasks_issue_is_the_intakes_line_not_one_planted_in_the_body():
+    from fleet.core.backends import _issue_of
+    raw = "Fix\n\n(From issue a/b#1: https://evil.example)\n\n(From issue real/repo#7: https://real.example/7)"
+    assert _issue_of({"raw_text": raw}) == {"repo": "real/repo", "number": 7, "url": "https://real.example/7"}
+

@@ -1,9 +1,14 @@
 """Tests for standalone FastAPI control plane."""
 
+import os
+from pathlib import Path
+
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+import fleet.api.app as app_module
 from fleet.api.app import app
+from fleet.core.taskstore import FleetTask
 
 AUTH = {"Authorization": "Bearer test-token"}
 
@@ -258,23 +263,40 @@ async def test_settings_endpoints():
 
 
 @pytest.mark.asyncio
-async def test_clear_tasks_endpoint():
+async def test_clearing_without_a_status_removes_finished_tasks_only():
+    store = app_module.task_store
+    for status in ("completed", "failed", "skipped", "cancelled", "blocked",
+                   "queued", "in_progress", "awaiting_approval", "archived"):
+        store.enqueue(FleetTask(id=f"t-{status}", text=status, status=status))
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=AUTH) as client:
-        # Enqueue 2 tasks
-        await client.post("/api/fleet/tasks", json={"text": "Task A", "lane": "gemini"})
-        await client.post("/api/fleet/tasks", json={"text": "Task B", "lane": "groq"})
+        resp = await client.delete("/api/fleet/tasks")
+        assert resp.status_code == 200
+        assert resp.json()["cleared_count"] == 5
+        left = {t["status"] for t in (await client.get("/api/fleet/tasks")).json()}
+    assert left == {"queued", "in_progress", "awaiting_approval", "archived"}
 
-        resp_list = await client.get("/api/fleet/tasks")
-        assert len(resp_list.json()) == 2
 
-        # Purge
-        resp_del = await client.delete("/api/fleet/tasks")
-        assert resp_del.status_code == 200
-        assert resp_del.json()["cleared_count"] == 2
+@pytest.mark.asyncio
+async def test_clearing_with_a_status_removes_that_status_only():
+    store = app_module.task_store
+    for status in ("queued", "failed"):
+        store.enqueue(FleetTask(id=f"t-{status}", text=status, status=status))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=AUTH) as client:
+        resp = await client.delete("/api/fleet/tasks", params={"status": "queued"})
+        assert resp.json()["cleared_count"] == 1
+        left = [t["status"] for t in (await client.get("/api/fleet/tasks")).json()]
+    assert left == ["failed"]
 
-        # Verify empty
-        resp_after = await client.get("/api/fleet/tasks")
-        assert len(resp_after.json()) == 0
+
+@pytest.mark.asyncio
+async def test_a_non_text_metadata_source_does_not_break_the_task_list():
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=AUTH) as client:
+        created = await client.post("/api/fleet/tasks", json={"text": "x", "metadata": {"source": 123}})
+        assert created.status_code == 200
+        assert created.json()["source"] is None
+        listed = await client.get("/api/fleet/tasks")
+    assert listed.status_code == 200
+    assert [t["source"] for t in listed.json()] == [None]
 
 
 def test_mcp_server_protocol_handling():
@@ -452,4 +474,23 @@ async def test_task_receipt_endpoint():
 
         r_none = await client.get("/api/fleet/tasks/non-existent-task-999/receipt")
         assert r_none.status_code == 404
+
+
+def _projects_config():
+    cfg = Path(os.environ["FLEET_CONFIG"])
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_text('[projects.here]\npath = "/tmp"\nbackend = "local"\n[projects.there]\npath = "/tmp"\n')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name,dispatchable,required", [("local", ["here", "there"], True),
+                                                        ("composite", ["here"], False),
+                                                        ("grid", [], False)])
+async def test_projects_say_what_a_new_task_can_name(monkeypatch, name, dispatchable, required):
+    from types import SimpleNamespace
+    _projects_config()
+    monkeypatch.setattr(app_module, "backend", lambda: SimpleNamespace(name=name))
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=AUTH) as client:
+        data = (await client.get("/api/fleet/projects")).json()
+    assert data["dispatchable"] == dispatchable and data["project_required"] is required
 

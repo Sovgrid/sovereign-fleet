@@ -261,7 +261,11 @@ class FleetEngine:
             if self.task_store.get_task(task.id).status != "cancelled":
                 self.task_store.transition(task.id, "cancelled", allowed_from=("queued", "in_progress"))
         finally:
-            result = {**result, **summarize_runs(self._usage_runs.pop(task.id, []))}
+            # A retry keeps the task's id: the runs of its earlier attempts were spent too.
+            stored = self.task_store.get_task(task.id)
+            earlier = (stored.result or {}).get("usage_runs") if stored else None
+            runs = [*(earlier if isinstance(earlier, list) else []), *self._usage_runs.pop(task.id, [])]
+            result = {**result, **summarize_runs(runs)}
             result = await self._keep_work(task, worktree_dir, result, land_it=(status == "completed"))
             if (result.get("landing") or {}).get("status") in ("pr_opened", "failed"):
                 status = "awaiting_approval"  # a human merges the PR or lands the kept branch
@@ -280,6 +284,9 @@ class FleetEngine:
             current = self.task_store.get_task(task.id)
             if current and current.status not in ("completed", "cancelled", "awaiting_approval"):
                 self.task_store.update_task_status(task.id, status, result, autopsy=autopsy)
+            elif current and current.status == "cancelled" and runs:
+                self.task_store.update_task_status(task.id, "cancelled",
+                                                   {**(current.result or {}), **summarize_runs(runs)})
 
             if status == "completed":
                 self._handle_review_loop(task, result)

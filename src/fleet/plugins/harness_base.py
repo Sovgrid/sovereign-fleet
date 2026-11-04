@@ -238,7 +238,7 @@ class CliHarness(HarnessPlugin):
             finally:
                 await watch.stop()
             if watch.fired:
-                return self._result(137, result["stdout"], watch.message())
+                return {**result, "exit_code": 137, "stderr": watch.message()}
             return result
         finally:
             if egress is not None:
@@ -247,28 +247,31 @@ class CliHarness(HarnessPlugin):
     async def _finish(self, process, worktree_dir: str, timeout: int, stall: int,
                        loop: int) -> Dict[str, Any]:
         """Wait for the agent: its result, or 124 after a stall or the timeout."""
+        seen = bytearray()  # what the agent wrote before a kill: its tokens were spent
+
+        async def killed() -> str:
+            return _decode(bytes(seen) + await kill_group(process))
+
         try:
             stdout, stderr = await self._communicate_with_stall(
-                process, worktree_dir, timeout, stall, loop)
+                process, worktree_dir, timeout, stall, loop, seen)
         except _Stalled as e:
-            stdout = await kill_group(process)
-            return self._result(124, _decode(stdout),
+            return self._result(124, await killed(),
                                 f"stalled: no output and no worktree change for {e.stall_seconds}s")
         except _Looping as e:
-            stdout = await kill_group(process)
-            return self._result(124, _decode(stdout),
+            return self._result(124, await killed(),
                                 f"looping: the same output repeated for {e.loop_seconds}s "
                                 f"without a worktree change")
         except asyncio.CancelledError:
             await kill_group(process)
             raise
         except asyncio.TimeoutError:
-            stdout = await kill_group(process)
-            return self._result(124, _decode(stdout), f"timed out after {timeout}s")
+            return self._result(124, await killed(), f"timed out after {timeout}s")
         return self._result(process.returncode, _decode(stdout), _decode(stderr))
 
     async def _communicate_with_stall(self, process, worktree_dir: str, timeout: int,
-                                      stall_seconds: int, loop_seconds: int) -> Tuple[bytes, bytes]:
+                                      stall_seconds: int, loop_seconds: int,
+                                      stdout_buf: bytearray) -> Tuple[bytes, bytes]:
         """Read stdout and stderr incrementally like communicate(), but end early on a stall.
 
         A stall means no new bytes on either stream and no worktree change for
@@ -278,6 +281,8 @@ class CliHarness(HarnessPlugin):
 
         Loop detection (when loop_seconds > 0): if the same output repeats without a
         worktree change for loop_seconds, raises _Looping.
+
+        stdout goes to the caller's stdout_buf, so it outlives any of those exceptions.
         """
         start = time.monotonic()
         last_activity = start
@@ -292,7 +297,6 @@ class CliHarness(HarnessPlugin):
         loop_read = {0: 0, 1: 0}           # bytes of each buffer already split into lines
         last_change = start
 
-        stdout_buf = bytearray()
         stderr_buf = bytearray()
         activity = asyncio.Event()
 

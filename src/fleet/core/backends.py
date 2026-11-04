@@ -236,10 +236,12 @@ _FROM_ISSUE = re.compile(r"\(From issue ([\w.-]+/[\w.-]+)#(\d+): (\S+?)\)")
 
 def _issue_of(task: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """The issue a grid task came from: the intake's "(From issue owner/repo#n: url)" line, or
-    the Gitea issue the runner linked to it."""
-    m = _FROM_ISSUE.search(task.get("raw_text") or "")
-    if m:
-        return {"repo": m.group(1), "number": int(m.group(2)), "url": m.group(3)}
+    the Gitea issue the runner linked to it. The intake's line is the last one: anything before
+    it is the issue's body, which the issue's author controls."""
+    found = _FROM_ISSUE.findall(task.get("raw_text") or "")
+    if found:
+        repo, number, url = found[-1]
+        return {"repo": repo, "number": int(number), "url": url}
     gitea = task.get("gitea")
     if isinstance(gitea, dict) and gitea.get("number") and gitea.get("html_url"):
         return {"repo": gitea.get("repo", ""), "number": gitea["number"], "url": gitea["html_url"]}
@@ -749,7 +751,9 @@ class CompositeBackend:
         return self.local.archive_completed() + self.grid.archive_completed()
 
     def clear(self, status: Optional[str] = None) -> int:
-        return self.local.clear(status) + self.grid.clear(status)
+        """The grid archives completed tasks and nothing else, so another status stays local."""
+        count = self.local.clear(status)
+        return count + self.grid.clear(status) if status in (None, "completed") else count
 
     def delegate_local(self, task_id: str) -> Optional[FleetTask]:
         if self.local.get_task(task_id):

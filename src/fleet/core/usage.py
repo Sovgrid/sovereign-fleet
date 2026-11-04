@@ -6,6 +6,7 @@ Spec: reviews/specs/usage-ledger.md (U1, U2).
 """
 
 import json
+import math
 import re
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterator, List, Optional
@@ -47,30 +48,20 @@ class Usage:
 
     @classmethod
     def from_dict(cls, d: Optional[Dict[str, Any]]) -> Optional["Usage"]:
-        if not isinstance(d, dict):
+        """None unless *d* carries a usage (never a measured zero from nothing). A stored value that
+        is no real count or amount counts as 0 or no cost: one bad run must not break the week."""
+        if not isinstance(d, dict) or not any(k in d for k in _FIELDS):
             return None
-
-        def _int(v: Any) -> int:
-            try:
-                return int(v)
-            except (TypeError, ValueError):
-                return 0
-
-        def _float(v: Any) -> Optional[float]:
-            if v is None:
-                return None
-            try:
-                return float(v)
-            except (TypeError, ValueError):
-                return None
-
         return cls(
-            input=_int(d.get("input")),
-            output=_int(d.get("output")),
-            cache_read=_int(d.get("cache_read")),
-            cache_write=_int(d.get("cache_write")),
-            reported_cost=_float(d.get("reported_cost")),
+            input=_n(d.get("input")),
+            output=_n(d.get("output")),
+            cache_read=_n(d.get("cache_read")),
+            cache_write=_n(d.get("cache_write")),
+            reported_cost=_cost(d.get("reported_cost")),
         )
+
+
+_FIELDS = ("input", "output", "cache_read", "cache_write", "reported_cost")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -87,10 +78,10 @@ def _sum_cost(a: Optional[float], b: Optional[float]) -> Optional[float]:
 
 
 def _n(v: Any) -> int:
-    """A token count from untrusted JSON: anything that is not a number counts as 0."""
+    """A token count from untrusted JSON: anything that is not a finite number counts as 0."""
     try:
         return max(0, int(v))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 
@@ -99,7 +90,14 @@ def _d(v: Any) -> Dict[str, Any]:
 
 
 def _cost(v: Any) -> Optional[float]:
-    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+    """An amount from untrusted JSON: None unless it is finite and not negative."""
+    if isinstance(v, bool):
+        return None
+    try:
+        amount = float(v)
+    except (TypeError, ValueError):
+        return None
+    return amount if math.isfinite(amount) and amount >= 0 else None
 
 
 def _events(output: str) -> Iterator[Dict[str, Any]]:
@@ -149,12 +147,16 @@ def _parse_opencode(output: str) -> Optional[Usage]:
 
 
 def _parse_goose(output: str) -> Optional[Usage]:
+    stream = False
     for ev in _events(output):  # --output-format stream-json: one "complete" event at the end
         if ev.get("type") == "complete":
             usage = Usage(input=_n(ev.get("input_tokens")), output=_n(ev.get("output_tokens")),
                           cache_read=_n(ev.get("cache_read_input_tokens")),
                           cache_write=_n(ev.get("cache_write_input_tokens")))
             return usage if usage.total else None
+        stream = stream or "type" in ev
+    if stream:  # it ended early. The search below would re-read the rest of the output per event.
+        return None
     lines = output.splitlines()  # --output-format json: a banner, then one document
     for idx, line in enumerate(lines):
         if not line.strip().startswith("{"):
@@ -203,17 +205,21 @@ def _parse_cursor(output: str) -> Optional[Usage]:
     return _parse_claude(output)
 
 
+_AIDER_N = r"([\d.]+\s*[kKM]?)"
+_AIDER_TOKENS = re.compile(rf"Tokens:\s+{_AIDER_N}\s+sent,(?:\s+{_AIDER_N}\s+cache write,)?"
+                          rf"(?:\s+{_AIDER_N}\s+cache hit,)?\s+{_AIDER_N}\s+received")
+
+
 def _parse_aider(output: str) -> Optional[Usage]:
     total: Usage = Usage()
     cost_v: Optional[float] = None
     for line in output.splitlines():
         line = line.strip()
-        m = re.search(r"Tokens:\s+([\d.]+\s*[kKM]?)\s+sent,\s+([\d.]+\s*[kKM]?)\s+received", line)
+        m = _AIDER_TOKENS.search(line)
         if m:
-            total += Usage(
-                input=_parse_tokens(m.group(1)),
-                output=_parse_tokens(m.group(2)),
-            )
+            sent, written, hit, received = (_parse_tokens(g or "0") for g in m.groups())
+            # aider adds the cache writes to "sent" and prints the hits on their own
+            total += Usage(input=max(0, sent - written), output=received, cache_read=hit, cache_write=written)
         cost_m = re.search(r"Cost:\s+\$([\d.]+)\s+message,\s+\$([\d.]+)\s+session", line)
         if cost_m:
             try:

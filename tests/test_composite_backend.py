@@ -7,7 +7,7 @@ import pytest
 
 from fleet.core.backends import CompositeBackend, GridBackend, LocalBackend, make_backend
 from fleet.core.config import BackendSection, FleetConfig, Project
-from fleet.core.taskstore import TaskStore
+from fleet.core.taskstore import FleetTask, TaskStore
 
 
 FAKE_DISPATCHER = textwrap.dedent('''
@@ -203,3 +203,29 @@ def test_make_backend_selection(tmp_path, grid_runner_dir, fake_config):
     with patch("fleet.core.backends.load_config", return_value=cfg_local):
         b = make_backend(store)
         assert isinstance(b, LocalBackend)
+
+
+def test_composite_clear_with_a_status_the_grid_cannot_clear_still_reports_success(
+        tmp_path, grid_runner_dir, fake_config):
+    """The grid only archives completed tasks. A local purge of failed ones must not end in an
+    error after the local tasks are already gone."""
+    store = TaskStore(spool_dir=str(tmp_path / "spool"))
+    store.enqueue(FleetTask(id="t-failed", text="x", status="failed"))
+    store.enqueue(FleetTask(id="t-queued", text="y", status="queued"))
+    with patch("fleet.core.backends.load_config", return_value=fake_config):
+        backend = CompositeBackend(store, runner_dir=grid_runner_dir)
+        assert backend.clear("failed") == 1
+    assert store.get_task("t-failed") is None
+    assert store.get_task("t-queued") is not None
+
+
+def test_composite_clear_without_a_status_keeps_unfinished_local_tasks(
+        tmp_path, grid_runner_dir, fake_config):
+    store = TaskStore(spool_dir=str(tmp_path / "spool"))
+    store.enqueue(FleetTask(id="t-done", text="x", status="completed"))
+    store.enqueue(FleetTask(id="t-running", text="y", status="in_progress"))
+    with patch("fleet.core.backends.load_config", return_value=fake_config):
+        backend = CompositeBackend(store, runner_dir=grid_runner_dir)
+        backend.clear(None)
+    assert store.get_task("t-done") is None
+    assert store.get_task("t-running") is not None

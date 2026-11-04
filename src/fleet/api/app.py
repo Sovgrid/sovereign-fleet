@@ -168,9 +168,10 @@ def _response(t: FleetTask) -> TaskResponse:
     meta = t.metadata or {}
     issue = meta.get("issue") if isinstance(meta.get("issue"), dict) else None
     autopsy = getattr(t, "autopsy", None) or (t.result or {}).get("autopsy")
+    source = meta.get("source")     # metadata is free-form: one odd task must not fail the whole list
     return TaskResponse(id=t.id, text=t.text, status=t.status, created_at=t.created_at,
                         lane=t.lane, depends_on=t.depends_on, result=t.result,
-                        source=meta.get("source"),
+                        source=source if isinstance(source, str) else None,
                         issue={k: issue.get(k) for k in ("repo", "number", "url")} if issue else None,
                         metadata=meta, autopsy=autopsy)
 
@@ -308,7 +309,8 @@ def archive_completed_tasks():
 
 @app.delete("/api/fleet/tasks")
 def clear_tasks(status: Optional[str] = None):
-    """Purges tasks (local) or archives completed ones (grid). Optionally by status."""
+    """Purges finished tasks (local) or archives completed ones (grid). A status selects that
+    status instead; only then does the local backend purge unfinished tasks."""
     try:
         count = backend().clear(status)
     except BackendError as e:
@@ -468,11 +470,17 @@ def set_coordinator(req: CoordinatorRequest):
 
 @app.get("/api/fleet/projects")
 def list_projects():
-    """The projects of fleet.toml: key, aliases, landing, default branch, issue intake."""
+    """The projects of fleet.toml: key, aliases, landing, default branch, issue intake. Also which
+    of them a new task can name on this backend, and whether it has to: the local backend runs
+    only a named project, the grid runner picks one itself."""
     cfg = load_config()
+    kind = backend().name
+    dispatchable = [key for key, p in cfg.projects.items()
+                    if kind == "local" or (kind == "composite" and p.backend == "local")]
     return {"projects": [{"key": key, "aliases": list(p.aliases), "landing": p.landing,
                           "default_branch": p.default_branch, "intake": p.intake.enabled}
-                         for key, p in cfg.projects.items()]}
+                         for key, p in cfg.projects.items()],
+            "dispatchable": dispatchable, "project_required": kind == "local"}
 
 
 @app.get("/api/fleet/projects/{project}/files")
@@ -751,17 +759,20 @@ def _ledger_view() -> Dict[str, Any]:
     from fleet.core import ledger as _ledger
     cfg = load_config()
     tasks = [{"id": t.id, "status": t.status, "created_at": t.created_at,
-              "result": t.result} for t in backend().list_tasks()]
+              "result": t.result, "metadata": t.metadata} for t in backend().list_tasks()]
     ref = load_settings().ledger_reference or cfg.ledger.reference
+    models = cfg.effective_models
     price: Optional[Dict[str, float]] = None
-    if ref:
-        try:
-            catalog = catalog_load(cfg.root, cfg.routing.catalog, refresh=False)
+    prices: Dict[str, Dict[str, float]] = {}
+    try:
+        catalog = catalog_load(cfg.root, cfg.routing.catalog, refresh=False)
+        prices = _ledger.lane_prices(cfg.lanes, models, catalog)
+        if ref:
             price = _ledger.reference_price(catalog, ref)
-        except Exception:  # noqa: BLE001 - broken catalog gives price None, never a 500
-            pass
-    view = _ledger.week_ledger(tasks, _ledger.lane_classes(cfg.lanes), price, ref, time.time())
-    return view
+    except Exception:  # noqa: BLE001 - a broken catalog gives no prices, never a 500
+        pass
+    return _ledger.week_ledger(tasks, _ledger.lane_classes(cfg.lanes, models), price, ref, time.time(),
+                               lane_price=prices)
 
 
 @app.get("/api/fleet/ledger")
