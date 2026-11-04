@@ -29,6 +29,8 @@ With `[sandbox] egress = "allowlist"` in `fleet.toml` each agent run gets its ow
 
 Through the proxy it reaches package registries (PyPI, npm), GitHub, the model catalogs, its own model provider, and the names in `allowed_domains`.
 
+Gates run the same way, with a proxy of their own: they reach the same defaults and `allowed_domains`, but not an agent's model provider. A gate that needs another host (a test that downloads something, for example) fails until that name is in `allowed_domains`.
+
 Every attempt, allowed or refused, is one JSON line in `<fleet root>/egress/<task id>.jsonl`.
 
 A CLI that talks to its own service (for example agy) needs those names in `allowed_domains`; run it once and read the refused names from that log.

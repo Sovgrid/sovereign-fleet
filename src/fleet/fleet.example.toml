@@ -33,6 +33,8 @@ gate_writable = []                # extra paths gates may write (tool caches); g
 # its own egress proxy and reaches only package registries, GitHub, its model provider and the
 # names below; the attempts land in <root>/egress/<task>.jsonl. Subscription CLIs (Claude Code,
 # agy) talk to their own services: list those names here before switching their lanes over.
+# Gates go through a proxy of their own, with the same defaults and the names below; a gate that
+# needs another host fails until it is listed.
 # egress = "allowlist"
 # allowed_domains = ["docs.rs"]
 # Memory ceiling per agent run and gate (systemd MemoryMax); "" or "0" switches the limit off.
@@ -56,6 +58,14 @@ token_file = ""                   # a token with repository write access (issues
 # or "entrypoint" for the class registered as "credentials" in the entry point group "fleet.plugins".
 # It is used only while the dashboard setting "Credential plugin" is on.
 credentials = ""                  # (FLEET_PLUGINS_CREDENTIALS)
+
+# Notifications and approvals by reply. Only room messages from allowed_senders count as commands;
+# with an empty list every command is ignored, whoever is in the room.
+# [matrix]
+# enabled = true
+# homeserver = "http://127.0.0.1:8008"
+# room_id = "!room:example.org"
+# allowed_senders = ["@you:example.org"]
 
 [ledger]
 # The "provider/model" whose API list prices the weekly ledger uses (models.dev catalog).

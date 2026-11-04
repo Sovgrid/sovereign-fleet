@@ -17,6 +17,7 @@
 ## 3. Test Standards
 - Run tests with an interpreter the sandbox can start, like the daemon's: `PYTHONPATH=src /usr/bin/python3 -m pytest -q`. From a project venv or a uv-managed Python the sandbox tests fail with `Permission denied` or `cannot run`: the interpreter is outside their policy, which says nothing about the sandbox.
 - 100% passing tests required before committing changes.
+- Signal a process group only through `memlimit.kill_process_group`. `os.killpg(1, sig)` is `kill(-1, sig)`, every process of the user, and a mocked pid converts to 1; `tests/conftest.py` turns that into an assertion error, so keep that guard.
 - Security properties have tests that exercise the real thing (`tests/test_security.py`: sandbox, token, path traversal; `tests/test_worktree.py`: git config injection). Never weaken or skip them to make a change pass.
 
 ## 4. Working next to a running daemon
