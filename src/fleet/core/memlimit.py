@@ -128,10 +128,7 @@ async def watch_group(pgid: int, limit_bytes: int, interval: float = 2.0) -> int
         await asyncio.sleep(interval)
         total, alive = await asyncio.to_thread(_scan_group, pgid)
         if total > limit_bytes:
-            try:
-                os.killpg(pgid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            kill_process_group(pgid)
             return total
         if not alive:
             return 0
@@ -160,6 +157,17 @@ def _scan_group(pgid: int, proc: str = "/proc") -> Tuple[int, bool]:
         except (OSError, ValueError, IndexError):
             continue
     return total, alive
+
+
+def kill_process_group(pgid: object) -> None:
+    """SIGKILL one process group, if it is one. killpg(1) means kill(-1), every process of this user,
+    and killpg(0) the caller's own group, so nothing but a real group id gets through."""
+    if not isinstance(pgid, int) or isinstance(pgid, bool) or pgid <= 1:
+        return
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
 
 
 class GroupWatch:

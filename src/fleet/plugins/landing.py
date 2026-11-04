@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 
 from fleet.core.config import Project, _expand, load_config
+from fleet.core.redact import redact
 
 
 class PullRequestProvider(ABC):
@@ -38,7 +39,7 @@ class GitHubCli(PullRequestProvider):
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         out, err = await asyncio.wait_for(proc.communicate(), timeout=120)
         if proc.returncode != 0:
-            raise RuntimeError((err or b"").decode(errors="replace").strip()[-300:] or "gh pr create failed")
+            raise RuntimeError(redact((err or b"").decode(errors="replace").strip()[-300:]) or "gh pr create failed")
         lines = (out or b"").decode(errors="replace").strip().splitlines()
         return lines[-1] if lines else ""
 
@@ -59,7 +60,7 @@ class GiteaApi(PullRequestProvider):
     async def open(self, repo, remote_url, branch, base, title, body) -> str:
         parts = owner_repo(remote_url)
         if not parts:
-            raise RuntimeError(f"cannot read owner/repo from {remote_url}")
+            raise RuntimeError(redact(f"cannot read owner/repo from {remote_url}"))
         token_path = Path(_expand(self.token_file))
         if token_path.exists() and (token_path.stat().st_mode & 0o077) != 0:
             import logging

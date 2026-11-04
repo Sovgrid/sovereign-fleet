@@ -50,6 +50,21 @@ def home_scratch(prefix: str):
         pytest.skip("inside a sandbox: $HOME is not writable; runs outside")
 
 
+
+# killpg(1, sig) is kill(-1, sig): every process of this user. A mocked process's pid converts to 1,
+# so one killpg on a mock took a whole desktop session down (2026-11-04). No test may ever do that.
+_real_killpg = os.killpg
+
+
+def _guarded_killpg(pgid, sig):
+    if not isinstance(pgid, int) or pgid <= 1:
+        raise AssertionError(f"os.killpg({pgid!r}) in a test: this would signal every process of the user")
+    return _real_killpg(pgid, sig)
+
+
+os.killpg = _guarded_killpg
+
+
 @pytest.fixture(autouse=True)
 def isolate_fleet(monkeypatch, tmp_path):
     """Each test gets its own spool, config dir, settings, roster and API token."""

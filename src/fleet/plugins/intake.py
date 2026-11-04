@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from fleet.core.config import FleetConfig, Project, _expand, load_config
+from fleet.core.redact import redact
 from fleet.plugins.base import InputPlugin, PluginKind, PluginMeta
 
 logger = logging.getLogger("fleet.plugins.intake")
@@ -290,7 +291,13 @@ def queued_comment(task_id: str, unattended: bool, has_spec: bool, author: str) 
 
 
 def result_comment(task: Any) -> Tuple[str, bool]:
-    """(comment, close the issue) for a finished task of either backend."""
+    """(comment, close the issue) for a finished task of either backend. A comment can be public,
+    and failure text can quote anything a gate printed: secrets are masked, long text is cut."""
+    text, close = _result_comment(task)
+    return redact(text), close
+
+
+def _result_comment(task: Any) -> Tuple[str, bool]:
     r = task.result or {}
     landing = r.get("landing") or {}
     raw = r.get("status")                       # the grid runner's own result status
@@ -325,11 +332,15 @@ def result_comment(task: Any) -> Tuple[str, bool]:
     return text + _quote(excerpt), False
 
 
+_REASON_LIMIT = 1200
+
+
 def _failure_reason(r: Dict[str, Any]) -> str:
     """Why a task failed: the engine's error, else the grid runner's autopsy or its last
     "Failed:" log line (its result is empty when no lane got through the gates)."""
     if r.get("error"):
-        return str(r["error"])
+        reason = str(r["error"])
+        return reason if len(reason) <= _REASON_LIMIT else reason[:_REASON_LIMIT] + " ..."
     cause = ((r.get("autopsy") or {}).get("root_cause") or "").strip(" |")
     if cause:
         return cause
@@ -386,6 +397,9 @@ def read_state(path: Path) -> Dict[str, Any]:
 
 class IntakeError(Exception):
     """A project's intake cannot run as configured."""
+
+    def __init__(self, message: Any = "") -> None:
+        super().__init__(redact(message))   # a remote's URL can carry its token
 
 
 def _default_backend():
@@ -490,7 +504,7 @@ class IntakeService:
                     actions.append(action)
             if not dry_run:
                 # also after a failure: the next poll waits its interval instead of hammering
-                status.update(last_poll=self._clock(), last_error=failure)
+                status.update(last_poll=self._clock(), last_error=redact(failure) if failure else failure)
         if failure:
             logger.warning("intake %s: %s", key, failure)
             raise IntakeError(failure)

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-11-04
+### Security
+- Issue comments and Matrix messages quote failure text, which can hold anything a gate printed. Key
+  shapes, credentials in URLs and values next to names like `password` or `api_key` are masked now,
+  a failure reason is cut at 1200 characters, and intake and landing errors no longer carry a
+  remote's token. This reduces leaks and is no guarantee: a secret with no recognisable shape passes.
+- Gates with `egress = "allowlist"` could reach any host on 443, 80 and 53, although they run code the
+  agent can edit. They now go through their own proxy, with the same defaults and
+  `sandbox.allowed_domains` as an agent. BREAKING for a gate that needs another host: list it there.
+- A process a gate left running could write into the worktree after the scope check and land in the
+  commit. The gate's process group ends with it and the scope is judged again after the gates. A child
+  that moved to its own session (`setsid`) still escapes the group kill.
+
+### Fixed
+- A task's worktree started from whatever the main checkout was on, so merge landing could carry that
+  branch's unfinished commits onto the default branch. It now starts from the project's
+  `default_branch`, or HEAD when the repository has no such branch.
+
 ## [0.8.0] - 2026-11-04
 ### Security
 - Matrix: `!fleet approve|reject|retry|status` worked for anyone in the room, from any event type.

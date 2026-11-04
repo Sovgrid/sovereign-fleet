@@ -230,7 +230,8 @@ class FleetEngine:
 
         # 1. Create worktree
         ok, wt_path_or_err = await self.worktree_mgr.create_worktree(
-            task.id, link_dirs=self.project.link_dirs if self.project else None)
+            task.id, link_dirs=self.project.link_dirs if self.project else None,
+            base_branch=self.project.default_branch if self.project else None)
         if not ok:
             err_res = {"error": f"Failed to create worktree: {wt_path_or_err}", "exit_code": 1}
             autopsy = generate_autopsy(task, err_res)
@@ -811,6 +812,16 @@ class FleetEngine:
             report["gates"].append(res.as_dict())
             if not res.passed:
                 return fail(f"Task gate exit {res.exit_code}: {res.excerpt}", 5)
+
+        # A gate runs code the agent could edit, and its undo only knows what it found right then:
+        # what will be committed is what the scope has to cover.
+        if allowed:
+            report["cleaned"] = [*report.get("cleaned", []),
+                                 *await gates.drop_untracked_outside(self.worktree_mgr, wt, allowed)]
+            outside = gates.scope_violations(await self.worktree_mgr.get_changed_files(str(wt)), allowed)
+            if outside:
+                return fail(f"Scope violation after the gates: {len(outside)} file(s) outside allowed_paths: "
+                            f"{', '.join(outside[:5])}", 3, outside=outside)
 
         # 8. GateGuard: every file the task claims to change was changed
         changed_files = await self.worktree_mgr.get_changed_files(str(wt))

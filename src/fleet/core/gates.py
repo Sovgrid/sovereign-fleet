@@ -22,13 +22,14 @@ import json
 import os
 import re
 import shutil
-import signal
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Sequence
 
 from fleet.core.config import _expand, load_config
-from fleet.core.memlimit import GroupWatch, scope_prefix
+from fleet.core.egress_proxy import EgressProxy
+from fleet.core.memlimit import GroupWatch, kill_process_group, scope_prefix
+from fleet.core.sandbox import egress_allowlist, egress_audit_path, egress_env, sandbox_disabled
 from fleet.core.sandbox import LandlockSandbox, SandboxUnavailable, policy_for_worktree
 
 GLOB_CHARS = "*?["
@@ -196,8 +197,23 @@ class GateResult:
 
 
 async def run_gate(name: str, argv: List[str], worktree: Path, timeout: int) -> GateResult:
-    """Run one gate inside the sandbox, without credentials, with a timeout."""
-    policy = policy_for_worktree(str(worktree))
+    """Run one gate inside the sandbox, without credentials, with a timeout. With egress =
+    "allowlist" it reaches the same names as an agent (the defaults and sandbox.allowed_domains)
+    through a proxy of its own, and no port directly, or a planted conftest.py could send out
+    whatever the sandbox can read."""
+    proxy = None
+    if load_config().sandbox.egress == "allowlist" and not sandbox_disabled():
+        proxy = EgressProxy(egress_allowlist(), audit_path=egress_audit_path(worktree.name))
+        await proxy.start()
+    try:
+        return await _run_gate(name, argv, worktree, timeout, proxy)
+    finally:
+        if proxy is not None:
+            await proxy.stop()
+
+
+async def _run_gate(name: str, argv: List[str], worktree: Path, timeout: int, proxy: Any) -> GateResult:
+    policy = policy_for_worktree(str(worktree), egress_port=proxy.port if proxy is not None else None)
     policy.read_write_paths += [str(p) for p in gate_writable(worktree)]
     box = LandlockSandbox(policy)
     try:
@@ -207,6 +223,8 @@ async def run_gate(name: str, argv: List[str], worktree: Path, timeout: int) -> 
     memory_max = load_config().sandbox.memory_max
     wrapped = [*scope_prefix(memory_max), *wrapped]
     env = {**box.build_safe_env(), "ASTRO_TELEMETRY_DISABLED": "1", "CI": "1"}
+    if proxy is not None:
+        env.update(egress_env(proxy.port))
     try:
         proc = await asyncio.create_subprocess_exec(
             *wrapped, cwd=str(worktree), env=env, stdin=asyncio.subprocess.DEVNULL,
@@ -226,6 +244,8 @@ async def run_gate(name: str, argv: List[str], worktree: Path, timeout: int) -> 
         text = (out or b"").decode(errors="replace")
         return GateResult(name, argv, 124, text, f"timed out after {timeout}s")
     finally:
+        # whatever it left running would write into the worktree after the scope was judged
+        _end_stragglers(proc)
         await watch.stop()
     text = (out or b"").decode(errors="replace")
     if watch.fired:
@@ -234,12 +254,13 @@ async def run_gate(name: str, argv: List[str], worktree: Path, timeout: int) -> 
     return GateResult(name, argv, code, text, "" if code == 0 else failure_excerpt(text))
 
 
+def _end_stragglers(proc) -> None:
+    kill_process_group(proc.pid)
+
+
 async def kill_group(proc) -> bytes:
     """End a process started with start_new_session=True and everything it spawned."""
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
+    kill_process_group(proc.pid)
     try:
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
     except asyncio.TimeoutError:

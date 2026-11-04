@@ -87,11 +87,25 @@ class WorktreeManager:
             except OSError as e:
                 logger.warning("Could not update %s: %s", exclude, e)
 
+    async def _start_point(self, base_branch: Optional[str]) -> str:
+        """Where a task starts: *base_branch*, not whatever the main checkout is on now, or merge
+        landing would carry that checkout's unfinished commits onto the default branch. HEAD for a
+        repository without that branch."""
+        if base_branch:
+            ref = f"refs/heads/{base_branch}"
+            code, _, _ = await _git("-C", str(self.repo_path), "rev-parse", "--verify", "--quiet", ref)
+            if code == 0:
+                return ref
+            logger.warning("%s has no branch %s; the task starts from HEAD", self.repo_path, base_branch)
+        return "HEAD"
+
     async def create_worktree(self, task_id: str, branch_name: Optional[str] = None,
-                              link_dirs: Optional[List[str]] = None) -> Tuple[bool, str]:
+                              link_dirs: Optional[List[str]] = None,
+                              base_branch: Optional[str] = None) -> Tuple[bool, str]:
         """Creates an isolated git worktree for a task on a new branch."""
         wt_path = self.base_dir / task_id
         branch_name = branch_name or self.branch_for(task_id)
+        start = await self._start_point(base_branch)
 
         # Clean a directory left by an aborted run
         if wt_path.exists():
@@ -108,14 +122,14 @@ class WorktreeManager:
             code, _, err = await _git("-C", str(self.repo_path), "worktree", "add", str(wt_path), branch_name)
             if code == 0:
                 code, base, _ = await _git(
-                    "-C", str(self.repo_path), "merge-base", branch_name, "HEAD")
+                    "-C", str(self.repo_path), "merge-base", branch_name, start)
                 if code == 0:
                     await _git("-C", str(wt_path), "reset", "-q", base)
                     self._base[str(wt_path)] = (base.strip(), branch_name)
                 else:
                     self._base[str(wt_path)] = ("", branch_name)
         else:
-            code, _, err = await _git("-C", str(self.repo_path), "worktree", "add", "-b", branch_name, str(wt_path))
+            code, _, err = await _git("-C", str(self.repo_path), "worktree", "add", "-b", branch_name, str(wt_path), start)
             if code == 0:
                 code, base, _ = await _git("-C", str(wt_path), "rev-parse", "HEAD")
                 if code == 0:

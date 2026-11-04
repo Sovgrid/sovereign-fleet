@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 import httpx
 
+from fleet.core.redact import redact
 from fleet.plugins.base import OutputPlugin, PluginKind, PluginMeta
 
 logger = logging.getLogger("fleet.plugins.output_matrix")
@@ -108,7 +109,8 @@ class MatrixOutputPlugin(OutputPlugin):
         formatted_html: str = "",
         thread_id: Optional[str] = None,
     ) -> Optional[str]:
-        """Post a text message to the configured Matrix room."""
+        """Post a text message to the configured Matrix room, secrets masked."""
+        plain_text, formatted_html = redact(plain_text), redact(formatted_html)
         if not self._room_id or not self._token:
             logger.debug("MatrixOutputPlugin: room_id or token missing, skipping dispatch")
             return None
