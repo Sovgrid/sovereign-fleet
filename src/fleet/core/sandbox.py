@@ -64,7 +64,10 @@ SYSTEM_RW = ["/dev/null", "/dev/zero", "/dev/tty", "/dev/pts", "/dev/shm", "/tmp
 _HOME = Path.home()
 TOOLS_RO = [_HOME / ".nvm", _HOME / ".bun", _HOME / ".local/bin", _HOME / ".local/lib",
             _HOME / ".local/share/pipx", _HOME / ".local/share/uv", _HOME / ".gitconfig",
-            _HOME / ".config/git"]  # ~/.local/lib: user-installed Python packages (pytest for gates)
+            _HOME / ".config/git",  # ~/.local/lib: user-installed Python packages (pytest for gates)
+            # native installers link ~/.local/bin to these: an agent that could write here would
+            # plant the binary the operator starts next, outside the sandbox
+            _HOME / ".local/share/claude", _HOME / ".local/share/cursor-agent"]
 # Caches every CLI writes to.
 ALWAYS_RW = [_HOME / ".cache", _HOME / ".npm"]
 # https, http, dns. Local model servers are added per install: sandbox.ports in fleet.toml

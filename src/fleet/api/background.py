@@ -76,6 +76,7 @@ async def matrix_loop(task_store) -> None:
         room_id=cfg.matrix.room_id or None,
         homeserver=cfg.matrix.homeserver or None,
         token_file=str(cfg.matrix_token_file) if cfg.matrix_token_file else None,
+        allowed_senders=cfg.matrix.allowed_senders,
     )
     poll_sec = cfg.matrix.poll_interval_sec
     while True:

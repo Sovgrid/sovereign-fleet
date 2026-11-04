@@ -15,7 +15,7 @@ import re
 from pathlib import Path
 from typing import Any, Collection, Dict, List, Optional, Sequence, Tuple
 
-from fleet.core.taskstore import FleetTask
+from fleet.core.taskstore import FleetTask, is_sensitive
 
 logger = logging.getLogger("fleet.core.review")
 
@@ -168,6 +168,8 @@ def build_review_task(
         "repo_gate": False,
         "gateguard_pre_action": False,
     }
+    if is_sensitive(task.metadata):  # the prompt above carries the task's text
+        metadata["is_sensitive"] = True
 
     return FleetTask(
         id=review_task_id,
@@ -228,6 +230,8 @@ def build_autofix_task(
         "project": project_name,
         "allowed_paths": paths,
     }
+    if is_sensitive(review_task.metadata):
+        metadata["is_sensitive"] = True
 
     return FleetTask(
         id=fix_task_id,

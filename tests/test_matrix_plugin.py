@@ -179,7 +179,7 @@ async def test_matrix_output_handle_commands(tmp_path):
 @pytest.mark.asyncio
 async def test_matrix_output_poll_replies(tmp_path):
     store = TaskStore(spool_dir=str(tmp_path / "spool"))
-    plugin = MatrixOutputPlugin(room_id="!fleet:matrix.org", token="tok")
+    plugin = MatrixOutputPlugin(room_id="!fleet:matrix.org", token="tok", allowed_senders=["@operator:matrix.org"])
 
     task = FleetTask(id="task-sync-1", text="Sync task", status="awaiting_approval")
     store.enqueue(task)
@@ -190,6 +190,7 @@ async def test_matrix_output_poll_replies(tmp_path):
         "chunk": [
             {
                 "event_id": "$ev_1",
+                "type": "m.room.message",
                 "sender": "@operator:matrix.org",
                 "content": {"body": "!fleet approve task-sync-1"},
             },
@@ -214,3 +215,55 @@ async def test_matrix_output_poll_replies(tmp_path):
         # Second poll: event is deduplicated, returns 0
         handled_second = await plugin.poll_replies(store)
         assert handled_second == 0
+
+
+async def _poll(tmp_path, event, **plugin_args):
+    """One poll over one room event; the status of the waiting task afterwards."""
+    store = TaskStore(spool_dir=str(tmp_path / "spool"))
+    store.enqueue(FleetTask(id="t", text="x", status="awaiting_approval"))
+    plugin = MatrixOutputPlugin(room_id="!r:m.org", token="tok", **plugin_args)
+    resp = MagicMock(status_code=200)
+    resp.json.return_value = {"chunk": [{"event_id": "$e", **event}]}
+    with patch.object(plugin, "_get_client") as client, patch.object(plugin, "post_message", new_callable=AsyncMock):
+        client.return_value = AsyncMock(get=AsyncMock(return_value=resp))
+        await plugin.poll_replies(store)
+    return store.get_task("t").status
+
+
+COMMAND = {"content": {"body": "!fleet approve t"}}
+MESSAGE = {"type": "m.room.message", **COMMAND}
+OPERATOR = "@op:m.org"
+
+
+@pytest.mark.asyncio
+async def test_a_listed_sender_may_approve_by_reply(tmp_path):
+    assert await _poll(tmp_path, {**MESSAGE, "sender": OPERATOR}, allowed_senders=[OPERATOR]) == "queued"
+
+
+@pytest.mark.asyncio
+async def test_anyone_else_in_the_room_may_not(tmp_path):
+    assert await _poll(tmp_path, {**MESSAGE, "sender": "@evil:m.org"}, allowed_senders=[OPERATOR]) == "awaiting_approval"
+
+
+@pytest.mark.asyncio
+async def test_without_a_list_nobody_may(tmp_path):
+    assert await _poll(tmp_path, {**MESSAGE, "sender": OPERATOR}) == "awaiting_approval"
+
+
+@pytest.mark.asyncio
+async def test_only_a_room_message_is_a_command(tmp_path):
+    event = {**COMMAND, "type": "m.room.topic", "sender": OPERATOR}
+    assert await _poll(tmp_path, event, allowed_senders=[OPERATOR]) == "awaiting_approval"
+
+
+def test_fleet_toml_names_the_senders():
+    from fleet.core.config import MatrixSection
+    assert MatrixSection(allowed_senders=[OPERATOR]).allowed_senders == [OPERATOR]
+    assert MatrixSection().allowed_senders == []
+
+
+def test_the_daemon_passes_the_list_on():
+    from pathlib import Path
+    source = (Path(__file__).parents[1] / "src/fleet/api/background.py").read_text(encoding="utf-8")
+    assert "allowed_senders=" in source
+

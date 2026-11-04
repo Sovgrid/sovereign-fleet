@@ -11,6 +11,7 @@ from fleet.api.app import app
 from fleet.api.cli import main
 from fleet.core.config import FleetConfig, ModelEndpoint
 from fleet.core.engine import FleetEngine
+from fleet.core.budget import set_policy
 from fleet.core.router import Attempt, Router, rank_pairs
 from fleet.core.taskstore import FleetTask, TaskStore
 from fleet.plugins.harness_base import (
@@ -125,6 +126,7 @@ def test_rank_pairs_cost_weighting(mock_harnesses):
         "free_model": ModelEndpoint(provider="openai_compatible", model_id="free-qwen", cost="free"),
         "paid_model": ModelEndpoint(provider="openai_compatible", model_id="paid-qwen", cost="paid"),
     }
+    set_policy("openai_compatible", "normal", "the paid model takes part here", by="dashboard")
     pairs = rank_pairs(harnesses, models, sample=False)
     p_free = next(p for p in pairs if p.model == "free_model")
     p_paid = next(p for p in pairs if p.model == "paid_model")

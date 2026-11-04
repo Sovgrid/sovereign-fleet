@@ -162,7 +162,9 @@ class CliHarness(HarnessPlugin):
         section_args = (section.args or []) if section is not None else []
         section_env = (section.env or {}) if section is not None else {}
         section_paths = (section.state_paths or []) if section is not None else []
-        state_paths, state_env = self.run_state({**(env or {}), **section_env})
+        # as the run will see it: a lane token may also come from the daemon's own environment
+        state_paths, state_env = self.run_state({**{k: os.environ[k] for k in pass_env if k in os.environ},
+                                                 **(env or {}), **section_env})
         effective_paths = state_paths + tuple(Path(p) for p in section_paths)
         # Stall detection: [harnesses.<name>.options] stall_seconds, read like
         # permission_mode for Claude Code. Default default_stall_seconds, 0 switches it off, never larger
@@ -454,8 +456,7 @@ class ClaudeCodeHarness(CliHarness):
             return self.state_paths, {}
         home = load_config().root / "claude-config"
         home.mkdir(parents=True, exist_ok=True)
-        binary_home = _HOME / ".local/share/claude"   # where the native installer's symlink points
-        return (home, binary_home), {"CLAUDE_CONFIG_DIR": str(home), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
+        return (home,), {"CLAUDE_CONFIG_DIR": str(home), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
 
     _OPTION_DEFAULTS: Dict[str, Any] = {"permission_mode": "acceptEdits"}
 
@@ -516,7 +517,7 @@ class CursorHarness(CliHarness):
     binary = "agent"
     label = "Cursor"
     description = "Cursor CLI (own account; free plan: Auto only, Cursor picks the model)"
-    state_paths = (_HOME / ".cursor", _HOME / ".config/cursor", _HOME / ".local/share/cursor-agent")
+    state_paths = (_HOME / ".cursor", _HOME / ".config/cursor")
     egress_domains = ("*.cursor.sh",)  # api2 and the agent host; its updater stays blocked
 
     own_login: bool = True

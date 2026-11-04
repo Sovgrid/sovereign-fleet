@@ -273,6 +273,8 @@ class MatrixSection(_Strict):
     room_id: str = ""
     token_file: str = ""              # default: <secrets_dir>/matrix-token or <config dir>/matrix_token
     poll_interval_sec: int = Field(15, ge=5, le=3600)
+    # Matrix IDs ("@you:example.org") whose !fleet commands count; empty: commands are ignored.
+    allowed_senders: List[str] = Field(default_factory=list)
 
 
 class FleetConfig(_Strict):

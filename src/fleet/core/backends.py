@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from fleet.core.config import _expand, builtin_harnesses, load_config
-from fleet.core.taskstore import FleetTask, TaskStore, TransitionError
+from fleet.core.taskstore import FleetTask, TaskStore, TransitionError, is_sensitive
 from fleet.core.usage import summarize_runs
 
 logger = logging.getLogger("fleet.core.backends")
@@ -353,9 +353,9 @@ class GridBackend:
                 and (model == "auto" or row["model"] == model)
                 and (row["active"] or not active_only)]
 
-    def _lane_for_choice(self, harness: str, model: str) -> str:
+    def _lane_for_choice(self, harness: str, model: str, sensitive: bool = False) -> str:
         """The lane a task gets for the operator's harness and model choice: the router's first
-        among the active lanes that run it. BackendError when none does."""
+        among the active lanes that run it and may take the task. BackendError when none does."""
         wanted = " with ".join(f"{k} {v}" for k, v in (("harness", harness), ("model", model)) if v != "auto")
         table = self.choice_table()
         lanes = self.lanes_for_choice(harness, model, table=table)
@@ -367,11 +367,20 @@ class GridBackend:
             raise BackendError(f"no lane runs {wanted} on this installation")
         try:
             from fleet.core.router import rank_active
-            ranked = rank_active(active, running=self.running_per_lane())
+            ranked = rank_active(active, sensitive=sensitive, running=self.running_per_lane())
         except Exception as e:  # noqa: BLE001 - the choice stands without a ranking
             logger.warning("router ranking for %s unavailable: %s", wanted, e)
             ranked = []
         return ranked[0].lane if ranked else active[0]
+
+    def _refuse_unless_private(self, lane: Optional[str]) -> None:
+        """Fleet.toml decides what is private. Checked last, so every way to a lane passes here:
+        the operator's lane, the coordinator's, and the fallbacks when the router has no answer."""
+        from fleet.core import lane_health
+        spec = lane_health.effective_lanes(load_config()).get(lane) if lane else None
+        if spec is None or not spec.private:
+            raise BackendError(f"a sensitive task runs only on a private lane; {lane or 'no lane'} is not one "
+                               "(private = true in fleet.toml)")
 
     # reading
 
@@ -431,11 +440,15 @@ class GridBackend:
         if depends_on:
             raise BackendError("the grid runner chains tasks with chain.py; queue them one by one")
         intent = metadata.get("intent")
+        sensitive = is_sensitive(metadata)
+        if sensitive and intent is None:
+            raise BackendError("a sensitive task on the grid runner needs metadata.intent: triage does not "
+                               "get the flag and could route the task to a cloud lane")
         harness = metadata.get("harness") or "auto"
         model = metadata.get("model") or "auto"
         harness_lane = None
         if not lane and (harness != "auto" or model != "auto"):
-            harness_lane = self._lane_for_choice(harness, model)
+            harness_lane = self._lane_for_choice(harness, model, sensitive)
         note = ", ".join(f"{k} {v}" for k, v in (("harness", harness), ("model", model)) if v != "auto")
 
         override = None
@@ -444,6 +457,8 @@ class GridBackend:
         if intent is not None:
             override = {k: v for k, v in dict(intent).items() if k in _INTENT_KEYS}
             override.setdefault("title", text.splitlines()[0][:120])
+            if sensitive:
+                override["is_sensitive"] = True
             if harness and harness != "auto":
                 override["harness_requested"] = harness
             if lane:
@@ -457,6 +472,8 @@ class GridBackend:
                     override["assigned_lane"] = picked["lane"]
                     override["router"] = {"by": "sovereign-fleet", "basis": picked["basis"],
                                           "ranking": picked["ranking"]}
+            if sensitive:
+                self._refuse_unless_private(override.get("assigned_lane"))
         choice = {}
         if intent is None and effective_lane:
             # No coordinator intent: triage still writes the task, the runner takes our lane.

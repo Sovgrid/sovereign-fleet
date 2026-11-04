@@ -107,6 +107,7 @@ class PairChoice:
     basis: str
     compatible: bool = True
     reason: str = ""
+    policy: str = "normal"
 
     def as_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -365,6 +366,21 @@ class Router:
                 res[lane] = {"blocked_until": until, "reason": reason}
         return res
 
+    def _pair_policies(self, models: Mapping[str, ModelEndpoint]) -> Dict[str, Tuple[str, str]]:
+        """Model name -> (budget policy, provider). A model derived from a lane has its lane's; one
+        from [models] the policy of its endpoint's provider, with the same defaults."""
+        settings = load_settings()
+        lane_policies = self.policies()
+        out: Dict[str, Tuple[str, str]] = {}
+        for name, endpoint in models.items():
+            if name in lane_policies:
+                out[name] = (lane_policies[name], lane_provider(name, self.lanes[name]))
+            else:
+                policy = effective_policy(endpoint.provider, endpoint.cost, bool(endpoint.own_login),
+                                          settings=settings, coordinator=self.coordinator)[0]
+                out[name] = (policy, endpoint.provider)
+        return out
+
     def rank_pairs(
         self,
         harnesses: Mapping[str, Any],
@@ -374,14 +390,21 @@ class Router:
         sample: bool = False,
         include_incompatible: bool = False,
         rng: Optional[Any] = None,
+        explicit_model: str = "",
     ) -> List[PairChoice]:
         """Rank (harness, model) pairs by cost-weighted minutes per correct result.
 
         Uses Thompson sampling over Beta(alpha, beta) posteriors when sample=True
         with the 192-run bake-off as informative prior for local Qwen pairs.
+
+        The budget policy applies as in rank(): a model whose provider is `manual` is left out
+        unless it is the *explicit_model* the caller chose (in `self.skipped` with the reason, with
+        include_incompatible listed as incompatible); `reserve` comes after every other pair.
         """
         from fleet.core.models import compute_compatibility
 
+        self.skipped: Dict[str, str] = {}
+        policies = self._pair_policies(models)
         choices: List[PairChoice] = []
         r = rng or random
         active_priors = effective_bakeoff_priors()
@@ -409,6 +432,18 @@ class Router:
                                 compatible=False,
                                 reason=reason,
                             )
+                        )
+                    continue
+
+                policy, provider = policies[m_name]
+                if policy == "manual" and m_name != explicit_model:
+                    self.skipped[m_name] = f"skipped: {provider} manual"
+                    if include_incompatible:
+                        choices.append(
+                            PairChoice(harness=h_name, model=m_name, score=0.0, p_pass=0.0, avg_minutes=0.0,
+                                       minutes_per_pass=0.0, cost=endpoint.cost, attempts=0, basis="budget",
+                                       compatible=False, reason=f"budget policy manual for {provider}",
+                                       policy=policy)
                         )
                     continue
 
@@ -472,10 +507,11 @@ class Router:
                         basis=basis,
                         compatible=True,
                         reason="",
+                        policy=policy,
                     )
                 )
 
-        return sorted(choices, key=lambda c: (not c.compatible, -c.score, c.harness, c.model))
+        return sorted(choices, key=lambda c: (not c.compatible, c.policy == "reserve", -c.score, c.harness, c.model))
 
 
 def rank_pairs(
@@ -487,6 +523,7 @@ def rank_pairs(
     sample: bool = False,
     include_incompatible: bool = False,
     rng: Optional[Any] = None,
+    explicit_model: str = "",
 ) -> List[PairChoice]:
     """Helper to rank (harness, model) pairs without an explicit lane config."""
     router = Router(lanes={}, history=history)
@@ -498,6 +535,7 @@ def rank_pairs(
         sample=sample,
         include_incompatible=include_incompatible,
         rng=rng,
+        explicit_model=explicit_model,
     )
 
 

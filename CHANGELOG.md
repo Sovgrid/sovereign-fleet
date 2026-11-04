@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-04
+### Security
+- Matrix: `!fleet approve|reject|retry|status` worked for anyone in the room, from any event type.
+  Only room messages from the Matrix IDs in the new `[matrix] allowed_senders` count now. BREAKING
+  for approvals by reply: with an empty list, the default, all commands are ignored.
+- Sandbox: the directories of the Claude Code and Cursor binaries were writable for an agent (Claude
+  Code with a lane token, Cursor always), so it could plant the binary the operator starts next
+  outside the sandbox. They are read-only now.
+- Claude Code: a lane token from the daemon's own environment (`key_env` without `key_file`) left the
+  agent with a writable `~/.claude`, where it could plant hooks. It now gets its own config directory
+  however the token arrives.
+- Sensitive tasks: a review or auto-fix of a sensitive task carries its text but lost the flag, so it
+  could run on a cloud lane. Both keep the flag, and the reviewer is picked among private lanes only;
+  without one the task gets no review.
+- Grid backend: the sensitive flag outside `metadata.intent` never reached the runner. It is passed
+  on now, a sensitive task without an intent is refused (triage would not get the flag), the harness
+  and model choice ranks private lanes only, and a sensitive task on a lane that fleet.toml does not
+  call private is refused.
+
+### Changed
+- Pair routing obeys the budget policy like lane routing: a `manual` provider is left out unless the
+  task names its model, `reserve` comes after every other pair. A paid endpoint of `[models]` that no
+  lane uses defaults to `manual`; Budgets lists only providers of lanes, so loosen it with
+  `budget_policies` in settings.json, or name the model on the task.
+- Under `manual_gate`, review and auto-fix tasks wait for approval too; they used to start at once.
+
 ## [0.7.0] - 2026-11-04
 ### Security
 - Dashboard: a task's `metadata.risk.level` and a string `exit_code` reached the task card

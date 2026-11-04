@@ -582,3 +582,85 @@ def test_a_grid_tasks_issue_is_the_intakes_line_not_one_planted_in_the_body():
     raw = "Fix\n\n(From issue a/b#1: https://evil.example)\n\n(From issue real/repo#7: https://real.example/7)"
     assert _issue_of({"raw_text": raw}) == {"repo": "real/repo", "number": 7, "url": "https://real.example/7"}
 
+
+# ── sensitive tasks on the grid runner ───────────────────────────────────────
+# The real runner forces the local route for an intent marked sensitive; these check that the flag
+# reaches it from wherever it was set, and that nothing is sent on with a lane that may not run it.
+
+def _sensitive_config(tmp_path):
+    import os
+    from pathlib import Path
+    toml = (f'[routing]\nhistory = "{tmp_path / "none.json"}"\n'
+            '[lanes.cloud_aider]\ncost = "free"\nsteps = [{harness = "aider", model = "acme/c"}]\n'
+            '[lanes.local_aider]\ncost = "local"\nprivate = true\nsteps = [{harness = "aider", model = "openai/p"}]\n')
+    Path(os.environ["FLEET_CONFIG"]).parent.mkdir(parents=True, exist_ok=True)
+    Path(os.environ["FLEET_CONFIG"]).write_text(toml)
+    app_module.backend()
+    d = _dispatcher()
+    d.get_active_lanes = lambda privacy_filter=None: ["cloud_aider", "local_aider"]
+    return d
+
+
+def _intent(**kw):
+    return {"project": "p", "title": "t", "acceptance_criteria": ["a"], **kw}
+
+
+async def _dispatch(metadata, lane=None):
+    async with _client() as c:
+        return await c.post("/api/fleet/tasks", json={"text": "x", "lane": lane, "metadata": metadata})
+
+
+@pytest.mark.asyncio
+async def test_a_harness_choice_on_a_sensitive_task_ranks_private_lanes_only(grid, tmp_path):
+    d = _sensitive_config(tmp_path)
+    r = await _dispatch({"harness": "aider", "intent": _intent(is_sensitive=True)})
+    assert r.status_code == 200, r.text
+    assert d.TASKS[-1]["intent"]["assigned_lane"] == "local_aider"
+    assert d.TASKS[-1]["intent"]["is_sensitive"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_flag_outside_the_intent_reaches_the_runner(grid, tmp_path):
+    d = _sensitive_config(tmp_path)
+    r = await _dispatch({"is_sensitive": True, "intent": _intent(assigned_lane="local_aider")})
+    assert r.status_code == 200, r.text
+    assert d.TASKS[-1]["intent"]["is_sensitive"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_flag_without_an_intent_is_refused_before_triage_loses_it(grid, tmp_path):
+    d = _sensitive_config(tmp_path)
+    created = len(d.TASKS)
+    r = await _dispatch({"is_sensitive": True})
+    assert r.status_code == 400 and "intent" in r.json()["detail"]
+    assert len(d.TASKS) == created
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("metadata,lane", [({"intent": _intent(assigned_lane="cloud_aider", is_sensitive=True)}, None),
+                                           ({"is_sensitive": True, "intent": _intent(assigned_lane="cloud_aider")}, None),
+                                           ({"intent": _intent(is_sensitive=True)}, "cloud_aider"),
+                                           ({"intent": _intent(assigned_lane="unknown", is_sensitive=True)}, None)])
+async def test_a_sensitive_task_is_refused_on_a_lane_that_is_not_private(grid, tmp_path, metadata, lane):
+    d = _sensitive_config(tmp_path)
+    created = len(d.TASKS)
+    r = await _dispatch(metadata, lane)
+    assert r.status_code == 400 and "private" in r.json()["detail"]
+    assert len(d.TASKS) == created
+
+
+@pytest.mark.asyncio
+async def test_a_sensitive_task_is_refused_when_only_cloud_lanes_are_active(grid, tmp_path):
+    d = _sensitive_config(tmp_path)
+    d.get_active_lanes = lambda privacy_filter=None: ["cloud_aider"]
+    r = await _dispatch({"intent": _intent(is_sensitive=True)})
+    assert r.status_code == 400 and "private" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_an_ordinary_task_may_still_use_a_cloud_lane(grid, tmp_path):
+    d = _sensitive_config(tmp_path)
+    r = await _dispatch({"intent": _intent(assigned_lane="cloud_aider")})
+    assert r.status_code == 200, r.text
+    assert d.TASKS[-1]["intent"]["assigned_lane"] == "cloud_aider"
+

@@ -6962,7 +6962,7 @@
         categoryLabel: "ISSUES, CHAINS & CLI",
         question: "How do Matrix approvals and Goose evaluation recipes work?",
         tags: ["matrix", "approve", "reject", "retry", "recipes", "goose", "benchmark", "eval"],
-        answer: "With [matrix] enabled in fleet.toml, the daemon posts structured receipts, failure autopsies, and [APPROVAL REQUIRED] prompts to your Matrix room, and polls for operator replies (!fleet approve <id>, !fleet reject <id>, !fleet retry <id>, !fleet status). Declarative Goose 1.0.0 recipes in recipes/*.yaml (ab-proposal-eval, fleet-self-improvement, fleet-bench-runner) run on demand without loading into normal worker context.",
+        answer: "With [matrix] enabled in fleet.toml, the daemon posts structured receipts, failure autopsies, and [APPROVAL REQUIRED] prompts to your Matrix room, and polls for replies from the Matrix IDs in allowed_senders (!fleet approve <id>, !fleet reject <id>, !fleet retry <id>, !fleet status); with an empty list, all commands are ignored. Declarative Goose 1.0.0 recipes in recipes/*.yaml (ab-proposal-eval, fleet-self-improvement, fleet-bench-runner) run on demand without loading into normal worker context.",
         snippet: "goose recipe validate recipes/ab-proposal-eval.yaml\ngoose run --recipe recipes/fleet-bench-runner.yaml --params suite=tier2",
         snippetLabel: "Validate and run a Goose recipe"
       },

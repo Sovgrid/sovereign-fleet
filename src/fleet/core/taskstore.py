@@ -23,6 +23,14 @@ STATUSES = ("queued", "in_progress", "completed", "failed", "blocked", "skipped"
             "awaiting_approval", "cancelled", "archived")
 
 
+def is_sensitive(meta: Dict[str, Any]) -> bool:
+    """A task is sensitive if any caller marked it so: `sensitive` (CLI, tests), `is_sensitive`
+    (coordinators) or the intent itself. One wrong key would route private work to a cloud lane,
+    so every routing path asks here."""
+    intent = meta.get("intent") if isinstance(meta.get("intent"), dict) else {}
+    return bool(meta.get("sensitive") or meta.get("is_sensitive") or intent.get("is_sensitive"))
+
+
 @dataclass
 class FleetTask:
     id: str

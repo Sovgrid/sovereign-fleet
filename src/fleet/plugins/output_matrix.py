@@ -15,7 +15,7 @@ import re
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 import httpx
 
@@ -49,11 +49,14 @@ class MatrixOutputPlugin(OutputPlugin):
         homeserver: Optional[str] = None,
         token: Optional[str] = None,
         token_file: Optional[str] = None,
+        allowed_senders: Optional[Sequence[str]] = None,
     ):
         self._room_id = room_id or os.environ.get("MATRIX_ROOM_ID") or os.environ.get("MATRIX_ROOM")
         self._homeserver = (homeserver or os.environ.get("MATRIX_HOST") or "http://127.0.0.1:8008").rstrip("/")
         self._token = token or os.environ.get("MATRIX_TOKEN")
         self._token_file = token_file
+        self._allowed_senders = set(allowed_senders or ())
+        self._warned_no_senders = False
         self._processed_events: set[str] = set()
         self._client: Optional[httpx.AsyncClient] = None
 
@@ -81,6 +84,8 @@ class MatrixOutputPlugin(OutputPlugin):
 
     async def setup(self, config: Dict[str, Any]) -> None:
         self._room_id = config.get("room_id", self._room_id)
+        if "allowed_senders" in config:
+            self._allowed_senders = set(config["allowed_senders"] or ())
         if "homeserver" in config:
             self._homeserver = str(config["homeserver"]).rstrip("/")
         if "token" in config:
@@ -265,6 +270,16 @@ class MatrixOutputPlugin(OutputPlugin):
 
         return None
 
+    def _may_command(self, sender: str) -> bool:
+        """A command releases a task with write access: being in the room is not enough."""
+        if not self._allowed_senders and not self._warned_no_senders:
+            self._warned_no_senders = True
+            logger.warning("Matrix commands are ignored: [matrix] allowed_senders is empty")
+        if sender in self._allowed_senders:
+            return True
+        logger.info("Matrix command from %s ignored: not in [matrix] allowed_senders", sender)
+        return False
+
     async def poll_replies(self, task_store: Any) -> int:
         """Fetch recent room messages and process any actionable operator commands."""
         if not self._room_id or not self._token:
@@ -293,7 +308,7 @@ class MatrixOutputPlugin(OutputPlugin):
                 body = content.get("body") or ""
                 sender = ev.get("sender") or ""
 
-                if body.startswith("!"):
+                if body.startswith("!") and ev.get("type") == "m.room.message" and self._may_command(sender):
                     res = await self.handle_command(body, task_store, sender=sender)
                     if res:
                         handled += 1

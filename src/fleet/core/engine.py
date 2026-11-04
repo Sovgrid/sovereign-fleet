@@ -25,7 +25,7 @@ from fleet.core.models import compute_compatibility
 from fleet.core.quota import QuotaLadder, block_lane_until, next_pacific_midnight, record_lane_quota_event
 from fleet.core.receipts import build_receipt, generate_autopsy
 from fleet.core.router import Attempt, Router, lane_finished, lane_started, running_lanes
-from fleet.core.taskstore import FleetTask, TaskStore
+from fleet.core.taskstore import FleetTask, TaskStore, is_sensitive
 from fleet.core.usage import summarize_runs
 from fleet.core.worktree import WorktreeManager
 from fleet.plugins.base import CredentialPlugin, HarnessPlugin, OutputPlugin
@@ -95,13 +95,6 @@ def classify_failure(stderr: str, stdout: str = "") -> Optional[str]:
     return None
 
 
-
-def _is_sensitive(meta: Dict[str, Any]) -> bool:
-    """A task is sensitive if any caller marked it so: `sensitive` (CLI, tests), `is_sensitive`
-    (dashboard, coordinator intents) or the intent itself. One wrong key would route private
-    work to a cloud lane, so every routing path asks here."""
-    intent = meta.get("intent") if isinstance(meta.get("intent"), dict) else {}
-    return bool(meta.get("sensitive") or meta.get("is_sensitive") or intent.get("is_sensitive"))
 
 class FleetEngine:
     """Core autonomous task lifecycle manager."""
@@ -336,7 +329,7 @@ class FleetEngine:
                 fix_task = review.build_autofix_task(task, findings, commit=target_commit, project_name=project_name, lanes=list(self.lanes or {}))
                 if fix_task:
                     try:
-                        self.task_store.enqueue(fix_task)
+                        self._enqueue_spawned(fix_task, settings)
                         result["fix_task_id"] = fix_task.id
                         logger.info("Queued autofix task %s for review %s on lane %s", fix_task.id, task.id, fix_task.lane)
                     except Exception as e:
@@ -358,17 +351,29 @@ class FleetEngine:
             author_model = meta.get("resolved_model") or ""
             project_name = meta.get("project") or (meta.get("intent") or {}).get("project") or Path(self.repo_path).name or "fleet"
             available = list(self.lanes.keys()) if self.lanes else list(self.models.keys()) if self.models else []
+            if is_sensitive(meta):  # the review prompt carries the task's text
+                available = [name for name in available if self._runs_privately(name)]
             reviewer = review.pick_reviewer(author_lane, available, author_model=author_model, lanes=self.lanes)
             if reviewer is None:
                 logger.info("No reviewer lane available for task %s (all lanes use the author's model), skipping review", task.id)
                 return
             rev_task = review.build_review_task(task, commit, reviewer_lane=reviewer, project_name=project_name)
             try:
-                self.task_store.enqueue(rev_task)
+                self._enqueue_spawned(rev_task, settings)
                 result["review_task_id"] = rev_task.id
                 logger.info("Queued review task %s for landed task %s on lane %s", rev_task.id, task.id, reviewer)
             except Exception as e:
                 logger.warning("Failed to queue review task for %s: %s", task.id, e)
+
+    def _enqueue_spawned(self, spawned: FleetTask, settings: Any) -> None:
+        """Work the review loop spawns waits under manual_gate like work anyone else queues."""
+        if getattr(settings, "autonomy_level", "") == "manual_gate":
+            spawned.status = "awaiting_approval"
+        self.task_store.enqueue(spawned)
+
+    def _runs_privately(self, name: str) -> bool:
+        spec = (self.lanes or {}).get(name) or (self.models or {}).get(name)
+        return bool(getattr(spec, "private", False))
 
     async def _run_in_worktree(self, task: FleetTask, worktree_dir: str) -> Tuple[str, Dict[str, Any]]:
         raw_harness = task.metadata.get("harness") or "auto"
@@ -389,14 +394,18 @@ class FleetEngine:
                 cand_h,
                 cand_m,
                 category=task.metadata.get("category", ""),
-                sensitive=_is_sensitive(task.metadata),
+                sensitive=is_sensitive(task.metadata),
                 sample=bool(task.metadata.get("sample", False)),
+                explicit_model="" if raw_model == "auto" else raw_model,
             )
             pairs = [p for p in pairs if p.compatible]
             if pairs:
                 return await self._run_pairs(task, Path(worktree_dir), pairs)
+            skipped = getattr(self.router, "skipped", None)
+            manual = sorted({why.split()[1] for why in skipped.values()}) if isinstance(skipped, dict) else []
+            hint = f"; budget policy manual for: {', '.join(manual)}" if manual else ""
             return "failed", {"error": "no compatible (harness, model) pair is available for this task "
-                                       f"(harness {raw_harness}, model {raw_model})", "exit_code": 1}
+                                       f"(harness {raw_harness}, model {raw_model}){hint}", "exit_code": 1}
         if self.router is not None and raw_harness == "auto":
             return await self._run_routed(task, Path(worktree_dir))
         if raw_harness == "auto":
@@ -464,7 +473,7 @@ class FleetEngine:
 
         if endpoint is not None:
             compat, reason = compute_compatibility(
-                harness, endpoint, is_sensitive=_is_sensitive(task.metadata)
+                harness, endpoint, is_sensitive=is_sensitive(task.metadata)
             )
             if not compat:
                 return "failed", {"error": f"Incompatible harness '{harness_name}' and model '{model_name}': {reason}", "exit_code": 1}
@@ -665,7 +674,7 @@ class FleetEngine:
         """Walk the router's ranking: each lane gets the task (and the last failure), one repair
         pass on a verification failure, then the next lane continues in the same worktree."""
         category = task.metadata.get("category", "")
-        ranking = self.router.rank(category, sensitive=_is_sensitive(task.metadata), explicit=task.lane or "")
+        ranking = self.router.rank(category, sensitive=is_sensitive(task.metadata), explicit=task.lane or "")
         if task.lane:  # a lane the caller chose goes first, if it may run this task
             ranking.sort(key=lambda c: c.lane != task.lane)
         ranking = ranking[:self.routing.max_lanes]
