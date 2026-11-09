@@ -48,6 +48,19 @@ COORDINATORS: Dict[str, str] = {
 
 
 
+def _with_project_privacy(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    """The metadata a task is stored with: a task of a project marked `private` is sensitive, whoever
+    queued it. Asked at every enqueue, so no caller has to remember the flag."""
+    intent = metadata.get("intent") if isinstance(metadata.get("intent"), dict) else None
+    project = metadata.get("project") or (intent or {}).get("project")
+    if not load_config().project_is_private(project):
+        return metadata
+    marked = {**metadata, "is_sensitive": True}
+    if intent is not None:
+        marked["intent"] = {**intent, "is_sensitive": True}
+    return marked
+
+
 class LocalBackend:
     name = "local"
     engine_runs = True  # tasks run in this package's engine (keys, credential plugin, router)
@@ -75,7 +88,7 @@ class LocalBackend:
 
     def enqueue(self, text: str, lane: Optional[str], depends_on: List[str],
                 metadata: Dict[str, Any], needs_approval: bool, source: str = "sovereign_fleet") -> FleetTask:
-        metadata = {"source": source, **metadata}
+        metadata = {"source": source, **_with_project_privacy(metadata)}
         intent = metadata.get("intent")
         if isinstance(intent, dict):
             for key in ("project", "allowed_paths", "category", "acceptance_criteria", "is_sensitive"):
@@ -209,7 +222,7 @@ _GRID_SUCCESS = ("success", "completed", "merged", "landed", "pr_merged")
 # Coordinator intent keys the dispatcher accepts (see its _coordinator_intent).
 _INTENT_KEYS = ("title", "summary", "category", "project", "assigned_lane", "allowed_paths",
                 "gate_cmd", "acceptance_criteria", "complexity", "target_branch", "base_ref",
-                "tier", "is_sensitive", "summary_de", "harness_requested")
+                "tier", "is_sensitive", "summary_de", "harness_requested", "allowed_lanes")
 
 
 _SUBSCRIPTION_PROVIDERS = ("antigravity", "cursor", "microsoft", "copilot", "anthropic", "claude")
@@ -439,6 +452,7 @@ class GridBackend:
         where the task came from (it opens a tracking issue for some sources, not for others)."""
         if depends_on:
             raise BackendError("the grid runner chains tasks with chain.py; queue them one by one")
+        metadata = _with_project_privacy(metadata)
         intent = metadata.get("intent")
         sensitive = is_sensitive(metadata)
         if sensitive and intent is None:

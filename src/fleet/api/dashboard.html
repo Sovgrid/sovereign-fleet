@@ -4002,7 +4002,7 @@
         </div>
       </details>
 
-      <!-- Budgets: policies from GET /api/fleet/budgets; each change saves at once (not part of Save) -->
+      <!-- Budgets: policies from GET /api/fleet/budgets; a change is stored with the row's own Save (not part of the page Save) -->
       <details class="panel panel-fold" id="budgets-section">
         <summary class="panel-header">
           <div class="panel-header-left">
@@ -4013,7 +4013,7 @@
         </summary>
         <div class="panel-body">
           <p class="budget-summary ledger-line" id="ledger-line" title="Low: input of runs without reported cache reads priced as cache reads (local engines report none). High: all of it as uncached input."></p>
-          <p class="health-meta" id="budgets-explainer">How much of each provider's quota the fleet may use. Normal: the router decides by measured quality. Reserve: only when everything else failed. Manual: never automatic, only when you pick the lane. A change saves at once.</p>
+          <p class="health-meta" id="budgets-explainer">How much of each provider's quota the fleet may use. Normal: the router decides by measured quality. Reserve: only when everything else failed. Manual: never automatic, only when you pick the lane. Pick a policy, add an optional reason, then Save on that row.</p>
           <p class="budget-summary" id="budgets-summary"></p>
           <div class="budgets-list" id="budgets-list"></div>
         </div>
@@ -7032,7 +7032,7 @@
         categoryLabel: "ROUTING & LANES",
         question: "How do Budgets decide how much of each provider the fleet may use?",
         tags: ["budget", "budgets", "quota", "policy", "provider", "recommended", "settings", "subscription", "free tier", "reserve", "coordinator"],
-        answer: "Settings, Budgets lists every provider of your lanes, grouped by what it costs you: on this machine, subscriptions, free tiers and free plans, paid per use. Each has one of three policies. Normal: the router ranks its lanes by measured quality. Reserve: its lanes are tried only after every other lane failed. Manual: never automatic, only when you name the lane. The recommended default is marked: paid per use is manual, a subscription is normal unless it belongs to the coordinator you chose at the top of Settings (then reserve, so the coordinator keeps its quota), free and local are normal. Pick another policy, add an optional reason, and it saves at once; Use recommended goes back to the default. Every change is logged with who, when and why, and the line under each provider shows only measured numbers (tasks this week, passed, resting until, last change). A coordinator agent may tighten a policy over MCP but never loosen one.",
+        answer: "Settings, Budgets lists every provider of your lanes, grouped by what it costs you: on this machine, subscriptions, free tiers and free plans, paid per use. Each has one of three policies. Normal: the router ranks its lanes by measured quality. Reserve: its lanes are tried only after every other lane failed. Manual: never automatic, only when you name the lane. The recommended default is marked: paid per use is manual, a subscription is normal unless it belongs to the coordinator you chose at the top of Settings (then reserve, so the coordinator keeps its quota), free and local are normal. Pick another policy, add an optional reason and press Save on that row (or Enter); Use recommended goes back to the default. Every change is logged with who, when and why, and the line under each provider shows only measured numbers (tasks this week, passed, resting until, last change). A coordinator agent may tighten a policy over MCP but never loosen one.",
         snippet: "curl -s -H \"Authorization: Bearer $TOKEN\" https://<host>:8444/api/fleet/budgets",
         snippetLabel: "List budget policies"
       },

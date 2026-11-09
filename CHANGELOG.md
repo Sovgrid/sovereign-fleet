@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-09
+### Security
+- A project can be marked `private = true` in `fleet.toml`. Each of its tasks is then sensitive, whoever
+  queued it and however: API, MCP, issue intake or `fleet run`. Before, the flag had to be set per task,
+  and a task that named a local lane without it could fall over to a cloud lane after a failure.
+- A task sent over the grid backend (MCP or API) keeps its `allowed_lanes`. Before, the grid backend
+  dropped the key, so a failover could pick a lane the operator never allowed for that task.
+
+### Fixed
+- Settings, Budgets: the help text, the FAQ and the README said a policy change saves at once. Picking a
+  policy opens a reason field, and the change is stored with that row's Save button or Enter.
+
 ## [0.9.0] - 2026-11-04
 ### Security
 - Issue comments and Matrix messages quote failure text, which can hold anything a gate printed. Key

@@ -511,6 +511,8 @@ def main(argv: Optional[list] = None) -> None:
                                       ("category", args.category)) if v}
         if args.no_repo_gate:
             metadata["repo_gate"] = False
+        if fleet_config.load_config().repo_is_private(repo):
+            metadata["is_sensitive"] = True
         exit_code = asyncio.run(run_single_cli_task(args.prompt, repo, args.harness, metadata, project,
                                                       timeout=args.timeout))
         sys.exit(exit_code)

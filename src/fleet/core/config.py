@@ -264,6 +264,10 @@ class Project(_Strict):
     # Task backend override for this project (strangler migration: "local" to execute tasks
     # in the daemon while the global [backend] kind is "grid", or "grid"). None: use [backend] kind.
     backend: Optional[Literal["local", "grid"]] = None
+    # Every task of this project counts as sensitive, whatever its caller says: it runs on private
+    # lanes only, and a failure falls over to private lanes only. An explicit lane is just the first
+    # choice, so without this a task on a local lane can still end on a cloud one.
+    private: bool = False
 
 
 class MatrixSection(_Strict):
@@ -333,6 +337,16 @@ class FleetConfig(_Strict):
     def effective_models(self) -> Dict[str, ModelEndpoint]:
         """Return configured models, or synthesize endpoints from lanes when [models] is omitted."""
         return self.models or models_from_lanes(self.lanes)
+
+    def project_is_private(self, name: Optional[str]) -> bool:
+        """True for a project marked `private`, by key or alias."""
+        found = self.resolve_project(name or "")
+        return bool(found) and self.projects[found[0]].private
+
+    def repo_is_private(self, repo: Any) -> bool:
+        """True if this repo path is the checkout of a project marked `private`."""
+        target = Path(_expand(str(repo))).resolve()
+        return any(p.private and Path(_expand(p.path)).resolve() == target for p in self.projects.values())
 
     def resolve_project(self, name: str) -> Optional[Tuple[str, Path]]:
         """(canonical key, repo path) for a project key or alias; None if unknown."""

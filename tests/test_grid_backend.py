@@ -164,6 +164,19 @@ async def test_coordinator_intent_skips_triage(grid):
 
 
 @pytest.mark.asyncio
+async def test_private_routing_keys_reach_the_dispatcher(grid):
+    # 2026-11-09: allowed_lanes was dropped here, so a private task sent over MCP could fail over
+    # to a cloud lane the operator never cleared (the runner's failover only honours the key)
+    intent = {"project": "demoapp", "title": "Private", "assigned_lane": "muse", "acceptance_criteria": ["ok"],
+              "base_ref": "work-wip", "allowed_lanes": ["muse", "local_qwen"]}
+    async with _client() as c:
+        r = await c.post("/api/fleet/tasks", json={"text": "Fix it", "metadata": {"intent": intent}})
+        assert r.status_code == 200, r.text
+    override = _dispatcher().CALLS[0][3]
+    assert override["base_ref"] == "work-wip" and override["allowed_lanes"] == ["muse", "local_qwen"]
+
+
+@pytest.mark.asyncio
 async def test_a_bare_lane_is_triaged_and_keeps_the_lane_a_bad_intent_is_400(grid):
     async with _client() as c:
         r = await c.post("/api/fleet/tasks", json={"text": "x", "lane": "muse"})

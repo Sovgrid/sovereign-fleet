@@ -187,3 +187,80 @@ async def test_a_task_naming_the_model_is_not_stopped_by_the_budget(tmp_path):
     task = FleetTask(id="t", text="x", metadata={"harness": "auto", "model": "m"})
     assert (await engine._run_in_worktree(task, str(tmp_path)))[0] == "completed"
     assert [p.model for p in engine._run_pairs.call_args.args[2]] == ["m"]
+
+
+# ── a project marked private ─────────────────────────────────────────────────────────────
+
+PRIVATE_TOML = """
+[projects.secret]
+path = "/tmp/secret"
+aliases = ["secret-repo"]
+backend = "local"
+private = true
+
+[projects.open]
+path = "/tmp/open"
+backend = "local"
+"""
+
+
+@pytest.fixture
+def private_config(tmp_path, monkeypatch):
+    from fleet.core import config
+    path = tmp_path / "fleet.toml"
+    path.write_text(PRIVATE_TOML)
+    monkeypatch.setenv("FLEET_CONFIG", str(path))
+    return config.load_config()
+
+
+def test_config_knows_a_private_project_by_key_and_alias(private_config):
+    assert private_config.project_is_private("secret")
+    assert private_config.project_is_private("secret-repo")
+    assert not private_config.project_is_private("open")
+    assert not private_config.project_is_private("unknown")
+    assert not private_config.project_is_private(None)
+
+
+@pytest.mark.parametrize("metadata", [
+    {"project": "secret"},
+    {"project": "secret-repo"},
+    {"intent": {"project": "secret", "title": "t"}},
+])
+def test_a_task_of_a_private_project_is_sensitive_whatever_the_caller_said(private_config, metadata, tmp_path):
+    """An explicit lane is only the first choice: without this, a failure falls over to the cloud."""
+    from fleet.core.backends import LocalBackend
+    backend = LocalBackend(TaskStore(tmp_path / "tasks.json"))
+    task = backend.enqueue("do it", "local_qwen", [], metadata, False)
+    assert is_sensitive(task.metadata)
+    assert is_sensitive(backend.get_task(task.id).metadata)
+
+
+def test_a_task_of_another_project_stays_as_it_was(private_config, tmp_path):
+    from fleet.core.backends import LocalBackend
+    backend = LocalBackend(TaskStore(tmp_path / "tasks.json"))
+    assert not is_sensitive(backend.enqueue("do it", None, [], {"project": "open"}, False).metadata)
+
+
+def test_marking_does_not_change_the_callers_dict(private_config, tmp_path):
+    from fleet.core.backends import LocalBackend
+    intent = {"project": "secret", "title": "t"}
+    metadata = {"intent": intent}
+    LocalBackend(TaskStore(tmp_path / "tasks.json")).enqueue("do it", None, [], metadata, False)
+    assert metadata == {"intent": {"project": "secret", "title": "t"}}
+
+
+def test_the_router_keeps_a_private_projects_task_off_cloud_lanes_after_a_failure(private_config, tmp_path):
+    from fleet.core.backends import LocalBackend
+    task = LocalBackend(TaskStore(tmp_path / "tasks.json")).enqueue(
+        "do it", "local", [], {"project": "secret"}, False)
+    router = Router({"local": _private(), "cloud": _cloud()})
+    ranked = router.rank("", sensitive=is_sensitive(task.metadata), explicit=task.lane)
+    assert [c.lane for c in ranked] == ["local"]
+
+
+def test_a_repo_path_of_a_private_project_counts_too(private_config):
+    """`fleet run --repo` names no project, and it must not be the way around the mark."""
+    assert private_config.repo_is_private("/tmp/secret")
+    assert private_config.repo_is_private("/tmp/secret/")
+    assert not private_config.repo_is_private("/tmp/open")
+    assert not private_config.repo_is_private("/tmp/other")
