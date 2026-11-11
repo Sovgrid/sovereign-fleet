@@ -1,5 +1,7 @@
 """Stall detection: CliHarness ends a run early when the agent stalls."""
 
+import os
+import re
 import subprocess
 import time
 
@@ -33,14 +35,17 @@ async def test_silent_sleep_is_stalled_early(tmp_path, monkeypatch):
     """A command that prints nothing is killed after stall_seconds with exit 124."""
     monkeypatch.setenv("FLEET_SANDBOX", "0")
     harness = _make_harness(2)
+    # A per-run duration, so a gate running this suite in parallel never sees
+    # another run's sleep in the global pgrep below.
+    cmd = f"sleep 60.{os.getpid()}"
     started = time.monotonic()
-    res = await harness.execute_task({"text": "sleep 60"}, str(tmp_path), timeout=60)
+    res = await harness.execute_task({"text": cmd}, str(tmp_path), timeout=60)
     elapsed = time.monotonic() - started
     assert res["exit_code"] == 124
     assert res["stderr"] == "stalled: no output and no worktree change for 2s"
     assert elapsed < 10
     # the whole process group is gone, not just the shell
-    assert not _pgrep("sleep 60")
+    assert not _pgrep(re.escape(cmd))
 
 
 @pytest.mark.asyncio

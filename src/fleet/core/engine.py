@@ -261,7 +261,11 @@ class FleetEngine:
             runs = [*(earlier if isinstance(earlier, list) else []), *self._usage_runs.pop(task.id, [])]
             result = {**result, **summarize_runs(runs)}
             result = await self._keep_work(task, worktree_dir, result, land_it=(status == "completed"))
-            if (result.get("landing") or {}).get("status") in ("pr_opened", "failed"):
+            if "keep_error" in result:
+                # Commit failed: work is preserved in the worktree for review.
+                status = "failed"
+                task.status = status
+            elif (result.get("landing") or {}).get("status") in ("pr_opened", "failed"):
                 status = "awaiting_approval"  # a human merges the PR or lands the kept branch
 
             dur = time.monotonic() - t0
@@ -276,7 +280,11 @@ class FleetEngine:
             task.metadata["receipt"] = receipt
 
             current = self.task_store.get_task(task.id)
-            if current and current.status not in ("completed", "cancelled", "awaiting_approval"):
+            if "keep_error" in result and current and current.status != "cancelled":
+                # The commit failed: the task failed, whatever the agent reported. A task the
+                # operator cancelled stays cancelled (its work is in the worktree all the same).
+                self.task_store.update_task_status(task.id, "failed", result, autopsy=autopsy)
+            elif current and current.status not in ("completed", "cancelled", "awaiting_approval"):
                 self.task_store.update_task_status(task.id, status, result, autopsy=autopsy)
             elif current and current.status == "cancelled" and runs:
                 self.task_store.update_task_status(task.id, "cancelled",
@@ -887,12 +895,14 @@ class FleetEngine:
                 result["commit"] = detail
                 if land_it:
                     result["landing"] = await self._land(task, Path(worktree_dir), result["branch"])
-            elif detail:
+            elif detail:  # actual commit error, not just "no changes"
                 result["keep_error"] = detail
         finally:
-            await self.worktree_mgr.remove_worktree(task.id)
-            if "branch" not in result and "keep_error" not in result:
-                await self.worktree_mgr.delete_branch(task.id)
+            # A failed commit leaves the worktree in place: it is the only copy of the work.
+            if "keep_error" not in result:
+                await self.worktree_mgr.remove_worktree(task.id)
+                if "branch" not in result:
+                    await self.worktree_mgr.delete_branch(task.id)
         return result
 
     async def _land(self, task: FleetTask, worktree: Path, branch: str) -> Dict[str, Any]:

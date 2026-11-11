@@ -99,6 +99,32 @@ class WorktreeManager:
             logger.warning("%s has no branch %s; the task starts from HEAD", self.repo_path, base_branch)
         return "HEAD"
 
+    async def _onto_start(self, wt_path: Path, branch: str, base: str, start: str) -> str:
+        """A retry or requeue reuses the task branch. Carry its earlier work onto today's start
+        point so fixes that landed on the default branch since the first run (a broken test, a
+        gate) reach the retry; before this, a retry ran against the old base and failed the same
+        way. Returns the commit the task now starts from: the current start point, or the old
+        base when the earlier work does not apply to it (kept as it was, never dropped)."""
+        code, now, _ = await _git("-C", str(self.repo_path), "rev-parse", start)
+        now = now.strip()
+        if code != 0 or not now or now == base:
+            return base
+        code, tip, _ = await _git("-C", str(wt_path), "rev-parse", "HEAD")
+        tip = tip.strip()
+        await _git("-C", str(wt_path), "reset", "-q", "--hard", now)
+        if tip == base:
+            return now
+        # no commits are made: the work lands in the index and working tree, as for the old base
+        code, _, err = await _git("-C", str(wt_path), "cherry-pick", "--no-commit", f"{base}..{tip}")
+        if code == 0:
+            logger.info("%s: earlier work of %s carried onto %s", wt_path, branch, now[:12])
+            return now
+        await _git("-C", str(wt_path), "cherry-pick", "--abort")
+        await _git("-C", str(wt_path), "reset", "-q", "--hard", tip)
+        logger.warning("%s: earlier work of %s does not apply to %s (%s); it stays on %s",
+                       wt_path, branch, now[:12], err.strip()[:200], base[:12])
+        return base
+
     async def create_worktree(self, task_id: str, branch_name: Optional[str] = None,
                               link_dirs: Optional[List[str]] = None,
                               base_branch: Optional[str] = None) -> Tuple[bool, str]:
@@ -124,8 +150,9 @@ class WorktreeManager:
                 code, base, _ = await _git(
                     "-C", str(self.repo_path), "merge-base", branch_name, start)
                 if code == 0:
+                    base = await self._onto_start(wt_path, branch_name, base.strip(), start)
                     await _git("-C", str(wt_path), "reset", "-q", base)
-                    self._base[str(wt_path)] = (base.strip(), branch_name)
+                    self._base[str(wt_path)] = (base, branch_name)
                 else:
                     self._base[str(wt_path)] = ("", branch_name)
         else:

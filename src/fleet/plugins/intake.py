@@ -374,6 +374,15 @@ def _locked(path: Path) -> Iterator[Dict[str, Any]]:
         try:
             state = read_state(path)
             yield state
+        except BaseException:
+            # On exception: persist state dict changes so a malformed issue
+            # cannot roll back records from issues already processed.
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
+            tmp.replace(path)
+            raise
+        else:
+            # On normal exit: persist the final state.
             tmp = path.with_suffix(".tmp")
             tmp.write_text(json.dumps(state, indent=2, sort_keys=True), encoding="utf-8")
             tmp.replace(path)
@@ -499,9 +508,13 @@ class IntakeService:
             for issue in sorted(issues, key=lambda i: i.number):
                 if sum(1 for a in actions if a["action"] == "queue") >= MAX_NEW_PER_POLL:
                     break
-                action = self._ingest(key, project, issue, authors, state, dry_run)
-                if action:
-                    actions.append(action)
+                try:
+                    action = self._ingest(key, project, issue, authors, state, dry_run)
+                    if action:
+                        actions.append(action)
+                except Exception:  # noqa: BLE001
+                    logger.exception("intake %s: failed to process issue %s#%s", key, issue.repo, issue.number)
+                    raise
             if not dry_run:
                 # also after a failure: the next poll waits its interval instead of hammering
                 status.update(last_poll=self._clock(), last_error=redact(failure) if failure else failure)

@@ -14,11 +14,13 @@ async def test_engine_run_single_task_success():
     with patch("fleet.core.worktree.WorktreeManager.create_worktree", new_callable=AsyncMock) as mock_cw, \
          patch("fleet.core.worktree.WorktreeManager.get_changed_files", new_callable=AsyncMock) as mock_cf, \
          patch("fleet.core.worktree.WorktreeManager.remove_worktree", new_callable=AsyncMock) as mock_rw, \
+         patch("fleet.core.worktree.WorktreeManager.commit_all", new_callable=AsyncMock) as mock_ca, \
          patch("fleet.core.gateguard.GateGuard.verify_python_syntax") as mock_ast:
 
         mock_cw.return_value = (True, "/tmp/mock-wt")
         mock_cf.return_value = ["src/auth.py"]
         mock_rw.return_value = True
+        mock_ca.return_value = (True, "abc123")
         mock_ast.return_value = (True, [])
 
         harness = ClaudeCodeHarness()

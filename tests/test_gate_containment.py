@@ -76,7 +76,21 @@ async def test_with_an_allowlist_a_gate_has_no_direct_port(tmp_path):
     assert "BLOCKED" in res.output, res.output
 
 
+def _already_confined() -> bool:
+    """True when this suite itself runs inside a gate with egress cut, e.g. the repo gate of a
+    fleet task: then no nested gate can reach a port either, so the positive check is moot."""
+    import socket
+    try:
+        socket.create_connection(("127.0.0.1", 443), 2).close()
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return False
+
+
 @needs_landlock
+@pytest.mark.skipif(_already_confined(), reason="suite runs inside a confined gate")
 @pytest.mark.asyncio
 async def test_with_ports_a_gate_keeps_its_ports(tmp_path):
     wt = _repo(tmp_path / "r", {"a.txt": "1\n"})

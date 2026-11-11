@@ -29,6 +29,7 @@ _HOME = Path.home()
 DEFAULT_TIMEOUT_SECONDS = 600
 STALL_CHECK_SECONDS = 30
 LOOP_MAX_LINES = 2000   # loop detection keeps at most this many recent lines
+MAX_OUTPUT_BYTES = 10 * 1024 * 1024  # 10 MiB cap on output buffers
 DEFAULT_STALL_SECONDS = 480
 
 
@@ -258,9 +259,11 @@ class CliHarness(HarnessPlugin):
             stdout, stderr = await self._communicate_with_stall(
                 process, worktree_dir, timeout, stall, loop, seen)
         except _Stalled as e:
+            await kill_group(process)
             return self._result(124, await killed(),
                                 f"stalled: no output and no worktree change for {e.stall_seconds}s")
         except _Looping as e:
+            await kill_group(process)
             return self._result(124, await killed(),
                                 f"looping: the same output repeated for {e.loop_seconds}s "
                                 f"without a worktree change")
@@ -268,6 +271,7 @@ class CliHarness(HarnessPlugin):
             await kill_group(process)
             raise
         except asyncio.TimeoutError:
+            await kill_group(process)
             return self._result(124, await killed(), f"timed out after {timeout}s")
         return self._result(process.returncode, _decode(stdout), _decode(stderr))
 
@@ -289,7 +293,7 @@ class CliHarness(HarnessPlugin):
         start = time.monotonic()
         last_activity = start
         last_fingerprint: Optional[str] = None
-        next_check = start
+        next_check = start + STALL_CHECK_SECONDS
 
         # Loop detection: the output lines of the last loop_seconds as (time, line), how often
         # each line occurs in that window, and when the worktree last changed.
@@ -311,7 +315,16 @@ class CliHarness(HarnessPlugin):
                     raise TypeError(f"stream.read() returned {type(chunk).__name__}, not bytes")
                 if not chunk:
                     return
-                buf.extend(chunk)
+                if len(buf) + len(chunk) > MAX_OUTPUT_BYTES:
+                    # Buffer full – drop older data and keep only the tail.
+                    # A single 64 KB read that exceeds the limit keeps all of it.
+                    if len(chunk) >= MAX_OUTPUT_BYTES:
+                        buf[:] = chunk[-MAX_OUTPUT_BYTES:]
+                    else:
+                        excess = len(buf) + len(chunk) - MAX_OUTPUT_BYTES
+                        buf[:] = buf[excess:] + chunk
+                else:
+                    buf.extend(chunk)
                 activity.set()
 
         pump_tasks = [
@@ -413,7 +426,9 @@ def _worktree_fingerprint(worktree_dir: str) -> str:
                 st = file_path.stat()
             except OSError:
                 continue
-            entries.append((str(file_path.relative_to(root)), st.st_size, st.st_mtime_ns))
+            # Use a stable relative path representation
+            rel = str(file_path.relative_to(root))
+            entries.append((rel, st.st_size, st.st_mtime_ns))
     entries.sort()
     digest = hashlib.sha256()
     for rel, size, mtime_ns in entries:

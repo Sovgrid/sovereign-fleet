@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-11
+### Changed
+- Grid backend: `depends_on` is passed to a runner that supports it instead of being refused.
+
+### Fixed
+- A retried task starts from the current default branch. Before, it reused the base of its first run,
+  so a fix that landed in between (a broken test, a gate) never reached the retry and it failed the same
+  way. Earlier work is carried over; when it does not apply, it is kept on its old base.
+- Budgets: the coordinator's tighten call over the HTTP API checks that the new policy is stricter
+  before anything is written.
+- Issue intake: one malformed issue no longer rolls back the records of the issues queued before it.
+- Tests: the stall test and the gate port test pass when the suite runs inside parallel, confined gates.
+- Harness runs: the agent's process group is ended on every way a run finishes (normal exit, timeout,
+  stall, cancel), and captured output is capped at 10 MiB per stream, keeping the newest part.
+- When committing an agent's work fails, the task fails and its worktree stays in place. Before, the
+  worktree was removed and the work was gone.
+
 ## [0.10.0] - 2026-11-09
 ### Security
 - A project can be marked `private = true` in `fleet.toml`. Each of its tasks is then sensitive, whoever

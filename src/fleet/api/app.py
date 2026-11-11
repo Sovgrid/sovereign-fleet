@@ -857,6 +857,11 @@ class BudgetRequest(BaseModel):
     reason: str = Field(default="", max_length=200)
 
 
+class TightenRequest(BaseModel):
+    policy: str = Field(max_length=32)
+    reason: str = Field(min_length=1, max_length=200)
+
+
 @app.put("/api/fleet/budgets/{provider}")
 def put_budget(provider: str, req: BudgetRequest):
     """Dashboard: set a provider's policy, either way."""
@@ -878,17 +883,20 @@ def delete_budget(provider: str):
 
 
 @app.post("/api/fleet/budgets/{provider}/tighten")
-def tighten_budget(provider: str, req: BudgetRequest):
+def tighten_budget(provider: str, req: TightenRequest):
     """Coordinator (MCP): only a stricter policy than the one in effect, default included; a
     reason is required. Anything else is refused with 409 and changes nothing."""
-    current = _budget_view(provider)["policy"]
+    current_policy = _budget_view(provider)["policy"]
+    if not budget.stricter(current_policy, req.policy):
+        raise HTTPException(409, f"refused: '{req.policy}' is not tighter than '{current_policy}'. "
+                                 "Only the operator can loosen a policy, in the dashboard.")
     try:
         budget.tighten_policy(provider, req.policy, req.reason.strip(), by="mcp", coordinator=_coordinator())
     except ValueError as e:
-        raise HTTPException(409, f"refused: {e}; the policy stays '{current}'. Only the operator can "
+        raise HTTPException(409, f"refused: {e}; the policy stays '{current_policy}'. Only the operator can "
                                  "loosen a policy, in the dashboard.") from e
     _budget_written()
-    return {**_budget_view(provider), "previous": current}
+    return {**_budget_view(provider), "previous": current_policy}
 
 
 # ── ISSUE INTAKE ──

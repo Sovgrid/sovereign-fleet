@@ -451,7 +451,17 @@ class GridBackend:
         without, the dispatcher triages the text with the local model. `source` tells the runner
         where the task came from (it opens a tracking issue for some sources, not for others)."""
         if depends_on:
-            raise BackendError("the grid runner chains tasks with chain.py; queue them one by one")
+            if not getattr(self.d, "SUPPORTS_DEPENDS_ON", False):
+                raise BackendError("this grid runner does not support depends_on; update it or queue the "
+                                   "tasks one by one")
+            if metadata.get("intent") is None:
+                raise BackendError("depends_on on the grid runner needs metadata.intent (a coordinator "
+                                   "task)")
+            for id in depends_on:
+                if not id or not isinstance(id, str):
+                    raise BackendError(f"depends_on names an unknown task: {id}")
+                if id not in {t["id"] for t in self.d.load_tasks()}:
+                    raise BackendError(f"depends_on names an unknown task: {id}")
         metadata = _with_project_privacy(metadata)
         intent = metadata.get("intent")
         sensitive = is_sensitive(metadata)
@@ -470,6 +480,8 @@ class GridBackend:
         effective_lane = lane or harness_lane
         if intent is not None:
             override = {k: v for k, v in dict(intent).items() if k in _INTENT_KEYS}
+            if depends_on:
+                override["depends_on"] = list(depends_on)
             override.setdefault("title", text.splitlines()[0][:120])
             if sensitive:
                 override["is_sensitive"] = True

@@ -546,3 +546,69 @@ def test_a_grid_task_that_landed_closes_its_issue():
     T.result = {"status": "pr_opened", "pr_url": "http://x/pr/1", "exit_code": 0, "grid_status": "awaiting_approval"}
     text, close = intake.result_comment(T())
     assert not close and "Pull request: http://x/pr/1" in text
+
+
+# ── state resilience: malformed issue does not roll back previously queued records ──
+
+def test_a_malformed_issue_does_not_rollback_queued_records(monkeypatch, tmp_path):
+    """A malformed issue that raises an unexpected exception during processing must not
+    roll back state changes from issues already processed in the same poll."""
+    from fleet.core.backends import LocalBackend
+    from fleet.core.taskstore import TaskStore
+    from fleet.plugins.intake import STATE_FILE, read_state
+
+    monkeypatch.setenv("FLEET_ROOT", str(tmp_path / "fleet"))
+    monkeypatch.setenv("FLEET_CONFIG", str(tmp_path / "config" / "fleet.toml"))
+    monkeypatch.setenv("FLEET_API_TOKEN", "test-token")
+    monkeypatch.setenv("FLEET_SETTINGS_FILE", str(tmp_path / "config" / "settings.json"))
+
+    Path(tmp_path / "config").mkdir(parents=True)
+    Path(tmp_path / "fleet" / "repo").mkdir(parents=True)
+
+    (tmp_path / "config" / "fleet.toml").write_text("""
+[projects.app]
+path = "repo"
+landing = "branch"
+[projects.app.intake]
+enabled = true
+provider = "gitea"
+repo = "me/app"
+authors = ["alice"]
+""")
+
+    store = TaskStore(spool_dir=str(tmp_path / "spool"))
+    tracker = FakeTracker()
+
+    service = IntakeService(
+        backend=lambda: LocalBackend(store),
+        trackers={"gitea": tracker},
+        paused=lambda: [],
+        clock=lambda: 1_000_000.0,
+    )
+
+    # Monkey-patch _ingest to fail on the 3rd issue
+    original_ingest = service._ingest
+    call_count = [0]
+
+    def broken_ingest_wrapper(key, project, issue, authors, state, dry_run):
+        call_count[0] += 1
+        if call_count[0] == 3:
+            raise RuntimeError("unexpected failure — malformed issue")
+        return original_ingest(key, project, issue, authors, state, dry_run)
+
+    service._ingest = broken_ingest_wrapper
+
+    for n in range(1, 6):  # 5 issues, 3rd will fail
+        tracker.add(n, BLOCK)
+
+    with pytest.raises(RuntimeError, match="unexpected failure"):
+        service.poll("app")
+
+    # State should have been persisted after issues 1 and 2
+    # (even though issue 3's processing failed)
+    state_path = Path(tmp_path) / "fleet" / STATE_FILE
+    state = read_state(state_path)
+    assert state["issues"]["gitea:me/app#1"]["status"] in ("queued", "awaiting_approval")
+    assert "task_id" in state["issues"]["gitea:me/app#2"]
+    # The state file was written at least once (after issues 1 and 2 processed)
+    assert len(state["issues"]) >= 2

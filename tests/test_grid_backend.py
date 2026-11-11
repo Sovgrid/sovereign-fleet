@@ -677,3 +677,74 @@ async def test_an_ordinary_task_may_still_use_a_cloud_lane(grid, tmp_path):
     assert r.status_code == 200, r.text
     assert d.TASKS[-1]["intent"]["assigned_lane"] == "cloud_aider"
 
+
+# ── depends_on ────────────────────────────────────────────────────────────────
+
+def test_depends_on_with_support_and_intent_carries_it(grid):
+    """When the runner supports depends_on and intent is provided, the override carries it."""
+    import os
+    from fleet.core.backends import GridBackend
+    d = GridBackend(os.environ["FLEET_GRID_RUNNER_DIR"]).d
+    d.SUPPORTS_DEPENDS_ON = True
+    d.TASKS = [{"id": "t1", "raw_text": "parent1", "status": "completed", "created_at": "1"}]
+    d.TASKS.append({"id": "t2", "raw_text": "parent2", "status": "completed", "created_at": "2"})
+    intent = {"project": "p", "title": "child", "assigned_lane": "muse",
+              "acceptance_criteria": ["ok"]}
+    backend = GridBackend(os.environ["FLEET_GRID_RUNNER_DIR"])
+    backend.enqueue("do it", None, ["t1", "t2"], {"intent": intent}, False)
+    _, _, _, override = d.CALLS[-1]
+    assert override["depends_on"] == ["t1", "t2"]
+
+
+def test_depends_on_without_support_raises(grid):
+    """Without SUPPORTS_DEPENDS_ON the backend refuses depends_on."""
+    import os
+    from fleet.core.backends import BackendError, GridBackend
+    d = GridBackend(os.environ["FLEET_GRID_RUNNER_DIR"]).d
+    if hasattr(d, "SUPPORTS_DEPENDS_ON"):
+        del d.SUPPORTS_DEPENDS_ON
+    with pytest.raises(BackendError, match="does not support"):
+        GridBackend(os.environ["FLEET_GRID_RUNNER_DIR"]).enqueue(
+            "x", None, ["t1"], {"intent": {"project": "p", "title": "t",
+             "assigned_lane": "muse", "acceptance_criteria": ["a"]}}, False)
+
+
+def test_depends_on_without_intent_raises(grid):
+    """depends_on on the grid runner needs metadata.intent."""
+    import os
+    from fleet.core.backends import BackendError, GridBackend
+    d = GridBackend(os.environ["FLEET_GRID_RUNNER_DIR"]).d
+    d.SUPPORTS_DEPENDS_ON = True
+    with pytest.raises(BackendError, match="metadata.intent"):
+        GridBackend(os.environ["FLEET_GRID_RUNNER_DIR"]).enqueue(
+            "x", None, ["t1"], {}, False)
+
+
+def test_depends_on_unknown_task_id_raises(grid):
+    """depends_on naming an unknown task id is refused."""
+    import os
+    from fleet.core.backends import BackendError, GridBackend
+    d = GridBackend(os.environ["FLEET_GRID_RUNNER_DIR"]).d
+    d.SUPPORTS_DEPENDS_ON = True
+    d.TASKS = [{"id": "t1", "raw_text": "x", "status": "completed", "created_at": "1"}]
+    with pytest.raises(BackendError, match="unknown task: t99"):
+        GridBackend(os.environ["FLEET_GRID_RUNNER_DIR"]).enqueue(
+            "x", None, ["t99"], {"intent": {"project": "p", "title": "t",
+             "assigned_lane": "muse", "acceptance_criteria": ["a"]}}, False)
+
+
+def test_empty_depends_on_unchanged(grid):
+    """Empty depends_on behaves exactly as before: no override."""
+    import os
+    from fleet.core.backends import GridBackend
+    d = GridBackend(os.environ["FLEET_GRID_RUNNER_DIR"]).d
+    d.SUPPORTS_DEPENDS_ON = True
+    intent = {"project": "p", "title": "t", "assigned_lane": "muse",
+              "acceptance_criteria": ["a"]}
+    backend = GridBackend(os.environ["FLEET_GRID_RUNNER_DIR"])
+    task = backend.enqueue("x", None, [], {"intent": intent}, False)
+    _, _, _, override = d.CALLS[-1]
+    assert "depends_on" not in override
+    assert task.depends_on == []
+
+

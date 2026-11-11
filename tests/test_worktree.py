@@ -125,3 +125,49 @@ async def test_create_worktree_reuses_existing_branch(repo, tmp_path):
     # get_changed_files(), so scope checks and gates see it.
     files = await mgr.get_changed_files(path2)
     assert "persistent.txt" in files
+
+
+@pytest.mark.asyncio
+async def test_a_retry_carries_earlier_work_onto_the_current_base(repo, tmp_path):
+    """A retried task starts from today's default branch, not the one of its first run: a fix
+    that landed on main in between (a broken test, a gate) must reach the retry. 2026-11-11:
+    four audit tasks were retried twice against the old main and failed the same way."""
+    mgr = WorktreeManager(repo_path=str(repo), worktrees_base_dir=str(tmp_path / "wt"))
+    ok, path = await mgr.create_worktree("task-rb", base_branch="main")
+    (Path(path) / "work.txt").write_text("agent work\n")
+    assert (await mgr.commit_all(path, "fleet: task-rb"))[0]
+    assert await mgr.remove_worktree("task-rb")
+
+    (repo / "fix.txt").write_text("fixed on main\n")
+    _git(repo, "add", "fix.txt")
+    _git(repo, "commit", "-q", "-m", "fix on main")
+    main = _git(repo, "rev-parse", "main").strip()
+
+    ok, path = await mgr.create_worktree("task-rb", base_branch="main")
+    wt = Path(path)
+    assert ok, path
+    assert (wt / "fix.txt").read_text() == "fixed on main\n"
+    assert (wt / "work.txt").read_text() == "agent work\n"
+    assert _git(wt, "rev-parse", "HEAD").strip() == main
+    assert await mgr.get_changed_files(path) == ["work.txt"]
+
+
+@pytest.mark.asyncio
+async def test_a_retry_whose_work_conflicts_with_main_keeps_its_work(repo, tmp_path):
+    """When the earlier work does not apply to today's main, the retry keeps it on its old base
+    (the gate shows the conflict) instead of dropping it."""
+    mgr = WorktreeManager(repo_path=str(repo), worktrees_base_dir=str(tmp_path / "wt"))
+    ok, path = await mgr.create_worktree("task-cf", base_branch="main")
+    (Path(path) / "a.py").write_text("x = 'agent'\n")
+    assert (await mgr.commit_all(path, "fleet: task-cf"))[0]
+    assert await mgr.remove_worktree("task-cf")
+
+    (repo / "a.py").write_text("x = 'main'\n")
+    _git(repo, "commit", "-q", "-am", "main changed a.py")
+
+    ok, path = await mgr.create_worktree("task-cf", base_branch="main")
+    wt = Path(path)
+    assert ok, path
+    assert (wt / "a.py").read_text() == "x = 'agent'\n"
+    assert not (wt / ".git").is_dir() and "CHERRY_PICK_HEAD" not in _git(wt, "status")
+    assert await mgr.get_changed_files(path) == ["a.py"]
