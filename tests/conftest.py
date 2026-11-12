@@ -116,3 +116,13 @@ def fake_process(stdout: bytes = b"", stderr: bytes = b"", returncode: int = 0):
     proc.stderr = _FakeStream(stderr)
     proc.communicate.return_value = (stdout, stderr)
     return proc
+
+
+@pytest.fixture(autouse=True)
+def _forget_verified_nostr_events():
+    """verify_event remembers the events nak verified for the life of the process; a test must
+    not inherit another test's verdicts."""
+    from fleet.core import nostr_identity
+    nostr_identity._VERIFIED.clear()
+    yield
+    nostr_identity._VERIFIED.clear()

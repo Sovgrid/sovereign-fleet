@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-12
+### Security
+- The Buzz intake verifies every channel message before it can become a task: the event id and
+  Schnorr signature are checked through `nak verify`, a forged message is skipped with a warning,
+  and a poll fails when `nak` cannot run. 0.12.0 trusted the relay to check signatures (it does
+  at the relay boundary; the fleet now checks them itself). A Buzz intake therefore needs `[nostr] nak`
+  to resolve on the daemon's PATH, and `fleet config check` says so. A verified event is
+  remembered for the life of the process, so a poll starts `nak` only for messages it has not seen.
+
+### Fixed
+- A lane whose provider answered with Google's `"retryDelay": "73464s"` and "rate limited you"
+  was not recognised as limited and kept being tried; the router now reads both, and
+  "Please retry in 58.2s", as a rate limit with its reset time.
+- A wait named in milliseconds ("Please retry in 918ms") rests the lane for a second, not for hours.
+- Shipped in 0.12.0, listed late: `~` and environment variables are expanded in `[nostr] nak`,
+  `[buzz] cli` and `[ngit] cli`; an intake with `provider = "auto"` and a `nostr://` or `naddr1`
+  repository gets the same config checks as `provider = "ngit"`; a task from a Buzz channel or a
+  Nostr repository keeps its issue link on the grid backend; a Buzz reply that marks its parent
+  as `root`, or without a marker, is no longer taken for a new top-level message.
+
 ## [0.12.0] - 2026-11-12
 ### Upgrading
 - Restart the daemon and reconnect your MCP clients after upgrading, before adding the new sections:

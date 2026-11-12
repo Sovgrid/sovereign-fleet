@@ -670,7 +670,7 @@ def check(cfg: FleetConfig) -> List[str]:
         "ngit" if p.intake.repo.startswith(("nostr://", "naddr1")) else p.intake.provider
         for p in cfg.projects.values() if p.intake.enabled
     }
-    for needed, name, option in ((key is not None, cfg.nostr.nak, "[nostr] nak"),
+    for needed, name, option in ((key is not None or "buzz" in providers, cfg.nostr.nak, "[nostr] nak"),
                                  ("buzz" in providers, cfg.buzz.cli, "[buzz] cli"),
                                  ("ngit" in providers, cfg.ngit.cli, "[ngit] cli")):
         if needed and shutil.which(_expand(name)) is None:

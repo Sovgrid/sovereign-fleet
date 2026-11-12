@@ -54,6 +54,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from fleet.core.config import FleetConfig, Project, _expand, load_config
+from fleet.core.nostr_identity import NostrIdentityError, verify_event
 from fleet.core.redact import redact
 from fleet.plugins.base import InputPlugin, PluginKind, PluginMeta
 
@@ -225,9 +226,10 @@ class BuzzTracker(IssueTracker):
     name = "buzz"
     LIMIT = 50
 
-    def __init__(self, cli: str, relay_url: str, env: Dict[str, str], timeout: float = 60.0):
+    def __init__(self, cli: str, relay_url: str, env: Dict[str, str], nak: str = "nak", timeout: float = 60.0):
         self.cli = _expand(cli)
         self.env = {"BUZZ_RELAY_URL": relay_url, **env}
+        self.nak = nak
         self.timeout = timeout
 
     def _run(self, args: List[str], stdin: Optional[str] = None) -> Any:
@@ -265,6 +267,13 @@ class BuzzTracker(IssueTracker):
                 continue
             event_id, content = str(ev.get("id", "")), str(ev.get("content") or "")
             if not re.fullmatch(r"[0-9a-f]{64}", event_id):
+                continue
+            try:
+                valid = verify_event(ev, nak=self.nak)
+            except NostrIdentityError as e:
+                raise TrackerError(f"buzz verify: {e}") from None
+            if not valid:
+                logger.warning("buzz intake: ignoring event %s with invalid signature", event_id[:12])
                 continue
             title = next((line.strip() for line in content.splitlines() if line.strip()), "")[:120]
             issues.append(Issue("buzz", repo, int(event_id, 16), title, content,
@@ -643,7 +652,7 @@ class IntakeService:
             cfg = self._config()
             if not cfg.buzz.relay_url:
                 raise IntakeError("intake from Buzz needs [buzz] relay_url")
-            return BuzzTracker(cfg.buzz.cli, cfg.buzz.relay_url, signing_env(cfg))
+            return BuzzTracker(cfg.buzz.cli, cfg.buzz.relay_url, signing_env(cfg), nak=cfg.nostr.nak)
         if provider == "ngit":
             from fleet.core.nostr_identity import key_path
             cfg = self._config()

@@ -10,6 +10,7 @@ A task's metadata may carry the coordinator's contract:
 import asyncio
 import inspect
 import logging
+import math
 import re
 import time
 from dataclasses import asdict
@@ -48,6 +49,8 @@ _RATE_LIMIT_PATTERNS = (
     re.compile(r"(?:status|code|http)[:\s]*429\b", re.IGNORECASE),
     re.compile(r"\b429\s+too many requests\b", re.IGNORECASE),
     re.compile(r"\brate_?limit(?:ed|_exceeded)?\b", re.IGNORECASE),
+    re.compile(r"\brate[\s_-]*(?:limited|limit\s+(?:reached|exceeded))\b", re.IGNORECASE),
+    re.compile(r'"?retryDelay"?\s*[:=]\s*"?(?:\d+(?:\.\d+)?\s*[dhms]\s*)+"?' , re.IGNORECASE),
     re.compile(r"\bresource_exhausted\b", re.IGNORECASE),
     re.compile(r"\binsufficient_quota\b", re.IGNORECASE),
     re.compile(r"\btpm\s+limit\b|\brpm\s+limit\b", re.IGNORECASE),
@@ -57,19 +60,28 @@ _RATE_LIMIT_PATTERNS = (
 
 RATE_LIMIT_PAUSE = 120   # seconds a lane rests after a per-minute limit
 
-# "Resets in 94h19m45s" (agy, 2026-10-23: a weekly subscription quota; the lane rested 120 s
-# and was tried again every few minutes for four days), "resets in 3h", "resets in 2d 4h".
-_RESETS_IN = re.compile(r"\bresets?\s+in\s+((?:\d+\s*[dhms]\s*)+)", re.IGNORECASE)
-_UNIT_SECONDS = {"d": 86400, "h": 3600, "m": 60, "s": 1}
+# "Resets in 94h19m45s" (agy weekly limit), "resets in 3h", "resets in 2d 4h",
+# or Google RetryInfo `"retryDelay": "73464s"` / `"Please retry in 58.2s"`. Gemini names short
+# waits in milliseconds ("retry in 918.03416ms"): "ms" is tried before "m", or it reads as minutes.
+_DURATION = r"(?:\d+(?:\.\d+)?\s*(?:ms|[dhms])\s*)+"
+_RESET_PATTERNS = (
+    re.compile(rf"\bresets?\s+in\s+({_DURATION})", re.IGNORECASE),
+    re.compile(rf'"?retryDelay"?\s*[:=\s]\s*"?({_DURATION})"?', re.IGNORECASE),
+    re.compile(rf"\bretry\s+in\s+({_DURATION})", re.IGNORECASE),
+)
+_UNIT_SECONDS = {"d": 86400, "h": 3600, "m": 60, "s": 1, "ms": 0.001}
 
 
 def reset_after(text: str) -> int:
     """Seconds until a limit resets, when the provider's message says so; else 0."""
-    m = _RESETS_IN.search(text or "")
-    if not m:
-        return 0
-    return sum(int(n) * _UNIT_SECONDS[u.lower()]
-               for n, u in re.findall(r"(\d+)\s*([dhms])", m.group(1), re.IGNORECASE))
+    for pat in _RESET_PATTERNS:
+        m = pat.search(text or "")
+        if m:
+            total = sum(float(n) * _UNIT_SECONDS[u.lower()]
+                        for n, u in re.findall(r"(\d+(?:\.\d+)?)\s*(ms|[dhms])", m.group(1), re.IGNORECASE))
+            if total > 0:
+                return math.ceil(total)
+    return 0
 
 
 def _last_line(text: str) -> str:
@@ -82,7 +94,7 @@ def classify_failure(stderr: str, stdout: str = "") -> Optional[str]:
     when stderr is empty (CLIs that print provider errors there)."""
     text = (stderr or "").strip()
     if not text:
-        text = (stdout or "")[-500:]
+        text = (stdout or "")[-1500:]
 
     if _NOT_A_LIMIT.search(text):
         return None

@@ -167,9 +167,10 @@ The intake trust policy is identical for all providers:
 - A block that does not parse gets one reply (per issue revision) and nothing is queued.
 - Without any `authors` nothing runs unattended, which is the right default for public repositories.
 
-**Who vouches for the author.** For Buzz intake the fleet takes the author from the relay's answer
-(through the `buzz` CLI) and does not verify the event signature itself: whoever controls the relay
-could post as a trusted author. Use a relay you run, over TLS. ngit verifies signatures itself.
+**Who vouches for the author.** The author's signature does. For Buzz intake the fleet checks the
+id and signature of every channel message with `nak verify` before it reads the author (since
+0.12.1): a message the relay altered, or one posted under someone else's key, is skipped. If `nak`
+cannot run, the poll fails instead of accepting unverified messages. ngit verifies signatures itself.
 
 The ```` ```fleet ```` block (JSON) sets the task contract: `allowed_paths`, `gate` (or `gate_cmd`), `category`, `lane`, and `acceptance_criteria`.
 

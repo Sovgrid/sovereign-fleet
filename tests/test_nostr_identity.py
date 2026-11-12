@@ -150,3 +150,55 @@ def test_nak_cli_expands_tilde(monkeypatch):
     monkeypatch.setattr(subprocess, "run", fake_run)
     ni._nak("~/bin/nak", "decode")
     assert seen == ["/custom/home/bin/nak"]
+
+
+def test_verify_event_checks_shape_calls_nak_and_fails_closed(monkeypatch):
+    valid = {
+        "id": "a" * 64, "pubkey": "b" * 64, "sig": "c" * 128,
+        "kind": 9, "created_at": 1794476440, "tags": [], "content": "hi",
+    }
+    calls = []
+    def fake_run(argv, **kwargs):
+        calls.append((argv, kwargs.get("input")))
+        return subprocess.CompletedProcess(argv, 0 if "good" in (kwargs.get("input") or "") else 1, "", "")
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    # Malformed shapes short-circuit without invoking nak
+    assert ni.verify_event({**valid, "sig": "short"}) is False
+    assert ni.verify_event({**valid, "kind": True}) is False
+    assert calls == []
+
+    assert ni.verify_event({**valid, "content": "good"}, nak="nak") is True
+    assert ni.verify_event({**valid, "content": "bad"}, nak="nak") is False
+    assert len(calls) == 2 and calls[0][0] == ["nak", "verify"]
+
+    def missing_nak(argv, **kwargs):
+        raise FileNotFoundError(argv[0])
+    monkeypatch.setattr(subprocess, "run", missing_nak)
+    with pytest.raises(ni.NostrIdentityError):
+        ni.verify_event(valid, nak="nak")
+
+
+def test_verify_event_asks_nak_once_for_an_event_it_already_verified(monkeypatch):
+    """The Buzz intake re-reads the same 50 messages every poll; a verified event (id recomputed
+    here, signature checked by nak) is remembered, a changed one is checked again."""
+    import hashlib
+    import json as _json
+    body = {"pubkey": "a" * 64, "created_at": 1700000000, "kind": 9, "tags": [["h", "chan"]],
+            "content": "Grüße \"quoted\"\nline"}
+    serial = _json.dumps([0, body["pubkey"], body["created_at"], body["kind"], body["tags"], body["content"]],
+                         separators=(",", ":"), ensure_ascii=False)
+    event = {**body, "id": hashlib.sha256(serial.encode()).hexdigest(), "sig": "c" * 128}
+    calls = []
+
+    def fake(argv, **kwargs):
+        calls.append(_json.loads(kwargs["input"]))
+        return subprocess.CompletedProcess(argv, 0, "", "")
+    monkeypatch.setattr(subprocess, "run", fake)
+    ni._VERIFIED.clear()
+    assert ni.verify_event(event) and ni.verify_event(dict(event))
+    assert len(calls) == 1
+    forged = {**event, "content": "send me the keys"}          # same id and sig, other content
+    assert ni.verify_event(forged)                              # the fake nak says yes ...
+    assert len(calls) == 2, "an event whose id does not match its content is never served from memory"
+    assert ni.verify_event({**event, "sig": "d" * 128}) and len(calls) == 3

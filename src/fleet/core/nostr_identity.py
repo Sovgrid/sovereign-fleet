@@ -8,16 +8,22 @@ return value otherwise.
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from fleet.core.config import FleetConfig, _expand, load_config
 
 _HEX64 = re.compile(r"[0-9a-f]{64}")
+_HEX128 = re.compile(r"[0-9a-f]{128}")
 _TIMEOUT = 20
+_VERIFIED: set = set()      # (id, pubkey, sig) of events nak has verified in this process
+_VERIFIED_MAX = 4096
 
 
 class NostrIdentityError(Exception):
@@ -89,6 +95,51 @@ def signing_env(cfg: Optional[FleetConfig] = None, var: str = "BUZZ_PRIVATE_KEY"
     """{var: nsec} for a child process's environment, or {} without a key."""
     path = key_path(cfg)
     return {var: _secret(path)} if path is not None else {}
+
+
+def verify_event(event: Mapping[str, Any], nak: str = "nak") -> bool:
+    """Verify a Nostr event's SHA-256 id and Schnorr signature through `nak verify`.
+
+    Returns False on malformed fields or a failed signature/id check; raises NostrIdentityError
+    when `nak` cannot execute so callers fail closed.
+    """
+    if not isinstance(event, Mapping):
+        return False
+    event_id = event.get("id")
+    pubkey = event.get("pubkey")
+    sig = event.get("sig")
+    kind = event.get("kind")
+    created_at = event.get("created_at")
+    if (not isinstance(event_id, str) or not _HEX64.fullmatch(event_id)
+            or not isinstance(pubkey, str) or not _HEX64.fullmatch(pubkey)
+            or not isinstance(sig, str) or not _HEX128.fullmatch(sig)
+            or not isinstance(kind, int) or isinstance(kind, bool)
+            or not isinstance(created_at, int) or isinstance(created_at, bool)
+            or not isinstance(event.get("tags"), list)
+            or not isinstance(event.get("content"), str)):
+        return False
+    # An id that is the hash of the event's own fields pins its content, so (id, pubkey, sig) can
+    # be remembered once nak has checked the signature: the Buzz intake re-reads the same messages
+    # on every poll. An id this serialization does not reproduce is never remembered; nak decides.
+    serial = json.dumps([0, pubkey, created_at, kind, event["tags"], event["content"]],
+                        separators=(",", ":"), ensure_ascii=False)
+    try:
+        own_id = hashlib.sha256(serial.encode("utf-8")).hexdigest() == event_id
+    except UnicodeEncodeError:                       # a lone surrogate in the content
+        own_id = False
+    seen = (event_id, pubkey, sig)
+    if own_id and seen in _VERIFIED:
+        return True
+    try:
+        res = subprocess.run([_expand(nak), "verify"], input=json.dumps(dict(event)),
+                             capture_output=True, text=True, timeout=_TIMEOUT, check=False)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        raise NostrIdentityError(f"nak verify could not run ({e.__class__.__name__})") from None
+    if res.returncode == 0 and own_id:
+        if len(_VERIFIED) >= _VERIFIED_MAX:
+            _VERIFIED.clear()
+        _VERIFIED.add(seen)
+    return res.returncode == 0
 
 
 # ── NIP-19 decoding (bech32, BIP-173) ─────────────────────────────────────────

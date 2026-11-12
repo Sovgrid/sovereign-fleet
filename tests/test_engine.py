@@ -194,11 +194,16 @@ def test_rate_limit_structured_signals():
 
 
 def test_reset_after_parses_provider_reset_times():
-    from fleet.core.engine import reset_after
+    from fleet.core.engine import classify_failure, reset_after
 
     agy = ('AGY_ERROR: {"short_error":"RESOURCE_EXHAUSTED (code 429): Individual quota reached. '
            'Please upgrade your subscription to increase your limits. Resets in 94h19m45s."}')
+    gemini_retry = ('"retryDelay": "73464s"\n}\nThe API provider has rate limited you. '
+                    'Try again later or check your quotas.\nhttps://aistudio.google.com/docs/rate-limits')
     assert reset_after(agy) == 94 * 3600 + 19 * 60 + 45
+    assert reset_after(gemini_retry) == 73464
+    assert reset_after("Please retry in 58.2s.") == 59
+    assert classify_failure("", gemini_retry) == "rate_limit"
     assert reset_after("limit hit, resets in 3h") == 3 * 3600
     assert reset_after("quota resets in 2d 4h") == 2 * 86400 + 4 * 3600
     assert reset_after("429 Too Many Requests") == 0
@@ -207,7 +212,7 @@ def test_reset_after_parses_provider_reset_times():
 
 def test_a_named_reset_rests_every_lane_of_the_same_login(tmp_path):
     """agy's quota is per subscription: both agy lanes rest until the reset it names, a lane on
-    another CLI keeps running."""
+    another CLI keeps running; a provider retryDelay rests only that lane until retry time."""
     import time as _time
 
     from fleet.core.config import LaneSpec, LaneStep
@@ -220,6 +225,7 @@ def test_a_named_reset_rests_every_lane_of_the_same_login(tmp_path):
     engine.lanes = {
         "agy_gemini": LaneSpec(cost="paid", steps=[LaneStep(harness="agy", model="gemini")]),
         "agy_sonnet": LaneSpec(cost="paid", steps=[LaneStep(harness="agy", model="sonnet")]),
+        "gemini_studio_flash": LaneSpec(cost="free", steps=[LaneStep(harness="opencode", model="google/gemini-2.5-flash")]),
         "local": LaneSpec(cost="local", steps=[LaneStep(harness="goose", model="qwen")]),
     }
     engine._rest("agy_gemini", "rate_limit", "Individual quota reached. Resets in 94h19m45s.")
@@ -228,5 +234,21 @@ def test_a_named_reset_rests_every_lane_of_the_same_login(tmp_path):
     assert lane_blocked_until("agy_sonnet", spool_dir=tmp_path) > soon
     assert lane_blocked_until("local", spool_dir=tmp_path) < _time.time()
 
+    engine._rest("gemini_studio_flash", "rate_limit", '"retryDelay": "73464s"\nThe API provider has rate limited you.')
+    assert lane_blocked_until("gemini_studio_flash", spool_dir=tmp_path) > _time.time() + 73000
+    assert lane_blocked_until("local", spool_dir=tmp_path) < _time.time()
+
     engine._rest("local", "rate_limit", "429 Too Many Requests")
     assert lane_blocked_until("local", spool_dir=tmp_path) < _time.time() + 600
+
+
+def test_reset_after_reads_milliseconds_as_milliseconds():
+    """Gemini names short waits in ms ("Please retry in 918.03416ms."); read as minutes, that
+    rested the lane for 15 hours (audit 2026-11-12)."""
+    from fleet.core.engine import reset_after
+    assert reset_after("Please retry in 918.03416ms.") == 1
+    assert reset_after("retry in 30 ms") == 1
+    assert reset_after('"retryDelay": "250ms"') == 1
+    assert reset_after("resets in 1m30s") == 90
+    assert reset_after("Please retry in 2m 500ms") == 121
+    assert reset_after("retry in 5 minutes") == 300

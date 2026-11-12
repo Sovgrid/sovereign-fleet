@@ -26,14 +26,23 @@ _REAL_RUN = subprocess.run
 
 
 class FakeBuzz:
-    """Answers `buzz` argv from fixtures; records argv, input and env; passes other programs on."""
+    """Answers `buzz` and `nak verify` argv; records argv, input and env; passes other programs on."""
 
-    def __init__(self, answers=None):
+    def __init__(self, answers=None, invalid_ids=()):
         self.calls = []
+        self.verified = []
         self.answers = answers or {}
+        self.invalid_ids = set(invalid_ids)
 
     def __call__(self, argv, **kwargs):
-        if Path(argv[0]).name != "buzz":
+        prog = Path(argv[0]).name
+        if prog == "nak" and len(argv) >= 2 and argv[1] == "verify":
+            ev = json.loads(kwargs.get("input") or "{}")
+            ev_id = ev.get("id", "")
+            self.verified.append(ev_id)
+            rc = 1 if ev_id in self.invalid_ids else 0
+            return subprocess.CompletedProcess(argv, rc, "", "" if rc == 0 else "bad sig")
+        if prog != "buzz":
             if argv[0] == "git":
                 raise AssertionError(f"git must not run for a buzz intake: {argv}")
             return _REAL_RUN(argv, **kwargs)
@@ -191,3 +200,19 @@ def test_target_needs_a_channel_and_tracker_needs_a_relay(isolate_fleet, tmp_pat
         Path(os.environ["FLEET_CONFIG"]).read_text().replace(f'relay_url = "{RELAY}"', 'relay_url = ""'))
     with pytest.raises(IntakeError):
         service.tracker("buzz")
+
+
+def test_list_open_drops_forged_signatures_and_fails_closed_without_nak(monkeypatch):
+    forged = dict(ROOT, id="1" * 64, sig="2" * 128)
+    fake = FakeBuzz({("messages", "get"): (0, [forged, ROOT])}, invalid_ids={forged["id"]})
+    issues = tracker(fake, monkeypatch).list_open(CHANNEL)
+    assert [i.number for i in issues] == [int(ROOT["id"], 16)]
+    assert fake.verified == [forged["id"], ROOT["id"]]
+
+    def missing_nak(argv, **kwargs):
+        if Path(argv[0]).name == "nak":
+            raise FileNotFoundError(argv[0])
+        return fake(argv, **kwargs)
+    monkeypatch.setattr(subprocess, "run", missing_nak)
+    with pytest.raises(TrackerError, match="nak verify"):
+        BuzzTracker("buzz", RELAY, {"BUZZ_PRIVATE_KEY": NSEC}).list_open(CHANNEL)
