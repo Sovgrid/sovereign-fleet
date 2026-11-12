@@ -627,9 +627,10 @@ def config_command(args) -> int:
         print("ok" if not problems else f"{len(problems)} problem(s) in {path}")
         return 1 if problems else 0
     data = cfg.model_dump()
+    npub = _nostr_npub(cfg)
     if getattr(args, "json", False):
         print(json.dumps({"file": str(path), "exists": path.exists(), "config": data,
-                          "sources": sources}, indent=2))
+                          "sources": sources, "nostr": {"npub": npub}}, indent=2))
         return 0
     print(f"# {path}{'' if path.exists() else ' (not present: defaults)'}")
     for section, values in data.items():
@@ -640,7 +641,18 @@ def config_command(args) -> int:
             continue
         for name, value in values.items():
             print(f"{section}.{name} = {json.dumps(value)}  [{sources.get(f'{section}.{name}', 'default')}]")
+    print(f"nostr.npub = {npub or '-'}  [derived from nostr.key_file]")
     return 0
+
+
+def _nostr_npub(cfg) -> Optional[str]:
+    """The fleet's npub, None without a key, or the error text (never the key)."""
+    from fleet.core.nostr_identity import NostrIdentityError, load_identity
+    try:
+        identity = load_identity(cfg)
+    except NostrIdentityError as e:
+        return f"error: {e}"
+    return identity.npub if identity else None
 
 
 if __name__ == "__main__":

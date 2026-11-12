@@ -1,0 +1,36 @@
+[
+ {
+  "content": "Task request\n```fleet\ntitle: cli test\n```\n",
+  "created_at": 1794476440,
+  "id": "401b95299fe64af9c4c5e0b41d14b09c07201dce81b786ce6348edb258ea3bab",
+  "kind": 9,
+  "pubkey": "7340621f1ae31367337e4325e1585150760ef56216bbdcff19fbd68332bde7bd",
+  "sig": "82acf8731ce24b0ddfec4ce4872bda0e0985d427888ff8ed35f4bfcd37dcfda2d02db1af3dada9b9ec8492ea4079e7f108a2a01a597498f8543779adddc68596",
+  "tags": [
+   [
+    "h",
+    "1e06d232-fb5c-4a42-bc85-dffc651b90b8"
+   ]
+  ]
+ },
+ {
+  "content": "reply in thread",
+  "created_at": 1794476440,
+  "id": "8aa00bc856b66cfe1570025b46fc85f906ecfb8cf4243129ddb3d63f8ba4946c",
+  "kind": 9,
+  "pubkey": "7340621f1ae31367337e4325e1585150760ef56216bbdcff19fbd68332bde7bd",
+  "sig": "f29c1b8f20536d77f58294ea1084d6364eedcc12c2032682867358ffc971c09381593a58f46d0108897656629938697965ecadcda0f950214780b36e24ef3818",
+  "tags": [
+   [
+    "h",
+    "1e06d232-fb5c-4a42-bc85-dffc651b90b8"
+   ],
+   [
+    "e",
+    "401b95299fe64af9c4c5e0b41d14b09c07201dce81b786ce6348edb258ea3bab",
+    "",
+    "reply"
+   ]
+  ]
+ }
+]

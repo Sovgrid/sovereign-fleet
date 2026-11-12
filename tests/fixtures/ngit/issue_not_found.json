@@ -1,0 +1,4 @@
+{
+  "command_status": "error",
+  "error": "couldn't find issue 00000000000000000000000000000000000000000000000000000000000000ff in this repository's local data.\n\nRun `ngit issue list --status open,draft,closed,applied` and check the ID."
+}

@@ -244,7 +244,7 @@ def grid_category(lane: Dict[str, Any]) -> str:
     return "subscription"            # paid per use or a billing trial: not free
 
 
-_FROM_ISSUE = re.compile(r"\(From issue ([\w.-]+/[\w.-]+)#(\d+): (\S+?)\)")
+_FROM_ISSUE = re.compile(r"\(From issue ([^\s#]+)#(\d+): (\S+?)\)")
 
 
 def _issue_of(task: Dict[str, Any]) -> Optional[Dict[str, Any]]:

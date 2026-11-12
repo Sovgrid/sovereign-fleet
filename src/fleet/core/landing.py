@@ -6,7 +6,8 @@ Per project in fleet.toml (`landing`):
   fast-forward the default branch, push it to the remote if there is one. A main checkout with
   uncommitted changes is never touched: the task stays on its branch and says why.
 - "pull_request": rebase onto the remote's default branch, push fleet/<task-id>, open a pull
-  request through a provider plugin (GitHub via `gh`, Gitea via its API). A human merges.
+  request through a provider plugin (GitHub via `gh`, Gitea via its API). A human merges. For a
+  nostr:// remote the pull request is a NIP-34 event signed with the fleet's key (fleet.plugins.nostr_pr).
 
 Merges into one repository are serialized (a lock file in its git dir), so two tasks cannot
 race each other onto the default branch. Nothing is ever force-pushed to the default branch.
@@ -183,6 +184,9 @@ async def _pull_request(repo: Path, worktree: Path, branch: str, task_id: str, t
     if not await _has_remote(repo, remote):
         res.detail = f"no {remote} remote to open a pull request on; work stays on {branch}"
         return res
+    url = await _out("-C", str(repo), "remote", "get-url", remote)
+    if url.startswith("nostr://"):
+        return await _nostr_pull_request(worktree, branch, task_id, title, project, url, issue)
     await _git("-C", str(repo), "fetch", "-q", remote, base)
     why = await _rebase(worktree, f"{remote}/{base}")
     if why:
@@ -200,15 +204,60 @@ async def _pull_request(repo: Path, worktree: Path, branch: str, task_id: str, t
     if provider is None:
         res.status, res.detail = "pushed", f"{branch} pushed; no pull request provider for {url}"
         return res
-    body = (f"Fleet task `{task_id}`. Its gates passed in the sandbox; CI runs on this pull request.\n\n"
-            "Needs a human review before merging.")
-    reference = issue_reference(issue, url)
-    if reference:
-        body += f"\n\n{reference}"
+    body = _pr_body(task_id, issue, url)
     try:
         res.pr_url = await provider.open(repo, url, branch, base, title[:120] or task_id, body)
     except RuntimeError as e:
         res.detail = f"{branch} pushed, opening the pull request failed: {e}"
         return res
     res.status, res.detail = "pr_opened", f"pull request for {branch}: {res.pr_url}"
+    return res
+
+
+def _pr_body(task_id: str, issue: Optional[Dict], remote_url: str) -> str:
+    body = (f"Fleet task `{task_id}`. Its gates passed in the sandbox; CI runs on this pull request.\n\n"
+            "Needs a human review before merging.")
+    reference = issue_reference(issue, remote_url)
+    return f"{body}\n\n{reference}" if reference else body
+
+
+async def _nostr_pull_request(worktree: Path, branch: str, task_id: str, title: str, project: Project,
+                              url: str, issue: Optional[Dict], prs=None) -> LandingResult:
+    """A NIP-34 pull request for a nostr:// remote (fleet.plugins.nostr_pr): the branch goes to the
+    repository's git server as pr/<branch>, the pull request is an event signed with the fleet's key."""
+    from fleet.plugins.nostr_pr import NostrPrError, NostrPullRequests
+    base = project.default_branch
+    res = LandingResult("pull_request", "failed")
+    if prs is None:
+        from fleet.core.config import load_config
+        from fleet.core.nostr_identity import NostrIdentityError, key_path, load_identity
+        cfg = load_config()
+        key = key_path(cfg)
+        if key is None:
+            res.detail = f"a nostr:// remote needs [nostr] key_file; work stays on {branch}"
+            return res
+        try:
+            me = load_identity(cfg)
+        except NostrIdentityError as e:
+            res.detail = f"{e}; work stays on {branch}"
+            return res
+        if me is None:
+            res.detail = f"the fleet has no Nostr identity ([nostr] key_file); work stays on {branch}"
+            return res
+        prs = NostrPullRequests(key, me.pubkey, me.npub, cfg.root / "ngit", cfg.ngit.cli, cfg.nostr.nak)
+    try:
+        target = await prs.resolve(url)
+        await prs.fetch_base(target, worktree, base)
+        why = await _rebase(worktree, "FETCH_HEAD")
+        if why:
+            res.detail = f"does not rebase onto {base} of {target.clone}: {why}; work stays on {branch}"
+            return res
+        res.commit = await _out("-C", str(worktree), "rev-parse", "HEAD")
+        await prs.push(target, worktree, branch)
+        res.pr_url = await prs.open_pull_request(target, worktree, branch, base, title[:120] or task_id,
+                                                 _pr_body(task_id, issue, url))
+    except NostrPrError as e:
+        res.detail = f"{e}; work stays on {branch}"
+        return res
+    res.status, res.detail = "pr_opened", f"pull request for pr/{branch}: {res.pr_url}"
     return res

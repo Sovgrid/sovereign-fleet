@@ -1,10 +1,11 @@
-"""Issue intake (migration phase 5): tasks from a project's Gitea or GitHub issues.
+"""Issue intake (migration phase 5): tasks from a project's Gitea, GitHub or ngit (NIP-34) issues,
+or from the top-level messages of a Buzz channel.
 
 Per project in fleet.toml:
 
     [projects.app.intake]
     enabled = true
-    provider = "auto"        # gitea / github / auto (from the project's remote, as landing does)
+    provider = "auto"        # gitea / github / buzz / ngit / auto (from the project's remote, as landing does)
     label = "fleet"          # only issues with this label; "": every open issue
     authors = ["alice"]      # who may queue a task that runs unattended
     interval_min = 5
@@ -24,7 +25,9 @@ change nothing. A rejected block is looked at again only when the issue's title 
 When the task has finished, its result goes to the issue: the pull request (whose body closes the
 issue on merge), the landed commit (the issue is closed), or the failure with its gate excerpt.
 
-Gitea is read through its API with [gitea] url and token_file, GitHub through `gh` and its login.
+Gitea is read through its API with [gitea] url and token_file, GitHub through `gh` and its login,
+Buzz through the `buzz` CLI and [buzz] relay_url, ngit through the `ngit` CLI; the last two sign
+with the fleet's own key ([nostr] key_file, docs/NOSTR.md).
 The state lives in <fleet.root>/intake_state.json; a poll holds a file lock, so the daemon and
 `fleet intake sync` never queue the same issue twice.
 """
@@ -36,8 +39,10 @@ import fcntl
 import hashlib
 import json
 import logging
+import os
 import re
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -72,8 +77,8 @@ _LANDED = ("success", "pushed", "landed", "merged", "pr_merged")
 
 @dataclass(frozen=True)
 class Issue:
-    provider: str                 # gitea | github
-    repo: str                     # owner/name
+    provider: str                 # gitea | github | buzz | ngit
+    repo: str                     # owner/name (buzz: channel UUID; ngit: nostr:// URL or naddr)
     number: int
     title: str
     body: str
@@ -205,6 +210,163 @@ class GitHubTracker(IssueTracker):
 
     def close(self, repo: str, number: int) -> None:
         self._gh("issue", "close", str(number), "--repo", repo)
+
+
+class BuzzTracker(IssueTracker):
+    """A channel of a Buzz relay (Block's workspace on Nostr) through the `buzz` CLI.
+
+    Top-level channel messages are the issues; the fleet answers in the message's thread and
+    marks it done with a reaction, signed with its own key (BUZZ_PRIVATE_KEY from
+    fleet.core.nostr_identity.signing_env). Channel messages are kind 9 events with the channel
+    in an `h` tag; a thread reply carries ["e", <root id>, "", "reply"] (tests/fixtures/buzz).
+    `number` is the full event id as an integer, so comment/close find the event again across
+    polls without state.
+    """
+    name = "buzz"
+    LIMIT = 50
+
+    def __init__(self, cli: str, relay_url: str, env: Dict[str, str], timeout: float = 60.0):
+        self.cli = _expand(cli)
+        self.env = {"BUZZ_RELAY_URL": relay_url, **env}
+        self.timeout = timeout
+
+    def _run(self, args: List[str], stdin: Optional[str] = None) -> Any:
+        try:
+            res = subprocess.run([self.cli, *args], input=stdin, env={**os.environ, **self.env},
+                                 capture_output=True, text=True, timeout=self.timeout, check=False)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise TrackerError(f"buzz {args[0]} {args[1]}: {e.__class__.__name__}") from None
+        try:
+            data = json.loads(res.stdout) if res.stdout.strip() else None
+        except ValueError:
+            data = None
+        if res.returncode != 0 or (isinstance(data, dict) and "error" in data):
+            message = (data or {}).get("message") if isinstance(data, dict) else None
+            message = message or (res.stderr or res.stdout).strip()[-300:]
+            for value in self.env.values():   # never echo the key or the relay URL back
+                if value:
+                    message = message.replace(value, "***")
+            raise TrackerError(f"buzz {args[0]} {args[1]}: {message}")
+        return data
+
+    @staticmethod
+    def _is_reply(event: Dict[str, Any]) -> bool:
+        return any(isinstance(t, list) and len(t) >= 2 and t[0] == "e"
+                   and (len(t) < 4 or t[3] in ("reply", "root"))
+                   for t in event.get("tags") or [])
+
+    def list_open(self, repo: str, label: str = "") -> List[Issue]:
+        events = self._run(["messages", "get", "--channel", repo, "--limit", str(self.LIMIT)])
+        if not isinstance(events, list):
+            raise TrackerError("buzz messages get: no JSON list")
+        issues = []
+        for ev in events:
+            if not isinstance(ev, dict) or ev.get("kind") != 9 or self._is_reply(ev):
+                continue
+            event_id, content = str(ev.get("id", "")), str(ev.get("content") or "")
+            if not re.fullmatch(r"[0-9a-f]{64}", event_id):
+                continue
+            title = next((line.strip() for line in content.splitlines() if line.strip()), "")[:120]
+            issues.append(Issue("buzz", repo, int(event_id, 16), title, content,
+                                str(ev.get("pubkey", "")), (),
+                                f"buzz://message?channel={repo}&id={event_id}"))
+        return issues
+
+    def comment(self, repo: str, number: int, text: str) -> None:
+        self._run(["messages", "send", "--channel", repo, "--content", "-",
+                   "--reply-to", format(number, "064x")], stdin=text)
+
+    def close(self, repo: str, number: int) -> None:
+        self._run(["reactions", "add", "--event", format(number, "064x"), "--emoji", "\u2705"])
+
+
+class NgitTracker(IssueTracker):
+    """The NIP-34 issues of a repository on Nostr, through the `ngit` CLI (v3, `--json`).
+
+    `repo` is the repository's nostr:// URL or naddr. ngit runs only inside a git repository and
+    writes repo settings and an event cache there, so each call gets a fresh helper repository
+    under `workdir`, never a project checkout: ngit 3.0.5's incremental sync of a reused cache
+    misses events that other clients published after the first sync (an issue from the Buzz app
+    would never show up), and a fresh one reads the repository's events in full. It signs with the fleet's key file (`--nsec-file`); the secret
+    never enters an argv or an environment. `issue list` gives authors as npub and ids as nevent,
+    without the text, so each issue's text comes from `issue view --offline` (the list call has
+    just filled ngit's cache). `number` is the event id as an integer, as for Buzz. Done issues
+    get the resolved status; a relay that refuses NIP-22 comments (kind 1111; Buzz 1.0 does)
+    makes comment() fail, and the result then reaches the issue only as that status
+    (tests/fixtures/ngit).
+    """
+    name = "ngit"
+
+    def __init__(self, cli: str, key_file: Path, workdir: Path, timeout: float = 90.0):
+        self.cli = _expand(cli)
+        self.key_file = Path(key_file)
+        self.workdir = Path(workdir)
+        self.timeout = timeout
+
+    @contextmanager
+    def _fresh(self) -> Iterator[Path]:
+        """A new, empty helper repository for one poll or one write, removed afterwards."""
+        self.workdir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=self.workdir, prefix="ngit-") as tmp:
+            res = subprocess.run(["git", "init", "-q", tmp], capture_output=True, text=True,
+                                 timeout=30, check=False)
+            if res.returncode != 0:
+                raise TrackerError(f"ngit: cannot create its helper repository: {res.stderr.strip()[-200:]}")
+            yield Path(tmp)
+
+    def _run(self, repo: str, args: List[str], cwd: Path) -> Any:
+        argv = [self.cli, *args, "--repo", repo, "--nsec-file", str(self.key_file), "--json"]
+        try:
+            res = subprocess.run(argv, cwd=cwd, capture_output=True, text=True,
+                                 timeout=self.timeout, check=False)
+        except (OSError, subprocess.SubprocessError) as e:
+            raise TrackerError(f"ngit {args[0]} {args[1]}: {e.__class__.__name__}") from None
+        try:
+            data = json.loads(res.stdout) if res.stdout.strip() else None
+        except ValueError:
+            data = None
+        if res.returncode != 0 or (isinstance(data, dict) and data.get("command_status") == "error"):
+            message = data.get("error") if isinstance(data, dict) else None
+            raise TrackerError(f"ngit {args[0]} {args[1]}: "
+                               f"{(message or res.stderr or res.stdout).strip()[-300:]}")
+        return data
+
+    def list_open(self, repo: str, label: str = "") -> List[Issue]:
+        with self._fresh() as cwd:
+            return self._list_open(repo, label, cwd)
+
+    def _list_open(self, repo: str, label: str, cwd: Path) -> List[Issue]:
+        from fleet.core.nostr_identity import nevent_id, npub_hex
+        listed = self._run(repo, ["issue", "list", *(["--label", label] if label else [])], cwd)
+        if not isinstance(listed, list):
+            raise TrackerError("ngit issue list: no JSON list")
+        issues = []
+        for item in listed:
+            if not isinstance(item, dict) or item.get("status") != "open":
+                continue
+            try:
+                event_id, author = nevent_id(str(item.get("id", ""))), npub_hex(str(item.get("author", "")))
+            except ValueError:
+                continue
+            try:
+                body = self._run(repo, ["issue", "view", event_id, "--offline"], cwd)
+            except TrackerError as e:   # one unreadable issue does not hide the others
+                logger.warning("intake: %s", e)
+                continue
+            title = str(item.get("subject") or "").strip()[:120]
+            labels = tuple(str(x) for x in item.get("labels") or ())
+            issues.append(Issue("ngit", repo, int(event_id, 16), title,
+                                str((body or {}).get("description") or ""), author, labels,
+                                f"nostr:{item['id']}"))
+        return issues
+
+    def comment(self, repo: str, number: int, text: str) -> None:
+        with self._fresh() as cwd:
+            self._run(repo, ["issue", "comment", format(number, "064x"), "--body", text], cwd)
+
+    def close(self, repo: str, number: int) -> None:
+        with self._fresh() as cwd:
+            self._run(repo, ["issue", "resolved", format(number, "064x"), "--reason", "done by sovereign-fleet"], cwd)
 
 
 # ── the ```fleet``` block ─────────────────────────────────────────────────────
@@ -439,6 +601,14 @@ class IntakeService:
         """(provider, owner/name) of a project's issues."""
         from fleet.plugins.landing import _same_host, owner_repo
         cfg = self._config()
+        if project.intake.provider == "buzz":
+            if not project.intake.channel:
+                raise IntakeError(f"project '{key}': a buzz intake needs intake.channel")
+            return "buzz", project.intake.channel
+        if project.intake.provider == "ngit" and project.intake.repo:
+            if not project.intake.repo.startswith(("nostr://", "naddr1")):
+                raise IntakeError(f"project '{key}': an ngit intake needs intake.repo as nostr:// URL or naddr")
+            return "ngit", project.intake.repo
         url = ""
         if project.intake.provider == "auto" or not project.intake.repo:
             res = subprocess.run(["git", "-C", _expand(project.path), "remote", "get-url", project.remote],
@@ -447,6 +617,10 @@ class IntakeService:
             if not url:
                 raise IntakeError(f"project '{key}': no '{project.remote}' remote; set intake.repo and intake.provider")
         provider = project.intake.provider
+        if provider in ("auto", "ngit") and url.startswith("nostr://"):
+            return "ngit", url
+        if provider == "ngit":
+            raise IntakeError(f"project '{key}': an ngit intake needs intake.repo or a nostr:// remote")
         if provider == "auto":
             if "github.com" in url:
                 provider = "github"
@@ -464,6 +638,19 @@ class IntakeService:
             return self._trackers[provider]
         if provider == "github":
             return GitHubTracker()
+        if provider == "buzz":
+            from fleet.core.nostr_identity import signing_env
+            cfg = self._config()
+            if not cfg.buzz.relay_url:
+                raise IntakeError("intake from Buzz needs [buzz] relay_url")
+            return BuzzTracker(cfg.buzz.cli, cfg.buzz.relay_url, signing_env(cfg))
+        if provider == "ngit":
+            from fleet.core.nostr_identity import key_path
+            cfg = self._config()
+            key = key_path(cfg)
+            if key is None:
+                raise IntakeError("intake from ngit needs [nostr] key_file")
+            return NgitTracker(cfg.ngit.cli, key, cfg.root / "ngit")
         gitea = self._config().gitea
         if not (gitea.url and gitea.token_file):
             raise IntakeError("intake from Gitea needs [gitea] url and token_file")
@@ -526,7 +713,8 @@ class IntakeService:
     def _ingest(self, key: str, project: Project, issue: Issue, authors: set,
                 state: Dict[str, Any], dry_run: bool) -> Optional[Dict[str, Any]]:
         labels = {l.lower() for l in issue.labels}
-        if project.intake.label and project.intake.label.lower() not in labels:
+        # Buzz messages carry no labels: there the fleet block and the authors are the gate.
+        if project.intake.label and issue.provider != "buzz" and project.intake.label.lower() not in labels:
             return None
         if labels & SKIP_LABELS:
             return None
@@ -621,7 +809,16 @@ class IntakeService:
                 text, close = result_comment(task)
                 try:
                     tracker = self.tracker(meta.get("provider", ""))
-                    tracker.comment(meta["repo"], meta["number"], text)
+                    try:
+                        tracker.comment(meta["repo"], meta["number"], text)
+                    except TrackerError as e:
+                        # Retried on the next ticks; after the last try the issue is still
+                        # closed, so a tracker that refuses comments (a Buzz relay and NIP-22)
+                        # does not keep a landed issue open.
+                        record["report_errors"] = record.get("report_errors", 0) + 1
+                        logger.warning("intake: result of %s to %s: %s", task.id, key, e)
+                        if record["report_errors"] < 5:
+                            continue
                     if close and not record.get("closed"):
                         tracker.close(meta["repo"], meta["number"])
                         record["closed"] = True

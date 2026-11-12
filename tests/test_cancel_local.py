@@ -198,8 +198,9 @@ def test_start_crash_retried_in_outcome(tmp_path, monkeypatch):
 
 
 def test_asyncio_cancel_marks_cancelled_and_keeps_work(tmp_path, monkeypatch):
-    """When the engine's asyncio task is cancelled, it transitions to 'cancelled',
-    keeps the work on the branch, and re-raises CancelledError."""
+    """The operator's cancel (the API marks the task cancelled, then cancels its asyncio task)
+    keeps it cancelled, keeps the work on the branch, and re-raises CancelledError. A bare
+    cancellation is a daemon shutdown instead: see test_engine_shutdown.py."""
     monkeypatch.setenv("FLEET_SANDBOX", "0")
 
     repo = _repo(tmp_path / "repo", {"README.md": "x\n"})
@@ -242,7 +243,8 @@ def test_asyncio_cancel_marks_cancelled_and_keeps_work(tmp_path, monkeypatch):
         # Wait for the harness to start and write its work
         await asyncio.sleep(0.2)
 
-        # Cancel the engine's asyncio task
+        # Cancel the way LocalBackend.cancel does: mark the task cancelled, then cancel its run
+        store.transition(task.id, "cancelled", allowed_from=("in_progress",))
         engine_task.cancel()
 
         try:

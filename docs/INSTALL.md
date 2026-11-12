@@ -155,3 +155,31 @@ The control plane dashboard allows dispatching tasks and changing runtime settin
 - **Never bind `0.0.0.0`**: Do not expose the daemon on public or untrusted networks without network-level access control.
 - **Token authentication**: Every `/api` route requires authentication via `Authorization: Bearer <token>` or the HttpOnly session cookie.
 - **Sign-in by URL fragment**: Opening `https://<host>:8444/#token=<token>` signs the browser in securely. The browser exchanges the URL fragment for a session cookie and clears the fragment from the address bar. URL fragments are never sent to the server or recorded in access logs.
+
+## Nostr (Buzz, ngit) — optional
+
+To use Nostr-based intake (Buzz channels and ngit NIP-34 issues) you need three CLIs installed and on `$PATH`:
+
+- **nak** — key management; derives the fleet's Nostr public key and npub from an nsec file.
+- **buzz** — Buzz relay client; polls channel messages and posts replies (used by the fleet for Buzz channel intake).
+- **ngit 3** — git over Nostr; reads NIP-34 issues, posts comments and status events. Requires `git-remote-nostr` as well.
+
+After installing them, configure the fleet's own identity in `fleet.toml`:
+
+```toml
+[nostr]
+key_file = "fleet-nsec"    # nsec file (mode 0600); in [secrets] dir or absolute path
+```
+
+and optionally the relay and CLI settings:
+
+```toml
+[buzz]
+relay_url = "https://relay.example:8447"
+cli = "buzz"
+
+[ngit]
+cli = "ngit"
+```
+
+For full configuration details, operator procedures, and known limits, see [docs/NOSTR.md](docs/NOSTR.md).

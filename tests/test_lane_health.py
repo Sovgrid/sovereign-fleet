@@ -71,7 +71,7 @@ def api_lane(base: str, key_file: str = "acme.key") -> str:
     return f"""
 cost = "free"
 provider = "acme"
-key_env = "ACME_KEY"
+key_env = "OPENAI_API_KEY"  # what aider reads for an openai/ model
 key_file = "{key_file}"
 [[lanes.LANE.steps]]
 harness = "aider"
@@ -159,11 +159,12 @@ def test_keys_resolve_as_the_engine_resolves_them(provider, monkeypatch):
 
 
 def test_without_any_key_the_lane_is_dead_and_the_daemon_env_counts(provider, monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     write_config(lanes_toml(acme=api_lane(provider["base"], key_file="missing.key")))
     out = lh.check(load_config())
     assert out["acme"]["status"] == "dead" and "no key" in out["acme"]["reason"]
     assert provider["seen"] == []
-    monkeypatch.setenv("ACME_KEY", "mock-from-env")
+    monkeypatch.setenv("OPENAI_API_KEY", "mock-from-env")
     assert lh.check(load_config())["acme"]["status"] == "ok"
     assert provider["seen"][0]["auth"] == "Bearer mock-from-env"
 

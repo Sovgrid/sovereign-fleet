@@ -292,7 +292,9 @@ class CliHarness(HarnessPlugin):
         """
         start = time.monotonic()
         last_activity = start
-        last_fingerprint: Optional[str] = None
+        # Baseline at start, so a stall window shorter than the check interval still sees changes.
+        last_fingerprint: Optional[str] = (
+            await asyncio.to_thread(_worktree_fingerprint, worktree_dir) if stall_seconds > 0 else None)
         next_check = start + STALL_CHECK_SECONDS
 
         # Loop detection: the output lines of the last loop_seconds as (time, line), how often
@@ -338,6 +340,17 @@ class CliHarness(HarnessPlugin):
                 if exit_task.done() and all(t.done() for t in pump_tasks):
                     break
                 if stall_seconds > 0 and now - last_activity > stall_seconds:
+                    # Look at the worktree once more before calling it a stall: the periodic
+                    # check may not have run since the last change (a late wake-up under load,
+                    # or a check interval longer than the stall window), and a run whose files
+                    # changed is working, not stalled (flaky test_worktree_changes_reset_stall,
+                    # 2026-11-12, which failed a fleet task's repo gate).
+                    fp = await asyncio.to_thread(_worktree_fingerprint, worktree_dir)
+                    if last_fingerprint is not None and fp != last_fingerprint:
+                        last_fingerprint = fp
+                        last_activity = last_change = now
+                        next_check = now + STALL_CHECK_SECONDS
+                        continue
                     raise _Stalled(stall_seconds)
                 if now - start > timeout:
                     raise asyncio.TimeoutError()

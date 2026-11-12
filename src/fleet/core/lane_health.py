@@ -246,12 +246,38 @@ def _opencode_only(spec: LaneSpec) -> bool:
     return all(step.harness == "opencode" for step in spec.steps)
 
 
+# The env var litellm reads for a model prefix. aider gets the lane's key under key_env only,
+# so a lane whose key_env is not the one its model's prefix needs fails on every run.
+LITELLM_KEY_ENV = {
+    "openai": "OPENAI_API_KEY", "groq": "GROQ_API_KEY", "gemini": "GEMINI_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY", "mistral": "MISTRAL_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY", "anthropic": "ANTHROPIC_API_KEY", "cerebras": "CEREBRAS_API_KEY",
+}
+
+
+def credential_problem(spec: LaneSpec) -> Optional[str]:
+    """Why an aider step of this lane cannot see its key, or None. Only lanes with a key_env
+    and known model prefixes are judged; local lanes have no key_env."""
+    if not spec.key_env:
+        return None
+    for step in spec.steps:
+        if step.harness != "aider" or "/" not in step.model:
+            continue
+        wanted = LITELLM_KEY_ENV.get(step.model.split("/", 1)[0])
+        if wanted and wanted != spec.key_env and wanted not in spec.pass_env:
+            return f"aider reads ${wanted} for '{step.model}', the lane passes ${spec.key_env}"
+    return None
+
+
 def probe_lane(name: str, spec: LaneSpec, credential_plugin: Any = None,
                secrets_dir: Optional[Path] = None, opencode_models: Optional[List[str]] = None,
                ctx: Optional[Context] = None) -> Probe:
     if ctx is None:
         cfg = load_config()
         ctx = Context(cfg, credential_plugin, {}, opencode_models)
+    problem = credential_problem(spec)
+    if problem:
+        return Probe(DEAD, problem)
     if spec.key_env:
         return probe_api_lane(spec, ctx)
     if spec.probe_url:
@@ -324,7 +350,10 @@ def _discovered_spec(cfg: FleetConfig, found: Dict[str, Any]) -> Optional[LaneSp
     template = cfg.lanes.get(found.get("template") or "")
     if template is None:
         return None
-    return LaneSpec(cost="free", provider=template.provider, key_env=template.key_env,
+    # The aider step reaches the provider as an OpenAI-compatible endpoint (openai/ model plus
+    # --openai-api-base), where litellm reads OPENAI_API_KEY. The template may be another
+    # harness's lane (opencode reads OPENROUTER_API_KEY), so only its key_file is taken over.
+    return LaneSpec(cost="free", provider=template.provider, key_env="OPENAI_API_KEY",
                     key_file=template.key_file, pass_env=list(template.pass_env),
                     steps=[LaneStep(harness="aider", model=f"openai/{found['model']}",
                                     args=["--openai-api-base", found["base"]])])

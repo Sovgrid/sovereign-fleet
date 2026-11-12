@@ -420,6 +420,12 @@ def test_a_grid_task_names_the_issue_it_came_from():
     text = "Fix it\n\n(From issue owner/repo#1: http://gitea.local/owner/repo/issues/1)"
     assert _issue_of({"raw_text": text}) == {"repo": "owner/repo", "number": 1,
                                             "url": "http://gitea.local/owner/repo/issues/1"}
+    buzz_text = "Fix\n\n(From issue 1e06d232-fb5c-4a42-bc85-dffc651b90b8#42: buzz://message?channel=c&id=abc)"
+    assert _issue_of({"raw_text": buzz_text}) == {"repo": "1e06d232-fb5c-4a42-bc85-dffc651b90b8", "number": 42,
+                                                  "url": "buzz://message?channel=c&id=abc"}
+    nostr_text = "Fix\n\n(From issue nostr://npub1x/relay/repo#99: nostr:nevent1y)"
+    assert _issue_of({"raw_text": nostr_text}) == {"repo": "nostr://npub1x/relay/repo", "number": 99,
+                                                   "url": "nostr:nevent1y"}
     assert _issue_of({"raw_text": "x", "gitea": {"repo": "ops", "number": 7, "html_url": "http://g/ops/issues/7"}})["number"] == 7
     assert _issue_of({"raw_text": "no issue"}) is None
 

@@ -80,6 +80,33 @@ async def test_worktree_changes_reset_stall(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_a_due_stall_rechecks_the_worktree_first(tmp_path, monkeypatch):
+    """The periodic check never runs inside the stall window (30 s interval, 2 s stall), yet a run
+    that changes a file every second survives: the stall path looks at the worktree once more
+    before it fires (the timing hole behind the flaky test above, 2026-11-12)."""
+    monkeypatch.setenv("FLEET_SANDBOX", "0")
+    monkeypatch.setattr("fleet.plugins.harness_base.STALL_CHECK_SECONDS", 30)
+    harness = _make_harness(2)
+    res = await harness.execute_task(
+        {"text": "for i in 1 2 3 4 5; do echo $i > stall_marker; sleep 1; done"},
+        str(tmp_path), timeout=30,
+    )
+    assert res["exit_code"] == 0
+
+
+@pytest.mark.asyncio
+async def test_an_unchanged_worktree_still_stalls_after_the_recheck(tmp_path, monkeypatch):
+    """The recheck does not keep a silent run alive when its files do not change."""
+    monkeypatch.setenv("FLEET_SANDBOX", "0")
+    monkeypatch.setattr("fleet.plugins.harness_base.STALL_CHECK_SECONDS", 30)
+    harness = _make_harness(2)
+    started = time.monotonic()
+    res = await harness.execute_task({"text": "sleep 8"}, str(tmp_path), timeout=30)
+    assert res["exit_code"] != 0
+    assert time.monotonic() - started < 6
+
+
+@pytest.mark.asyncio
 async def test_stall_seconds_zero_never_stalls(tmp_path, monkeypatch):
     """stall_seconds = 0 switches stall detection off; a silent sleep exits 0."""
     monkeypatch.setenv("FLEET_SANDBOX", "0")

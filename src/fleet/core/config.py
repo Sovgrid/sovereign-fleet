@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import tomllib
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple
@@ -226,12 +227,17 @@ class GiteaSection(_Strict):
 
 
 class IntakeSection(_Strict):
-    """Tasks from this project's issues (Gitea or GitHub). An issue is a prompt for an agent with
-    write access to the repo: only `authors` may queue a task that runs unattended, and only with
-    a valid ```fleet``` block; every other issue waits for an approval in the dashboard."""
+    """Tasks from this project's issues (Gitea, GitHub or an ngit repository on Nostr) or a Buzz
+    channel. An issue is a prompt for an agent with write access to the repo: only `authors` may
+    queue a task that runs unattended, and only with a valid ```fleet``` block; every other issue
+    waits for an approval in the dashboard. For Gitea and GitHub, authors are login names; for
+    Buzz and ngit, 64-hex pubkeys (the author's). Buzz reads top-level messages of `channel` (a
+    UUID); `label` and `repo` do not apply to it. ngit reads the open NIP-34 issues of `repo`, a
+    nostr:// URL or naddr (empty: the project's remote, when it is a nostr:// URL)."""
     enabled: bool = False
-    provider: Literal["auto", "gitea", "github"] = "auto"   # auto: from the project's remote
-    repo: str = ""                    # "owner/name"; empty: from the project's remote
+    provider: Literal["auto", "gitea", "github", "buzz", "ngit"] = "auto"   # auto: from the project's remote
+    repo: str = ""                    # "owner/name" or, for ngit, nostr://… / naddr1…; empty: from the remote
+    channel: str = ""                 # Buzz channel UUID (provider = "buzz")
     label: str = "fleet"              # only issues with this label; "": every open issue
     authors: List[str] = Field(default_factory=list)
     interval_min: int = Field(5, ge=1, le=24 * 60)
@@ -239,9 +245,16 @@ class IntakeSection(_Strict):
     @field_validator("repo")
     @classmethod
     def _repo(cls, v: str) -> str:
-        if v and not re.fullmatch(r"[\w.-]+/[\w.-]+", v):
-            raise ValueError("owner/name")
+        if v and not (re.fullmatch(r"[\w.-]+/[\w.-]+", v) or re.fullmatch(r"nostr://\S+|naddr1[0-9a-z]+", v)):
+            raise ValueError("owner/name, a nostr:// URL or an naddr")
         return v
+
+    @field_validator("channel")
+    @classmethod
+    def _channel(cls, v: str) -> str:
+        if v and not re.fullmatch(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", v):
+            raise ValueError("a channel UUID")
+        return v.lower()
 
 
 class Project(_Strict):
@@ -270,6 +283,25 @@ class Project(_Strict):
     private: bool = False
 
 
+class BuzzSection(_Strict):
+    """A Buzz relay for intake from channels (docs/NOSTR.md). The fleet signs with [nostr] key_file."""
+    relay_url: str = ""               # e.g. https://relay.example:8447 (the relay's HTTPS URL)
+    cli: str = "buzz"                 # the buzz CLI shipped with Buzz desktop
+
+
+class NgitSection(_Strict):
+    """ngit (git over Nostr, NIP-34) for intake from a repository's issues (docs/NOSTR.md). The
+    fleet signs with [nostr] key_file, passed as --nsec-file."""
+    cli: str = "ngit"
+
+
+class NostrSection(_Strict):
+    """The fleet's own Nostr identity (docs/NOSTR.md): every reply, comment and pull request it
+    signs on a relay carries this key, never the operator's."""
+    key_file: str = ""                # nsec file, 0600; absolute or a name in secrets.dir
+    nak: str = "nak"                  # the nak CLI, used to derive the public key
+
+
 class MatrixSection(_Strict):
     """Matrix notification and approval-by-reply configuration."""
     enabled: bool = False
@@ -292,6 +324,9 @@ class FleetConfig(_Strict):
     approval: ApprovalSection = Field(default_factory=ApprovalSection)
     matrix: MatrixSection = Field(default_factory=MatrixSection)
     gitea: GiteaSection = Field(default_factory=GiteaSection)
+    nostr: NostrSection = Field(default_factory=NostrSection)
+    buzz: BuzzSection = Field(default_factory=BuzzSection)
+    ngit: NgitSection = Field(default_factory=NgitSection)
     routing: RoutingSection = Field(default_factory=RoutingSection)
     lanes: Dict[str, LaneSpec] = Field(default_factory=dict)
     models: Dict[str, ModelEndpoint] = Field(default_factory=dict)
@@ -323,6 +358,14 @@ class FleetConfig(_Strict):
     @property
     def secrets_dir(self) -> Path:
         return Path(_expand(self.secrets.dir)) if self.secrets.dir else _config_home() / "secrets"
+
+    @property
+    def nostr_key_file(self) -> Optional[Path]:
+        """The fleet's nsec file, or None when no key is configured."""
+        if not self.nostr.key_file:
+            return None
+        path = Path(_expand(self.nostr.key_file))
+        return path if path.is_absolute() else self.secrets_dir / path
 
     @property
     def matrix_token_file(self) -> Path:
@@ -602,8 +645,37 @@ def check(cfg: FleetConfig) -> List[str]:
             continue
         if project.intake.provider == "gitea" and not (cfg.gitea.url and cfg.gitea.token_file):
             problems.append(f"project '{key}': intake from Gitea needs [gitea] url and token_file")
+        if project.intake.provider == "buzz":
+            if not cfg.buzz.relay_url:
+                problems.append(f"project '{key}': intake from Buzz needs [buzz] relay_url")
+            if not project.intake.channel:
+                problems.append(f"project '{key}': intake from Buzz needs intake.channel")
+            if cfg.nostr_key_file is None:
+                problems.append(f"project '{key}': intake from Buzz needs [nostr] key_file")
+        is_ngit = project.intake.provider == "ngit" or project.intake.repo.startswith(("nostr://", "naddr1"))
+        if is_ngit and cfg.nostr_key_file is None:
+            problems.append(f"project '{key}': intake from ngit needs [nostr] key_file")
         if not project.intake.authors:
             problems.append(f"project '{key}': intake without authors queues every issue for approval only")
+    key = cfg.nostr_key_file
+    if key is not None:
+        if not key.is_file():
+            problems.append(f"nostr key_file {key} not found")
+        elif key.stat().st_mode & 0o077:
+            problems.append(f"nostr key_file {key} must be 0600")
+    # The CLIs the Nostr features call must be found with the PATH of the process that runs this
+    # check (the daemon's unit, not the operator's shell): a missing one otherwise shows only when
+    # a task lands or a poll runs.
+    providers = {
+        "ngit" if p.intake.repo.startswith(("nostr://", "naddr1")) else p.intake.provider
+        for p in cfg.projects.values() if p.intake.enabled
+    }
+    for needed, name, option in ((key is not None, cfg.nostr.nak, "[nostr] nak"),
+                                 ("buzz" in providers, cfg.buzz.cli, "[buzz] cli"),
+                                 ("ngit" in providers, cfg.ngit.cli, "[ngit] cli")):
+        if needed and shutil.which(_expand(name)) is None:
+            problems.append(f"'{name}' is not an executable on this process's PATH; "
+                            f"set {option} to its full path")
     if cfg.routing.switch_local and not cfg.routing.switch_command:
         problems.append("routing.switch_local needs routing.switch_command")
     return problems

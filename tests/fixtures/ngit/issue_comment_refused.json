@@ -1,0 +1,4 @@
+{
+  "command_status": "error",
+  "error": "couldn't publish all requested updates to any Nostr relay:\n  wss://relay.example: restricted: unknown event kind\n\nResolve the relay errors above before retrying. Some updates may already have been accepted."
+}

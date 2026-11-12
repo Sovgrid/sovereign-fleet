@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-12
+### Upgrading
+- Restart the daemon and reconnect your MCP clients after upgrading, before adding the new sections:
+  an MCP server process still running the old version refuses `[nostr]`, `[buzz]` and `[ngit]`
+  in fleet.toml ("Extra inputs are not permitted").
+
+### Added
+- The fleet on Nostr ([docs/NOSTR.md](docs/NOSTR.md), RFC `docs/rfc/2026-11-12-nostr-buzz-ngit.md`):
+  - Its own identity: `[nostr] key_file` (an nsec file, mode 0600, checked by `fleet config check`);
+    `fleet config show` prints the npub. Everything the fleet signs on a relay carries this key,
+    never the operator's.
+  - Intake from a **Buzz** channel (`provider = "buzz"`, `channel`, `[buzz] relay_url`): top-level
+    messages of trusted authors become tasks under the same rules as Gitea and GitHub issues; the
+    fleet answers in the message's thread and marks a landed task with a reaction.
+  - Intake from the NIP-34 issues of an **ngit** repository (`provider = "ngit"`, `repo` as a
+    `nostr://` URL or naddr, or `auto` with a `nostr://` remote); a landed issue is marked resolved.
+    A Buzz 1.0 relay refuses NIP-22 comments, so there the fleet's replies are missing and only the
+    resolved status reaches the issue.
+  - Pull requests on Nostr: a project with `landing = "pull_request"` and a `nostr://` remote pushes
+    the task branch to the repository's git server as `pr/<branch>` and publishes a NIP-34 pull
+    request event signed with the fleet's key; a rerun updates the fleet's open pull request of the
+    branch. A Buzz git server's Nostr HTTP auth (NIP-98) is answered with a token per git call,
+    passed in git's environment; no credential helper and no git 2.46 needed.
+  - `fleet config check` names a CLI the Nostr features need (`nak`, `buzz`, `ngit`) when the checking
+    process cannot find it. The daemon's PATH is often shorter than the operator's shell; set the
+    full path in `[nostr] nak`, `[buzz] cli` or `[ngit] cli`.
+  - ngit runs in a fresh helper repository for every call: ngit 3.0.5's incremental sync of a
+    reused cache missed events other clients published later.
+
+### Fixed
+- A daemon restart no longer ends the running task: before, it ended failed ("run aborted", an
+  UnboundLocalError hid the cancellation) and its whole `depends_on` chain was skipped. The task now
+  stays in progress with its work committed to its branch, and the next start queues it again. The
+  operator's cancel still cancels, and a real error still fails the task.
+- A long agent step is no longer killed as stalled while it is still changing the worktree: the
+  stall check looks at the worktree once more before it fires.
+- A finished task's result closes its issue even when the tracker keeps refusing the comment, after
+  the last retry, instead of leaving a landed issue open.
+- Discovered OpenRouter lanes run aider against an OpenAI-compatible endpoint but handed it the key
+  as `OPENROUTER_API_KEY`, so every run failed at once on "Missing Authentication header" while the
+  health check called them ok. They now get the key as `OPENAI_API_KEY`, and the health check marks
+  any aider lane dead whose `key_env` is not the variable its model prefix needs.
+- Nostr CLI paths (`nak`, `buzz`, `ngit`) expand tilde and environment variables when called by the daemon.
+- Config check recognizes `nostr://` and `naddr` repositories under `provider = "auto"` and checks the key file and ngit CLI.
+- Grid backend recognizes intake issue references without slashes (Buzz channel UUIDs, nostr URLs and naddrs).
+- Buzz intake treats NIP-10 root replies and positional e-tags as replies and ignores event mentions.
+
 ## [0.11.1] - 2026-11-12
 ### Fixed
 - Pull request landing is safe to repeat: a task rerun after a restart or a retry reuses the open pull

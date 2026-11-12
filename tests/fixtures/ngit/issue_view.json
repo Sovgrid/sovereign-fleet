@@ -1,0 +1,10 @@
+{
+  "author": "npub1lycg5qvjtrp3qjf5f7zl382j9x6nrjz9sdhenvyxq8c3808qxmus6gq266",
+  "comment_count": 0,
+  "comments": [],
+  "description": "Create hello.txt with one line.\n\n```fleet\n{\"allowed_paths\": [\"hello.txt\"]}\n```",
+  "id": "nevent1qqs2w8tgpuqklrl8k64svx28a0kmzr9uwecm0xtlt8gj8s23vt6ga5gpzdmhxue69uhhyetvv9ujuetcv9khqmr9r654df",
+  "labels": [],
+  "status": "open",
+  "subject": "Probe: add a hello file"
+}

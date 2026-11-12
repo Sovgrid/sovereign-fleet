@@ -1,0 +1,47 @@
+{
+  "confirmed_maintainers": [
+    "npub1lycg5qvjtrp3qjf5f7zl382j9x6nrjz9sdhenvyxq8c3808qxmus6gq266"
+  ],
+  "confirmed_moderators": [],
+  "coordinate": "naddr1test",
+  "description": "throwaway probe for the fleet's NIP-34 PR landing",
+  "follow_lead_command": null,
+  "git_servers": [
+    "https://relay.example/git/f9308a019258c31049344f85f89d5229b531c845836f99b08601f113bce036f9/fleet-pr-probe.git"
+  ],
+  "health": {
+    "problems": [],
+    "status": "ok"
+  },
+  "identifier": "fleet-pr-probe",
+  "invited_maintainers": [],
+  "is_nostr_repo": true,
+  "lead_maintainer": "npub1lycg5qvjtrp3qjf5f7zl382j9x6nrjz9sdhenvyxq8c3808qxmus6gq266",
+  "lead_path": [
+    "npub1lycg5qvjtrp3qjf5f7zl382j9x6nrjz9sdhenvyxq8c3808qxmus6gq266"
+  ],
+  "lead_source": "implicit_sole",
+  "maintainer_edges": [],
+  "maintainers": [
+    "npub1lycg5qvjtrp3qjf5f7zl382j9x6nrjz9sdhenvyxq8c3808qxmus6gq266"
+  ],
+  "members": [
+    {
+      "pubkey": "npub1lycg5qvjtrp3qjf5f7zl382j9x6nrjz9sdhenvyxq8c3808qxmus6gq266",
+      "role": "lead",
+      "source": "implicit",
+      "status": "confirmed"
+    }
+  ],
+  "moderators": [],
+  "name": "fleet-pr-probe",
+  "pending_actions": [],
+  "recommended_coordinate": "naddr1test",
+  "relays": [
+    "wss://relay.example"
+  ],
+  "selected_maintainer": "npub1lycg5qvjtrp3qjf5f7zl382j9x6nrjz9sdhenvyxq8c3808qxmus6gq266",
+  "web": [
+    "https://gitworkshop.dev/npub1lycg5qvjtrp3qjf5f7zl382j9x6nrjz9sdhenvyxq8c3808qxmus6gq266/relay.example/fleet-pr-probe"
+  ]
+}

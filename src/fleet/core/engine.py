@@ -248,12 +248,20 @@ class FleetEngine:
 
         t0 = time.monotonic()
         exc = None
+        shutdown = False
         try:
             status, result = await self._run_in_worktree(task, worktree_dir)
         except asyncio.CancelledError as _e:
+            # The operator's cancel marks the task cancelled before it cancels the run. Any other
+            # cancellation is the daemon stopping (Executor.stop): the task stays in_progress, its
+            # work is committed to its branch below, and recover() requeues it on the next start.
+            # Failing it would skip its whole depends_on chain.
             exc = _e
-            if self.task_store.get_task(task.id).status != "cancelled":
-                self.task_store.transition(task.id, "cancelled", allowed_from=("queued", "in_progress"))
+            stored = self.task_store.get_task(task.id)
+            shutdown = bool(stored and stored.status == "in_progress")
+            if shutdown:
+                result = {"error": "interrupted by a daemon shutdown; requeued on the next start",
+                          "exit_code": 1}
         finally:
             # A retry keeps the task's id: the runs of its earlier attempts were spent too.
             stored = self.task_store.get_task(task.id)
@@ -284,7 +292,7 @@ class FleetEngine:
                 # The commit failed: the task failed, whatever the agent reported. A task the
                 # operator cancelled stays cancelled (its work is in the worktree all the same).
                 self.task_store.update_task_status(task.id, "failed", result, autopsy=autopsy)
-            elif current and current.status not in ("completed", "cancelled", "awaiting_approval"):
+            elif exc is None and current and current.status not in ("completed", "cancelled", "awaiting_approval"):
                 self.task_store.update_task_status(task.id, status, result, autopsy=autopsy)
             elif current and current.status == "cancelled" and runs:
                 self.task_store.update_task_status(task.id, "cancelled",
@@ -293,7 +301,8 @@ class FleetEngine:
             if status == "completed":
                 self._handle_review_loop(task, result)
 
-            for out_p in getattr(self, "output_plugins", []):
+            # A shutdown is not an outcome: the requeued run sends the receipt.
+            for out_p in ([] if shutdown else getattr(self, "output_plugins", [])):
                 try:
                     await out_p.send_receipt(asdict(task), result)
                 except Exception as out_err:
@@ -708,6 +717,9 @@ class FleetEngine:
                 continue
             lane_started(lane)
             t0 = time.monotonic()
+            # Set before the await: a cancelled attempt reaches the finally with no outcome, and
+            # an UnboundLocalError there would replace the CancelledError (restart of 2026-11-12).
+            outcome: Dict[str, Any] = {}
             try:
                 status, last, outcome = await self._attempt(task, lane, failure, wt)
             finally:

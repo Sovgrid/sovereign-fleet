@@ -1,0 +1,5 @@
+{
+ "error": "user_error",
+ "message": "mention '@fleet' does not match a current channel member; retry with --mention <pubkey>",
+ "retryable": false
+}
