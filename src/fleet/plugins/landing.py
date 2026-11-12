@@ -10,8 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -19,6 +21,8 @@ from typing import Dict, Optional, Tuple
 
 from fleet.core.config import Project, _expand, load_config
 from fleet.core.redact import redact
+
+logger = logging.getLogger(__name__)
 
 
 class PullRequestProvider(ABC):
@@ -32,7 +36,30 @@ class PullRequestProvider(ABC):
 class GitHubCli(PullRequestProvider):
     name = "github"
 
+    async def _find_existing_pr(self, repo, branch, base) -> Optional[str]:
+        """Look for an already-open PR of this branch into base; return its URL or None."""
+        # A failed lookup is not an error: the create call below still runs.
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "gh", "pr", "list", "--state", "open", "--head", branch, "--base", base,
+                "--json", "url", "--jq", ".[0].url",
+                cwd=str(repo), stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+        except (TimeoutError, OSError) as e:
+            logger.debug("gh pr list for %s failed: %s", branch, e)
+            return None
+        if proc.returncode == 0:
+            url = (out or b"").decode(errors="replace").strip()
+            if url:
+                return url
+        return None
+
     async def open(self, repo, remote_url, branch, base, title, body) -> str:
+        # PR-REUSE: if the branch already has an open PR into base, reuse its URL instead of failing.
+        existing = await self._find_existing_pr(repo, branch, base)
+        if existing:
+            return existing
         proc = await asyncio.create_subprocess_exec(
             "gh", "pr", "create", "--base", base, "--head", branch, "--title", title, "--body", body,
             cwd=str(repo), stdin=asyncio.subprocess.DEVNULL,
@@ -57,6 +84,34 @@ class GiteaApi(PullRequestProvider):
         self.base_url = base_url.rstrip("/")
         self.token_file = token_file
 
+    async def _find_existing_pr(self, parts, branch, base, token) -> Optional[str]:
+        """Look for an already-open PR of this branch into base; return its URL or None."""
+        # Gitea's list filters by base (`base_branch`) but not by head, so the head is matched here;
+        # trusting the server to filter would hand back another branch's pull request.
+        query = urllib.parse.urlencode({"state": "open", "base_branch": base, "limit": 50})
+        url = f"{self.base_url}/api/v1/repos/{parts[0]}/{parts[1]}/pulls?{query}"
+        req = urllib.request.Request(url, headers={"Authorization": f"token {token}"})
+
+        def call() -> Optional[str]:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                items = json.loads(resp.read() or b"[]")
+            if not isinstance(items, list):
+                return None
+            for pr in items:
+                if not isinstance(pr, dict):
+                    continue
+                head, into = pr.get("head") or {}, pr.get("base") or {}
+                if head.get("ref") == branch and into.get("ref") == base and pr.get("html_url"):
+                    return pr["html_url"]
+            return None
+
+        # A failed lookup is not an error: the POST below still runs.
+        try:
+            return await asyncio.get_running_loop().run_in_executor(None, call)
+        except Exception as e:  # noqa: BLE001 - any lookup failure falls through to create
+            logger.debug("Gitea pull list for %s failed: %s", branch, redact(str(e)))
+            return None
+
     async def open(self, repo, remote_url, branch, base, title, body) -> str:
         parts = owner_repo(remote_url)
         if not parts:
@@ -68,6 +123,10 @@ class GiteaApi(PullRequestProvider):
                 "Token file %s has overly permissive permissions (%o); recommend chmod 0600",
                 token_path, token_path.stat().st_mode & 0o777)
         token = token_path.read_text(encoding="utf-8").strip()
+        # PR-REUSE: if the branch already has an open PR into base, reuse its URL instead of failing.
+        existing = await self._find_existing_pr(parts, branch, base, token)
+        if existing:
+            return existing
         req = urllib.request.Request(
             f"{self.base_url}/api/v1/repos/{parts[0]}/{parts[1]}/pulls",
             data=json.dumps({"head": branch, "base": base, "title": title, "body": body}).encode(),

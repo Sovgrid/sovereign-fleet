@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-11-12
+### Fixed
+- Pull request landing is safe to repeat: a task rerun after a restart or a retry reuses the open pull
+  request of its branch instead of failing on "already exists". On Gitea the head branch is matched in
+  the client, since its pull list filters by base only.
+
 ## [0.11.0] - 2026-11-11
 ### Changed
 - Grid backend: `depends_on` is passed to a runner that supports it instead of being refused.
