@@ -311,6 +311,258 @@ async def run_stored_task(task_id: str) -> int:
     return result.get("exit_code", 1)
 
 
+def _task_backend():
+    """Return the configured task backend backed by the active store."""
+    from fleet.core.backends import make_backend
+    store = getattr(app_module, "task_store", None) or TaskStore()
+    return make_backend(store)
+
+
+def _task_summary(t: FleetTask) -> Dict[str, Any]:
+    """Compact JSON-serializable summary of a task for `fleet task list --json`."""
+    resp = app_module._response(t)
+    meta = resp.metadata or {}
+    intent = meta.get("intent") if isinstance(meta.get("intent"), dict) else {}
+    project = meta.get("project") or intent.get("project")
+    res = resp.result or {}
+    first_line = (resp.text or "").splitlines()[0] if resp.text else ""
+    summary: Dict[str, Any] = {
+        "id": resp.id,
+        "text": first_line[:200],
+        "status": resp.status,
+        "created_at": resp.created_at,
+        "lane": resp.lane,
+        "source": resp.source,
+    }
+    if project:
+        summary["project"] = project
+    if resp.issue:
+        summary["issue"] = resp.issue
+    if res.get("exit_code") is not None:
+        summary["exit_code"] = res["exit_code"]
+    return summary
+
+
+def _parse_submit_gate(raw_gate: Any) -> Optional[dict]:
+    """Validate and normalize the optional gate field from `fleet task submit` JSON."""
+    if raw_gate is None:
+        return None
+    if isinstance(raw_gate, str):
+        return parse_gate(raw_gate)
+    if isinstance(raw_gate, dict) and len(raw_gate) == 1:
+        kind, arg = next(iter(raw_gate.items()))
+        if kind in ("pytest", "npm") and isinstance(arg, str) and arg.strip():
+            return {kind: arg.strip()}
+    raise ValueError('gate must be "pytest:<path>", "npm:<script>", or {"pytest"|"npm": "..."}')
+
+
+def task_submit(args) -> int:
+    """Queue a task for approval from one JSON object on stdin. Never skips approval."""
+    from fleet.core.backends import BackendError
+
+    raw = sys.stdin.read()
+    if not raw.strip():
+        print("error: expected JSON object on stdin", file=sys.stderr)
+        return 2
+    try:
+        payload = json.loads(raw)
+    except ValueError as e:
+        print(f"error: invalid JSON on stdin: {e}", file=sys.stderr)
+        return 2
+    if not isinstance(payload, dict):
+        print("error: stdin JSON must be an object", file=sys.stderr)
+        return 2
+
+    text = payload.get("text")
+    if not isinstance(text, str) or not text.strip():
+        print("error: text must be a non-empty string", file=sys.stderr)
+        return 2
+    if len(text) > 100_000:
+        print("error: text exceeds 100000 characters", file=sys.stderr)
+        return 2
+
+    lane = payload.get("lane")
+    if lane is not None and (not isinstance(lane, str) or not lane.strip() or len(lane) > 128):
+        print("error: lane must be a non-empty string (<= 128 chars)", file=sys.stderr)
+        return 2
+    lane = lane.strip() if isinstance(lane, str) else None
+
+    depends_on = payload.get("depends_on") or []
+    if not isinstance(depends_on, list) or len(depends_on) > 64 or not all(
+        isinstance(d, str) and d.strip() for d in depends_on
+    ):
+        print("error: depends_on must be a list of non-empty strings", file=sys.stderr)
+        return 2
+
+    raw_meta = payload.get("metadata")
+    if raw_meta is None:
+        metadata: Dict[str, Any] = {}
+    elif isinstance(raw_meta, dict):
+        metadata = dict(raw_meta)
+    else:
+        print("error: metadata must be a JSON object", file=sys.stderr)
+        return 2
+
+    project = payload.get("project")
+    if project is not None:
+        if not isinstance(project, str) or not project.strip():
+            print("error: project must be a non-empty string", file=sys.stderr)
+            return 2
+        metadata.setdefault("project", project.strip())
+
+    allowed_paths = payload.get("allowed_paths")
+    if allowed_paths is not None:
+        if not isinstance(allowed_paths, list) or not all(isinstance(p, str) and p.strip() for p in allowed_paths):
+            print("error: allowed_paths must be a list of non-empty glob strings", file=sys.stderr)
+            return 2
+        metadata.setdefault("allowed_paths", allowed_paths)
+
+    if "gate" in payload and payload["gate"] is not None:
+        try:
+            gate = _parse_submit_gate(payload["gate"])
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 2
+        if gate is not None:
+            metadata.setdefault("gate", gate)
+
+    harness = payload.get("harness")
+    if isinstance(harness, str) and harness.strip():
+        metadata.setdefault("harness", harness.strip())
+
+    category = payload.get("category")
+    if isinstance(category, str) and category.strip():
+        metadata.setdefault("category", category.strip())
+
+    # On the grid backend, specifying a project without metadata.intent triggers triage
+    # (which rejects private projects and drops allowed_paths/gate); build intent when absent.
+    if metadata.get("intent") is None and metadata.get("project"):
+        first_line = text.strip().splitlines()[0]
+        intent: Dict[str, Any] = {
+            "project": metadata["project"],
+            "title": first_line[:120],
+            "acceptance_criteria": metadata.get("acceptance_criteria") or [first_line[:200]],
+        }
+        if metadata.get("allowed_paths") is not None:
+            intent["allowed_paths"] = metadata["allowed_paths"]
+        if metadata.get("gate") is not None:
+            intent["gate_cmd"] = metadata["gate"]
+        if metadata.get("category"):
+            intent["category"] = metadata["category"]
+        metadata["intent"] = intent
+
+    raw_source = payload.get("source")
+    source = raw_source.strip() if isinstance(raw_source, str) and raw_source.strip() else "cli"
+
+    try:
+        # Approval is mandatory for `fleet task submit`; payload flags cannot bypass it.
+        task = _task_backend().enqueue(text, lane, depends_on, metadata, needs_approval=True, source=source)
+    except BackendError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
+    if getattr(args, "json", False):
+        print(json.dumps(app_module._response(task).model_dump()))
+    else:
+        print(task.id)
+    return 0
+
+
+def _read_task_id_from_stdin() -> Optional[str]:
+    raw = sys.stdin.read().strip()
+    if not raw:
+        return None
+    if raw.startswith("{"):
+        try:
+            obj = json.loads(raw)
+        except ValueError:
+            return None
+        if isinstance(obj, dict):
+            val = obj.get("task_id") or obj.get("id")
+            return val.strip() if isinstance(val, str) and val.strip() else None
+        return None
+    return raw
+
+
+def task_show(args) -> int:
+    """Print details of one task by id (positional arg or read from stdin)."""
+    task_id = args.task_id.strip() if isinstance(args.task_id, str) and args.task_id.strip() else None
+    if task_id is None:
+        task_id = _read_task_id_from_stdin()
+    if not task_id:
+        print("error: task_id is required (argument or stdin)", file=sys.stderr)
+        return 2
+
+    task = _task_backend().get_task(task_id)
+    if task is None:
+        print(f"error: task {task_id} not found", file=sys.stderr)
+        return 2
+
+    info = app_module._response(task).model_dump()
+    if getattr(args, "json", False):
+        print(json.dumps(info, indent=2))
+        return 0
+
+    print(f"id:      {info['id']}")
+    print(f"status:  {info['status']}")
+    print(f"lane:    {info['lane'] or '-'}")
+    print(f"created: {time.strftime('%Y-%m-%d %H:%M', time.localtime(info['created_at']))}")
+    if info["depends_on"]:
+        print(f"depends: {', '.join(info['depends_on'])}")
+    print(f"text:    {info['text'][:200]}")
+    if info["issue"]:
+        print(f"issue:   {info['issue'].get('repo')}#{info['issue'].get('number')}")
+    res = info.get("result") or {}
+    if res.get("exit_code") is not None:
+        print(f"exit:    {res['exit_code']}")
+    if res.get("error"):
+        print(f"error:   {str(res['error'])[:200]}")
+    return 0
+
+
+def task_list(args) -> int:
+    """List tasks, newest first."""
+    tasks = list(_task_backend().list_tasks())
+    tasks.sort(key=lambda t: (float(t.created_at or 0), t.id), reverse=True)
+
+    status_filter = getattr(args, "status", None)
+    if status_filter == "open":
+        tasks = [t for t in tasks if t.status in ("queued", "in_progress", "awaiting_approval")]
+    elif status_filter and status_filter != "all":
+        tasks = [t for t in tasks if t.status == status_filter]
+
+    limit = getattr(args, "limit", None)
+    if limit is not None and limit > 0:
+        tasks = tasks[:limit]
+
+    if getattr(args, "json", False):
+        print(json.dumps([_task_summary(t) for t in tasks]))
+        return 0
+
+    if not tasks:
+        print("(no tasks)")
+        return 0
+
+    print(f"{'ID':36} {'STATUS':18} {'LANE':20} {'CREATED':16} TEXT")
+    print("-" * 112)
+    for t in tasks:
+        first_line = (t.text or "").splitlines()[0] if t.text else ""
+        text_short = (first_line[:56] + "...") if len(first_line) > 56 else first_line
+        when = time.strftime("%m-%d %H:%M", time.localtime(float(t.created_at or 0)))
+        print(f"{t.id:<36} {t.status:<18} {str(t.lane or '-')[:20]:<20} {when:<16} {text_short}")
+    return 0
+
+
+def task_command(args) -> int:
+    if args.task_cmd == "submit":
+        return task_submit(args)
+    if args.task_cmd == "show":
+        return task_show(args)
+    if args.task_cmd == "list":
+        return task_list(args)
+    return 2
+
+
 def intake_command(args) -> int:
     from fleet.core.backends import make_backend
     from fleet.plugins.intake import IntakeError, IntakeService
@@ -458,6 +710,22 @@ def main(argv: Optional[list] = None) -> None:
     ledger_parser = subparsers.add_parser("ledger", help="Read the fleet's weekly usage ledger")
     ledger_parser.add_argument("--json", action="store_true", help="Output raw JSON")
 
+    # task
+    task_parser = subparsers.add_parser("task", help="Queue and inspect tasks")
+    task_sub = task_parser.add_subparsers(dest="task_cmd", required=True)
+
+    task_submit_p = task_sub.add_parser("submit", help="Queue a task for approval (reads JSON on stdin)")
+    task_submit_p.add_argument("--json", action="store_true", help="Output created task as JSON")
+
+    task_show_p = task_sub.add_parser("show", help="Show details of one task")
+    task_show_p.add_argument("task_id", nargs="?", default=None, help="Task id (or read from stdin)")
+    task_show_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    task_list_p = task_sub.add_parser("list", help="List tasks")
+    task_list_p.add_argument("--status", default=None, help="Filter by status (e.g. open, awaiting_approval, completed, failed)")
+    task_list_p.add_argument("--limit", type=int, default=None, help="Maximum number of tasks to return")
+    task_list_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
     args = parser.parse_args(argv)
 
     if args.subcommand == "config":
@@ -468,6 +736,8 @@ def main(argv: Optional[list] = None) -> None:
         sys.exit(lanes_command(args))
     if args.subcommand == "intake":
         sys.exit(intake_command(args))
+    if args.subcommand == "task":
+        sys.exit(task_command(args))
     if args.subcommand == "ledger":
         from fleet.core import ledger as _ledger
         from fleet.api.app import _ledger_view

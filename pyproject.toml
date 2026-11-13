@@ -14,7 +14,7 @@ authors = [
 ]
 urls = { Homepage = "https://sovgrid.org/fleet/", Repository = "https://github.com/sovgrid/sovereign-fleet", Issues = "https://github.com/sovgrid/sovereign-fleet/issues" }
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.11",

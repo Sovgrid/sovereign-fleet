@@ -4,7 +4,16 @@
 
 # Sovereign Fleet
 
-**Kernel-sandboxed task queue, Thompson-sampling `(harness × model)` router, deterministic quality gates, and mobile-first control plane for autonomous coding-agent CLIs.**
+**The sovereign AI agent fleet**
+
+### Let them code. Make them prove it. Ship your ideas.
+
+Coding agents on your own hardware, fenced in by the Linux kernel. Nothing lands until the tests are green.
+
+**91 %** of finished tasks on local models or free tiers · **33 %** of all tasks hit a red gate at least once · **0 %** on pay-per-use APIs<br>
+<sub>Not a benchmark: counted from our own fleet's task history, 17 October to 12 November 2026, 249 real tasks with benchmark runs left out (<a href="#in-our-own-use">details</a>). In October one run tried to weaken the script that decides what goes into a public export. The gate said no.</sub>
+
+<sub>Kernel-sandboxed task queue, Thompson-sampling <code>(harness × model)</code> router, deterministic quality gates, and mobile-first control plane for autonomous coding-agent CLIs.</sub>
 
 [![PyPI](https://img.shields.io/pypi/v/sovereign-fleet?style=flat-square&color=06b6d4)](https://pypi.org/project/sovereign-fleet/)
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-38bdf8?style=flat-square)](https://github.com/Sovgrid/sovereign-fleet/blob/main/pyproject.toml)
@@ -33,13 +42,13 @@ Sovereign Fleet runs coding-agent CLIs (**Goose**, **Claude Code**, **OpenCode**
 
 ### In our own use
 
-The fleet builds its own code and our other projects, with a frontier model as coordinator. Since October 2026:
+The fleet builds its own code and our other projects, with a frontier model as coordinator. Counted from its task history, 17 October to 12 November 2026: 249 tasks (benchmark runs left out), 163 of them finished.
 
-- **95 %** of finished tasks ran on a local model or a free tier, **5 %** on our own subscriptions, **0 %** on a pay-per-use API.
-- **About 1 %** of a week's tasks ran on the coordinator's own subscription: the frontier model writes the specs and reviews, cheaper models do the typing.
-- **16 %** of all tasks were stopped by the gates (files outside their scope, red tests, broken syntax) before anything landed; the next lane or a repair pass still finished **half** of them. One stopped run had tried to weaken the script that decides what goes into a public export.
+- **91 %** of finished tasks ran on a local model (71 %) or a free tier (20 %), **9 %** on our own subscriptions, **0 %** on a pay-per-use API.
+- **None** ran on the coordinator's own subscription: the frontier model writes the specs and reviews, cheaper models do the typing.
+- **33 %** of all tasks hit a red gate at least once (files outside their scope, red tests, a missing test, a thin report); a repair pass or the next lane still finished **44 %** of those. In October one stopped run had tried to weaken the script that decides what goes into a public export.
 
-Status: **alpha** (the current release is on [PyPI](https://pypi.org/project/sovereign-fleet/); changes in the [changelog](https://github.com/Sovgrid/sovereign-fleet/blob/main/CHANGELOG.md)). Read [What works today](#what-works-today) before relying on it.
+Status: **beta**: we run it every day; config can still change between minor releases, and the changelog marks every breaking change (the current release is on [PyPI](https://pypi.org/project/sovereign-fleet/); changes in the [changelog](https://github.com/Sovgrid/sovereign-fleet/blob/main/CHANGELOG.md)). Read [What works today](#what-works-today) before relying on it.
 
 ---
 

@@ -25,14 +25,14 @@
       --input-bg: #0a0c13;
       --border: #212638;
       --border-hover: #313a52;
-      --border-active: #06b6d4;
+      --border-active: #76b900;
 
       --text-main: #f3f4f6;
       --text-muted: #94a3b8;
       /* no text below 0.7rem (11 px): tiny mono labels were hard to read (operator, 2026-10-26) */
       --text-subtle: #7c8aa0;   /* 5.4:1 on the card backgrounds (WCAG AA needs 4.5:1; #64748b had 4.0) */
 
-      --cyan: #06b6d4;
+      --cyan: #76b900;
       --emerald: #10b981;
       --amber: #f59e0b;
       --purple: #8b5cf6;
@@ -94,8 +94,8 @@
       height: 26px;
       border-radius: 6px;
       flex-shrink: 0;
-      border: 1px solid rgba(6, 182, 212, 0.3);
-      background: rgba(6, 182, 212, 0.05);
+      border: 1px solid rgba(118, 185, 0, 0.3);
+      background: rgba(118, 185, 0, 0.05);
       display: block;
     }
 
@@ -118,8 +118,8 @@
       font-weight: 600;
       letter-spacing: 0.08em;
       color: var(--cyan);
-      background: rgba(6, 182, 212, 0.08);
-      border: 1px solid rgba(6, 182, 212, 0.25);
+      background: rgba(118, 185, 0, 0.08);
+      border: 1px solid rgba(118, 185, 0, 0.25);
       padding: 0.2rem 0.5rem;
       border-radius: var(--radius-sm);
       white-space: nowrap;
@@ -157,10 +157,10 @@
     }
 
     .nav-tab-btn.active {
-      background: rgba(6, 182, 212, 0.12);
+      background: rgba(118, 185, 0, 0.12);
       border-color: var(--cyan);
       color: #fff;
-      box-shadow: 0 0 12px rgba(6, 182, 212, 0.2);
+      box-shadow: 0 0 12px rgba(118, 185, 0, 0.2);
     }
 
     .tab-icon {
@@ -200,10 +200,10 @@
     }
 
     .coord-status-box:hover {
-      background: rgba(6, 182, 212, 0.08);
+      background: rgba(118, 185, 0, 0.08);
       border-color: var(--cyan);
       color: #fff;
-      box-shadow: 0 0 10px rgba(6, 182, 212, 0.15);
+      box-shadow: 0 0 10px rgba(118, 185, 0, 0.15);
     }
 
     .coord-status-box:active {
@@ -248,7 +248,7 @@
 
     .pulse-dot.cyan {
       background: var(--cyan);
-      box-shadow: 0 0 0 0 rgba(6, 182, 212, 0.7);
+      box-shadow: 0 0 0 0 rgba(118, 185, 0, 0.7);
     }
 
     .pulse-dot.purple {
@@ -357,11 +357,11 @@
 
     .btn-archive-hdr {
       color: var(--cyan);
-      border-color: rgba(6, 182, 212, 0.35);
+      border-color: rgba(118, 185, 0, 0.35);
     }
 
     .btn-archive-hdr:hover {
-      background: rgba(6, 182, 212, 0.12);
+      background: rgba(118, 185, 0, 0.12);
       border-color: var(--cyan);
     }
 
@@ -426,7 +426,7 @@
     textarea:focus {
       outline: none;
       border-color: var(--cyan);
-      box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.3);
+      box-shadow: 0 0 0 1px rgba(118, 185, 0, 0.3);
     }
 
     .form-controls-grid {
@@ -466,7 +466,7 @@
     select:focus, .form-input:focus {
       outline: none;
       border-color: var(--cyan);
-      box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.3);
+      box-shadow: 0 0 0 1px rgba(118, 185, 0, 0.3);
     }
 
     .preset-chips-row {
@@ -514,15 +514,20 @@
       user-select: none;
     }
 
+    @media (max-width: 520px) {
+      .pwa-install-label { display: none; }
+      #btn-pwa-install { min-width: 44px; justify-content: center; }
+    }
+
     .btn-dispatch {
-      background: var(--emerald);
-      color: #05140d;
+      background: var(--cyan);
+      color: #0b1400;
       width: 100%;
     }
 
     .btn-dispatch:hover {
-      background: #17d193;
-      box-shadow: 0 0 16px rgba(16, 185, 129, 0.35);
+      background: #8fd11a;
+      box-shadow: 0 0 16px rgba(118, 185, 0, 0.35);
     }
 
     .btn-save {
@@ -531,8 +536,8 @@
     }
 
     .btn-save:hover {
-      background: #22d3ee;
-      box-shadow: 0 0 16px rgba(6, 182, 212, 0.35);
+      background: #8fd11a;
+      box-shadow: 0 0 16px rgba(118, 185, 0, 0.35);
     }
 
     .btn-reset {
@@ -579,13 +584,13 @@
     }
 
     .auto-pair-card.is-custom {
-      background: rgba(6, 182, 212, 0.05);
-      border-color: rgba(6, 182, 212, 0.35);
+      background: rgba(118, 185, 0, 0.05);
+      border-color: rgba(118, 185, 0, 0.35);
     }
 
     .auto-pair-card.is-custom:hover {
-      border-color: rgba(6, 182, 212, 0.6);
-      background: rgba(6, 182, 212, 0.09);
+      border-color: rgba(118, 185, 0, 0.6);
+      background: rgba(118, 185, 0, 0.09);
     }
 
     .auto-pair-row-top {
@@ -620,9 +625,9 @@
     }
 
     .auto-pair-card.is-custom .auto-badge {
-      background: rgba(6, 182, 212, 0.15);
+      background: rgba(118, 185, 0, 0.15);
       color: var(--cyan);
-      border-color: rgba(6, 182, 212, 0.3);
+      border-color: rgba(118, 185, 0, 0.3);
     }
 
     .auto-pair-name {
@@ -699,7 +704,7 @@
     .btn-toggle-options {
       flex: 0 0 auto;
       background: var(--input-bg);
-      border: 1px solid rgba(6, 182, 212, 0.3);
+      border: 1px solid rgba(118, 185, 0, 0.3);
       color: var(--cyan);
       border-radius: var(--radius-sm);
       padding: 0.55rem 0.9rem;
@@ -718,8 +723,8 @@
     }
 
     .btn-toggle-options:hover {
-      background: rgba(6, 182, 212, 0.08);
-      border-color: rgba(6, 182, 212, 0.5);
+      background: rgba(118, 185, 0, 0.08);
+      border-color: rgba(118, 185, 0, 0.5);
     }
 
     /* --- STATUS PILLS & BADGES --- */
@@ -743,9 +748,9 @@
     }
 
     .pill-busy, .pill-running, .pill-cyan {
-      background: rgba(6, 182, 212, 0.12);
+      background: rgba(118, 185, 0, 0.12);
       color: var(--cyan);
-      border: 1px solid rgba(6, 182, 212, 0.3);
+      border: 1px solid rgba(118, 185, 0, 0.3);
     }
 
     .pill-queued, .pill-amber {
@@ -788,9 +793,9 @@
     }
 
     .prov-tag-cyan {
-      background: rgba(6, 182, 212, 0.15);
+      background: rgba(118, 185, 0, 0.15);
       color: var(--cyan);
-      border: 1px solid rgba(6, 182, 212, 0.3);
+      border: 1px solid rgba(118, 185, 0, 0.3);
     }
 
     .prov-tag-amber {
@@ -838,7 +843,7 @@
     }
 
     .filter-btn.active {
-      background: rgba(6, 182, 212, 0.12);
+      background: rgba(118, 185, 0, 0.12);
       border-color: var(--cyan);
       color: var(--cyan);
     }
@@ -858,7 +863,7 @@
     }
 
     .filter-btn.active .filter-count {
-      background: rgba(6, 182, 212, 0.2);
+      background: rgba(118, 185, 0, 0.2);
       color: var(--cyan);
     }
 
@@ -892,7 +897,7 @@
     }
 
     .new-tasks-btn {
-      background: rgba(6, 182, 212, 0.12);
+      background: rgba(118, 185, 0, 0.12);
       border: 1px solid var(--cyan);
       color: var(--cyan);
       padding: 0.4rem 0.9rem;
@@ -906,7 +911,7 @@
     }
 
     .new-tasks-btn:hover {
-      background: rgba(6, 182, 212, 0.2);
+      background: rgba(118, 185, 0, 0.2);
     }
 
     .new-tasks-pill[hidden] {
@@ -1256,7 +1261,7 @@
     }
 
     .coord-card-btn.selected {
-      background: rgba(6, 182, 212, 0.1);
+      background: rgba(118, 185, 0, 0.1);
       border-color: var(--cyan);
       color: #fff;
     }
@@ -1757,7 +1762,7 @@
 
     .bar-purple { background: var(--purple); box-shadow: 0 0 10px rgba(139, 92, 246, 0.4); }
     .bar-emerald { background: var(--emerald); box-shadow: 0 0 10px rgba(16, 185, 129, 0.4); }
-    .bar-cyan { background: var(--cyan); box-shadow: 0 0 10px rgba(6, 182, 212, 0.4); }
+    .bar-cyan { background: var(--cyan); box-shadow: 0 0 10px rgba(118, 185, 0, 0.4); }
     .bar-amber { background: var(--amber); box-shadow: 0 0 10px rgba(245, 158, 11, 0.4); }
 
     .model-name {
@@ -1985,7 +1990,7 @@
     }
 
     .kpi-card:hover {
-      border-color: rgba(6, 182, 212, 0.4);
+      border-color: rgba(118, 185, 0, 0.4);
     }
 
     .kpi-label {
@@ -2080,8 +2085,8 @@
     }
 
     .roster-select-btn {
-      background: rgba(6, 182, 212, 0.1);
-      border: 1px solid rgba(6, 182, 212, 0.35);
+      background: rgba(118, 185, 0, 0.1);
+      border: 1px solid rgba(118, 185, 0, 0.35);
       color: var(--cyan);
       font-family: 'JetBrains Mono', monospace;
       font-weight: 700;
@@ -2100,7 +2105,7 @@
     }
 
     .roster-select-btn:hover {
-      background: rgba(6, 182, 212, 0.22);
+      background: rgba(118, 185, 0, 0.22);
       border-color: var(--cyan);
       color: #fff;
     }
@@ -2160,13 +2165,13 @@
       padding: 0.45rem 0.75rem;
       font-size: 0.7rem;
       white-space: nowrap;
-      border-color: rgba(6, 182, 212, 0.35);
+      border-color: rgba(118, 185, 0, 0.35);
       color: var(--cyan);
       min-height: 40px;
     }
 
     .btn-spool-archive:hover {
-      background: rgba(6, 182, 212, 0.1);
+      background: rgba(118, 185, 0, 0.1);
       border-color: var(--cyan);
     }
 
@@ -2221,7 +2226,7 @@
     }
 
     .autonomy-tier-btn.selected {
-      background: rgba(6, 182, 212, 0.1);
+      background: rgba(118, 185, 0, 0.1);
       border-color: var(--cyan);
       color: #fff;
     }
@@ -2371,7 +2376,7 @@
     }
 
     .budget-seg-btn[aria-pressed="true"] {
-      background: rgba(6, 182, 212, 0.12);
+      background: rgba(118, 185, 0, 0.12);
       color: #fff;
     }
 
@@ -3072,9 +3077,9 @@
     }
 
     .footer-version {
-      background: rgba(6, 182, 212, 0.1);
+      background: rgba(118, 185, 0, 0.1);
       color: var(--cyan);
-      border: 1px solid rgba(6, 182, 212, 0.25);
+      border: 1px solid rgba(118, 185, 0, 0.25);
       padding: 0.1rem 0.45rem;
       border-radius: 3px;
       font-size: 0.7rem;
@@ -3133,7 +3138,7 @@
     .footer-btn:hover {
       border-color: var(--cyan);
       color: var(--cyan);
-      background: rgba(6, 182, 212, 0.05);
+      background: rgba(118, 185, 0, 0.05);
     }
 
         /* Task Card Action Buttons (Approve, Reject, Cancel, Archive) */
@@ -3178,9 +3183,9 @@
     }
 
     .btn-action-archive {
-      border-color: rgba(6, 182, 212, 0.3);
+      border-color: rgba(118, 185, 0, 0.3);
       color: var(--cyan);
-      background: rgba(6, 182, 212, 0.05);
+      background: rgba(118, 185, 0, 0.05);
     }
 
     .pill-awaiting {
@@ -3232,7 +3237,7 @@
 
     .faq-search-box:focus {
       border-color: var(--cyan);
-      box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.2);
+      box-shadow: 0 0 0 1px rgba(118, 185, 0, 0.2);
     }
 
     .faq-tabs {
@@ -3275,7 +3280,7 @@
 
     .faq-item.open {
       border-color: var(--cyan);
-      background: rgba(6, 182, 212, 0.02);
+      background: rgba(118, 185, 0, 0.02);
     }
 
     .faq-header {
@@ -3325,8 +3330,8 @@
       font-size: 0.7rem;
       font-weight: 600;
       color: var(--cyan);
-      background: rgba(6, 182, 212, 0.08);
-      border: 1px solid rgba(6, 182, 212, 0.25);
+      background: rgba(118, 185, 0, 0.08);
+      border: 1px solid rgba(118, 185, 0, 0.25);
       padding: 0.12rem 0.45rem;
       border-radius: 3px;
       flex-shrink: 0;
@@ -3416,7 +3421,7 @@
     .faq-copy-btn:hover {
       border-color: var(--cyan);
       color: var(--cyan);
-      background: rgba(6, 182, 212, 0.1);
+      background: rgba(118, 185, 0, 0.1);
     }
   </style>
 </head>
@@ -3436,7 +3441,7 @@
           id="btn-pwa-install"
           onclick="triggerPwaInstall()"
           class="coord-status-box"
-          style="display: none; border-color: var(--cyan); color: var(--cyan); background: rgba(6, 182, 212, 0.1);"
+          style="display: none; border-color: var(--cyan); color: var(--cyan); background: rgba(118, 185, 0, 0.1);"
           title="Install as PWA App"
           aria-label="Install as Progressive Web App"
         >
@@ -3445,7 +3450,7 @@
             <polyline points="7 10 12 15 17 10"></polyline>
             <line x1="12" y1="15" x2="12" y2="3"></line>
           </svg>
-          <span style="font-size: 0.7rem; font-weight: 600; letter-spacing: 0.05em;">INSTALL APP</span>
+          <span class="pwa-install-label" style="font-size: 0.7rem; font-weight: 600; letter-spacing: 0.05em;">INSTALL APP</span>
         </button>
         <button
           type="button"

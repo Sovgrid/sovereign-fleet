@@ -1,0 +1,36 @@
+{
+  "id": "sovgrid.fleet",
+  "name": "Sovereign Fleet",
+  "apiVersion": 1,
+  "description": "Hand coding tasks to Sovereign Fleet for approval and check task or lane status.",
+  "host": {
+    "commands": [
+      {
+        "id": "submit",
+        "program": "fleet",
+        "args": ["task", "submit", "--json"],
+        "maxInputBytes": 65536,
+        "maxOutputBytes": 65536
+      },
+      {
+        "id": "show",
+        "program": "fleet",
+        "args": ["task", "show", "--json"],
+        "maxInputBytes": 1024,
+        "maxOutputBytes": 262144
+      },
+      {
+        "id": "list",
+        "program": "fleet",
+        "args": ["task", "list", "--json"],
+        "maxOutputBytes": 262144
+      },
+      {
+        "id": "lanes",
+        "program": "fleet",
+        "args": ["lanes", "show", "--json"],
+        "maxOutputBytes": 65536
+      }
+    ]
+  }
+}
