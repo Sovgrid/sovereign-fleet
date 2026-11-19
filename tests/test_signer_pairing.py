@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import shutil
 import socket
 import subprocess
 import time
@@ -106,6 +107,8 @@ def test_nostrconnect_uri_omits_perms_and_renders_svg_qr(tmp_path):
     assert "perms=" not in uri
     assert "sign_event" not in uri
     assert "secret=sec-123" in uri
+    if shutil.which("qrencode") is None:
+        pytest.skip("qrencode binary not installed")
     svg = render_qr_svg(uri)
     assert "<svg" in svg and "</svg>" in svg
 
@@ -416,6 +419,7 @@ def test_bunker_pairing_stops_when_the_signer_itself_is_silent(monkeypatch):
 
 def test_an_open_pairing_is_handed_out_again_not_replaced(tmp_path, monkeypatch):
     """A phone browser reloads the page after Amber; a fresh secret would void the one Amber answers with."""
+    _nak()
     monkeypatch.setenv("FLEET_ROOT", str(tmp_path / "root"))
     from fleet.core.signer import SignerManager
     mgr = SignerManager()
