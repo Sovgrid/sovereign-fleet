@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "sovereign-fleet"
-version = "0.12.1"
+version = "0.13.0"
 description = "Task queue, Landlock sandbox and dashboard for running coding-agent CLIs on your own machine"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -39,6 +39,7 @@ matrix = [
 dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
+    "pytest-xdist>=3.6",
     "pyyaml>=6.0",
     "ruff>=0.7.0",
 ]
@@ -49,6 +50,7 @@ fleet-mcp = "fleet.api.mcp_server:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fleet"]
+exclude = ["src/fleet/api/static/preview"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

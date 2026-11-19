@@ -139,6 +139,21 @@ def test_failure_excerpt_shows_the_failures_not_the_preamble():
     assert "FAILED tests/test_a.py::test_x" in gates.failure_excerpt(out)
     assert "All checks passed" not in gates.failure_excerpt(out)
 
+    # Long source/HTML lines containing lowercase "failed" must not push pytest summary lines out.
+    long_html = "    " + ('t.state === "failed" ' * 15) + "\n"
+    out_with_html = (
+        "tests/test_ui_app.py:94: in test_templates_come_from_the_daemon\n"
+        f"{long_html}"
+        "E   AssertionError: missing /api/fleet/templates\n"
+        f"{long_html}"
+        f"{long_html}"
+        "FAILED tests/test_ui_app.py::test_templates_come_from_the_daemon - AssertionError\n"
+        "1 failed, 1500 passed in 33.10s\n"
+    )
+    excerpt = gates.failure_excerpt(out_with_html)
+    assert "FAILED tests/test_ui_app.py::test_templates_come_from_the_daemon" in excerpt
+    assert "E   AssertionError: missing /api/fleet/templates" in excerpt
+
 
 # ── worktree helpers against real git ────────────────────────────────────────
 
@@ -194,6 +209,82 @@ def test_a_gate_cannot_read_secrets_or_see_keys(home_tmp, monkeypatch):
     res = asyncio.run(gates.run_gate("repo", [str(wt / "verify.sh")], wt, 60))
     assert "ran" in res.output
     assert "TOP SECRET" not in res.output and "gsk_live" not in res.output
+
+
+@needs_landlock
+def test_gate_cannot_write_into_linked_source_node_modules_caches(home_tmp):
+    repo = _repo(home_tmp / "repo", {
+        ".gitignore": "node_modules/\napps/node_modules/\n",
+        "apps/.gitkeep": "",
+        "verify.sh": "",
+    })
+    src_nm_root = repo / "node_modules"
+    src_nm_app = repo / "apps" / "node_modules"
+    (src_nm_root / "pkg").mkdir(parents=True)
+    (src_nm_root / "pkg" / "index.js").write_text("module.exports = 1;\n")
+    (src_nm_app / "ui").mkdir(parents=True)
+    (src_nm_app / "ui" / "index.js").write_text("export const x = 1;\n")
+    (repo / "verify.sh").write_text(
+        "#!/bin/sh\n"
+        "set -eu\n"
+        "cat node_modules/pkg/index.js >/dev/null\n"
+        "cat apps/node_modules/ui/index.js >/dev/null\n"
+        "for nm in node_modules apps/node_modules; do\n"
+        "  for sub in .vite-temp .vite .astro .cache; do\n"
+        "    echo ok > \"$nm/$sub/probe.txt\"\n"
+        "  done\n"
+        "done\n"
+        f"if echo pwn > \"{src_nm_root}/pwn.txt\" 2>/dev/null; then exit 1; fi\n"
+        f"if echo pwn > \"{src_nm_app}/pwn.txt\" 2>/dev/null; then exit 1; fi\n"
+    )
+    (repo / "verify.sh").chmod(0o755)
+    _git(repo, "add", "verify.sh")
+    _git(repo, "commit", "-q", "-m", "verify")
+    wm = WorktreeManager(str(repo), str(home_tmp / "wts"))
+    ok, wt_str = asyncio.run(wm.create_worktree("t-r7-cache"))
+    assert ok, wt_str
+    wt = Path(wt_str)
+    try:
+        assert (wt / "node_modules").is_symlink()
+        assert (wt / "apps" / "node_modules").is_symlink()
+
+        res = asyncio.run(gates.run_gate("repo", [str(wt / "verify.sh")], wt, 60))
+        assert res.passed, res.output
+
+        for src_nm in (src_nm_root, src_nm_app):
+            assert not (src_nm / "pwn.txt").exists()
+            for sub in gates.NODE_CACHE_DIRS:
+                assert not (src_nm / sub).exists(), f"source checkout polluted at {src_nm / sub}"
+
+        assert (wt / "node_modules").is_symlink()
+        assert (wt / "node_modules").resolve() == src_nm_root.resolve()
+        assert (wt / "apps" / "node_modules").is_symlink()
+        assert (wt / "apps" / "node_modules").resolve() == src_nm_app.resolve()
+    finally:
+        asyncio.run(wm.remove_worktree("t-r7-cache"))
+
+
+@needs_landlock
+def test_gate_ignores_hostile_node_modules_symlink_outside_repo(home_tmp):
+    outside = home_tmp / "victim_outside_dir"
+    outside.mkdir(parents=True)
+    wt = _repo(home_tmp / "repo", {
+        ".gitignore": "node_modules/\n",
+        "verify.sh": (
+            "#!/bin/sh\n"
+            f"if echo pwn > \"{outside}/.vite-temp/pwn.txt\" 2>/dev/null; then exit 1; fi\n"
+            "echo blocked\n"
+        ),
+    })
+    (wt / "node_modules").symlink_to(outside)
+
+    res = asyncio.run(gates.run_gate("repo", [str(wt / "verify.sh")], wt, 60))
+    assert res.passed, res.output
+    assert "blocked" in res.output
+    for sub in gates.NODE_CACHE_DIRS:
+        assert not (outside / sub).exists(), f"gate created {outside / sub} through hostile symlink"
+    assert (wt / "node_modules").is_symlink()
+    assert (wt / "node_modules").resolve() == outside.resolve()
 
 
 def test_a_hanging_gate_times_out(tmp_path):
@@ -274,3 +365,56 @@ def test_engine_uses_the_project_gate_from_the_config(tmp_path):
         assert res["exit_code"] == 4 and "custom gate" in res["error"]
     else:
         assert res["exit_code"] == 4 and "unsandboxed" in res["error"]
+
+
+def test_engine_does_not_land_or_continue_a_task_cancelled_in_store(tmp_path):
+    """If a task is marked cancelled in TaskStore mid-run (e.g. via CLI), run_single_task does not land it on main."""
+    repo = _repo(tmp_path / "repo", {"app.py": "x = 1\n"})
+    project = Project(path=str(repo), landing="merge", link_dirs=[])
+    engine = _engine(tmp_path, repo, {"app.py": "x = 2\n"}, project=project)
+    task = FleetTask(id="t-cancel", text="x", metadata={"harness": "claude-code"})
+    engine.task_store.enqueue(task)
+    orig_exec = engine.harnesses["claude-code"].execute_task
+
+    async def cancel_mid_run(t, wt, timeout=600):
+        res = await orig_exec(t, wt, timeout=timeout)
+        engine.task_store.update_task_status(t["id"], "cancelled", {"error": "Cancelled by user"})
+        assert engine._cancelled_in_store(t["id"]) is True
+        return res
+
+    engine.harnesses["claude-code"].execute_task = cancel_mid_run
+    res = asyncio.run(engine.run_single_task(task))
+    assert "landing" not in res
+    assert (repo / "app.py").read_text() == "x = 1\n"
+    assert engine.task_store.get_task("t-cancel").status == "cancelled"
+
+
+@needs_landlock
+def test_the_restore_never_follows_a_parent_the_gate_replaced_with_a_symlink(home_tmp):
+    """The gate runs agent-written code and may rewrite the worktree. If it swaps `apps/` for a symlink to
+    another directory, the daemon's restore (outside the sandbox) must not delete or create anything there
+    (review of 9b7ea32, 2026-11-19)."""
+    victim = home_tmp / "victim"
+    (victim / "node_modules").mkdir(parents=True)
+    (victim / "node_modules" / "keep.txt").write_text("keep")
+    repo = _repo(home_tmp / "repo", {
+        ".gitignore": "node_modules/\napps/node_modules/\n",
+        "apps/.gitkeep": "",
+        "verify.sh": "",
+    })
+    (repo / "apps" / "node_modules" / "ui").mkdir(parents=True)
+    (repo / "verify.sh").write_text(f"#!/bin/sh\nrm -rf apps && ln -s {victim} apps\n")
+    (repo / "verify.sh").chmod(0o755)
+    _git(repo, "add", "verify.sh")
+    _git(repo, "commit", "-q", "-m", "verify")
+    wm = WorktreeManager(str(repo), str(home_tmp / "wts"))
+    ok, wt_str = asyncio.run(wm.create_worktree("t-r7-swap"))
+    assert ok, wt_str
+    wt = Path(wt_str)
+    try:
+        assert (wt / "apps" / "node_modules").is_symlink()
+        asyncio.run(gates.run_gate("repo", [str(wt / "verify.sh")], wt, 60))
+        assert (victim / "node_modules" / "keep.txt").read_text() == "keep"
+        assert not (victim / "node_modules").is_symlink()
+    finally:
+        asyncio.run(wm.remove_worktree("t-r7-swap"))

@@ -49,6 +49,20 @@ class FleetSettings(BaseModel):
     # section it does not know, while this file's unknown keys are ignored (2026-10-29).
     # Stored as plain str like budget_policies; the ledger validates it when pricing.
     ledger_reference: Optional[str] = Field(None, max_length=200)
+    # Escalation to a frontier lane (wins over fleet.toml [routing] escalate_to / escalate_after).
+    # Here for the same reason as ledger_reference: a daemon or MCP client still running older
+    # code re-reads the strict fleet.toml and would refuse the new keys. None: fleet.toml decides.
+    escalate_to: Optional[List[str]] = Field(None, max_length=8)
+    escalate_after: Optional[int] = Field(None, ge=1, le=10)
+    # "Needs you" notifications (core/notify.py), switched on in the app: ntfy to the operator's own
+    # topic URL, Matrix through fleet.toml [matrix], and/or NIP-17 Nostr DM to the pinned anchor.
+    # notify_app_url is the app address the message links to; the app sets it when the person saves.
+    notify_ntfy: bool = False
+    notify_ntfy_url: Optional[str] = Field(None, max_length=300)
+    notify_matrix: bool = False
+    notify_nostr: bool = False
+    notify_nostr_relays: List[str] = Field(default_factory=list, max_length=5)
+    notify_app_url: Optional[str] = Field(None, max_length=300)
 
 
 def settings_file() -> Path:

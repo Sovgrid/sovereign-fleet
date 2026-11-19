@@ -223,8 +223,12 @@ class Router:
     def __init__(self, lanes: Dict[str, LaneSpec], history: Iterable[Attempt] = (),
                  unavailable: Iterable[str] = (), spool_dir: Optional[Path] = None,
                  live: bool = True, running: Optional[Dict[str, int]] = None,
-                 coordinator: Optional[str] = None):
+                 coordinator: Optional[str] = None, hinted: Optional[Mapping[str, str]] = None):
         self.lanes = lanes
+        # lanes in `unavailable` only because a remote grid status said so (lane -> its reason). That
+        # report can be stale (a probe from hours ago); a lane the caller chose by name is still tried,
+        # and a real limit then blocks it here. Every other task keeps avoiding it.
+        self.hinted: Dict[str, str] = dict(hinted or {})
         # who coordinates (budget defaults keep its own subscription in reserve); None: the
         # dashboard's setting. The grid runner keeps its own and passes it.
         self.coordinator = coordinator
@@ -306,6 +310,17 @@ class Router:
             return False
         return spec.private or not sensitive
 
+    def _only_hinted(self, lane: str, category: str, sensitive: bool) -> bool:
+        """True when the remote grid report is the only thing that keeps *lane* out."""
+        if lane not in self.hinted:
+            return False
+        saved = self.unavailable
+        self.unavailable = saved - {lane}
+        try:
+            return self.eligible(lane, category, sensitive)
+        finally:
+            self.unavailable = saved
+
     def policies(self) -> Dict[str, str]:
         """Lane -> budget policy of its provider, the one effective_policy the API shows (the
         provider's facts over all its lanes), with the settings read once."""
@@ -321,27 +336,70 @@ class Router:
             out[lane] = by_provider[provider]
         return out
 
+    def explain_unavailable(self, lane: str, category: str = "", sensitive: bool = False, *,
+                            explicit: str = "", policies: Optional[Mapping[str, str]] = None) -> Optional[str]:
+        """Readable reason why *lane* cannot run this task right now, or None if it is usable."""
+        if lane not in self.lanes:
+            return "not configured"
+        spec = self.lanes[lane]
+        if not spec.enabled:
+            return "switched off"
+        until, reason = lane_block_info(lane, self.spool_dir) if self.live else (0, "")
+        if until:
+            return f"quota-blocked ({reason or 'rate limit'})"
+        if lane in self.unavailable:
+            if not (lane == explicit and self._only_hinted(lane, category, sensitive)):
+                return self.hinted.get(lane) or "unavailable"
+        if spec.categories and category not in spec.categories:
+            return f"category '{category}' not allowed"
+        if sensitive and not spec.private:
+            return "not private (sensitive task)"
+        pol = (policies if policies is not None else self.policies())[lane]
+        if pol == "manual" and lane != explicit:
+            return f"budget policy {lane_provider(lane, spec)} manual"
+        return None
+
     def rank(self, category: str = "", sensitive: bool = False, exclude: Sequence[str] = (),
-             include_blocked: bool = False, explicit: str = "") -> List[Choice]:
+             include_blocked: bool = False, explicit: str = "",
+             allowed: Optional[Sequence[str]] = None) -> List[Choice]:
         """Lanes for a task, best first. A lane whose provider is `manual` is left out unless it is
         the *explicit* lane the caller chose (eligibility still applies to it); `reserve` lanes
-        come after every other lane. Left-out lanes are in `self.skipped` with the reason."""
+        come after every other lane. When *allowed* is given, only lanes in it are considered.
+        Left-out lanes are in `self.skipped` with the reason."""
         policies = self.policies()
         self.skipped: Dict[str, str] = {}
+        allowed_set = set(allowed) if allowed is not None else None
         out = []
+        if allowed_set is not None:
+            for lane in allowed:
+                if lane not in self.lanes:
+                    self.skipped[lane] = f"skipped: {lane} not configured"
         for lane, spec in self.lanes.items():
             if lane in exclude:
                 continue
+            if allowed_set is not None and lane not in allowed_set:
+                continue
             policy = policies[lane]
+            if not spec.enabled:
+                if lane == explicit or allowed_set is not None:
+                    self.skipped[lane] = f"skipped: {lane} switched off"
+                continue
             until, reason = lane_block_info(lane, self.spool_dir) if self.live else (0, "")
             if until:
                 if include_blocked:
                     p, n, basis = self.estimate(lane, category)
                     out.append(Choice(lane, 0.0, round(p, 4), n, basis, blocked_until=until, block_reason=reason,
                                       policy=policy))
+                elif lane == explicit or allowed_set is not None:
+                    self.skipped[lane] = f"skipped: {lane} quota-blocked ({reason or 'rate limit'})"
                 continue
             if not self.eligible(lane, category, sensitive):
-                continue
+                if not (lane == explicit and self._only_hinted(lane, category, sensitive)):
+                    if lane == explicit or allowed_set is not None:   # on the record: never replaced silently
+                        why = self.explain_unavailable(lane, category, sensitive, explicit=explicit,
+                                                       policies=policies)
+                        self.skipped[lane] = f"skipped: {lane} {why or 'not available now'}"
+                    continue
             if policy == "manual" and lane != explicit:
                 self.skipped[lane] = f"skipped: {lane_provider(lane, spec)} manual"
                 continue

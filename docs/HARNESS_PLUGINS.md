@@ -75,7 +75,12 @@ Claude Code (`claude-code`), the Antigravity CLI (`agy`) and the Cursor CLI (`cu
 model catalog (`own_login`). Their lanes are subscription models that only that CLI reaches: a lane with the step
 `{harness = "agy", model = "gemini-4-argon-medium"}` passes the model as `--model` (`agy models` lists them).
 `agy` runs headless with `-p` and approves its tools (`[harnesses.agy.options] skip_permissions = false` turns
-that off); the fleet's sandbox lets it write `~/.gemini/antigravity-cli`, `~/.gemini/config` and open a PTY.
+that off); the fleet runs it with `HOME` set to a fresh home of the fleet's own for each run, seeded with agy's
+login files only, so a task never sees the operator's `~/.gemini` (where the operator's own agy keeps its
+conversations and notes); the sandbox lets it write that home and open a PTY. Every built-in CLI runs this
+way: opencode gets a config with providers and models only (no MCP servers, plugins or instructions),
+aider a copy of `~/.aider.conf.yml` and its model settings, Pi a `models.json` naming the lane's local
+endpoint (provider `fleet`), goose and Cursor nothing but the lane's environment, Claude Code only with a lane token (without one the run is refused).
 
 The Cursor CLI (`cursor`, binary `agent`) also uses its own account, but its keyring login cannot refresh inside the sandbox, so the lane gives it a user API key: `key_env = "CURSOR_API_KEY"`, `key_file = "cursor_api.key"`. It runs `agent -p <task> --trust --force --output-format stream-json --model <id>`; a free Cursor plan accepts only `auto`, which is also the default (the CLI otherwise falls back to the last model it was given). The run's output starts with `[cursor model: ...]`, the model Cursor reports. A plan limit rests the lane like a daily quota.
 
@@ -108,7 +113,8 @@ Every CLI harness inherits from `fleet.plugins.harness_base.CliHarness` (which i
 | `name` | `str` | Unique identifier (e.g., `"my-agent"`). Used in `fleet.toml` and CLI commands. |
 | `binary` | `str` | Executable binary name (e.g., `"my-agent"`). Must be found on `$PATH` or overridden in config. |
 | `description` | `str` | Human-readable description shown in `fleet harnesses list` and dashboard. |
-| `state_paths` | `Tuple[Path, ...]` | Directories in the user's home directory the CLI needs to read/write for session or credential state. |
+| `state_paths` | `Tuple[Path, ...]` | Extra writable paths outside any home (e.g. `/dev/ptmx`). Never the operator's home: each run gets a fresh home of the fleet's own (`HOME`, XDG dirs), see `seed_home`. |
+| `seed_home(home)` | method | Copies what the CLI needs into the run's fresh home (a login file, a config stripped of MCP servers and plugins). Use `fleet.core.sandbox.seed_file`, which never writes through a symlink. The home is deleted after the run. |
 | `supported_api_kinds` | `Tuple[str, ...]` | List of API kinds supported (e.g., `"openai_compatible"`, `"openai"`, `"anthropic"`, `"vllm_local"`). Use `("*",)` to accept any. |
 | `needs_tool_calling` | `bool` | Whether the agent requires reliable tool calling support from the LLM. Default `True`. |
 | `own_login` | `bool` | Set to `True` for subscription CLIs (like Claude Code) that manage their own authentication and bundled models. |
@@ -151,10 +157,8 @@ class EchoAgentHarness(CliHarness):
     name: str = "echo-agent"
     binary: str = "echo-agent"
     description: str = "Example custom agent CLI harness"
-    state_paths: Tuple[Path, ...] = (
-        _HOME / ".echo-agent",
-        _HOME / ".config/echo-agent",
-    )
+    # No state_paths: each run gets a fresh home of the fleet's own; seed_home could copy a
+    # login or a config into it.
 
     supported_api_kinds: Tuple[str, ...] = (
         "openai_compatible",
@@ -204,8 +208,8 @@ class EchoAgentHarness(CliHarness):
 Every harness runs inside a Linux Landlock ABI 6+ kernel sandbox:
 
 1. **Worktree Directory**: The agent has full read/write access to the task's isolated git worktree (`~/.fleet/worktrees/<task-id>/`).
-2. **State Directories (`state_paths`)**: The agent can read and write only the directories declared in `state_paths` (e.g., `~/.echo-agent`).
-3. **Caches**: Common tool caches (`~/.cache`, `~/.npm`) are writable so compilers and package managers succeed.
+2. **A fresh home per run**: `HOME` and the XDG dirs point at `<fleet root>/homes/run/<harness>-<random>`, seeded by `seed_home` and deleted afterwards. The operator's home is never writable: a CLI's config dir names commands (MCP servers, extensions, hooks, plugins) that the operator's own copy of the CLI would start outside the sandbox (review R1-R6, 2026-11-19). Git's global config, user-installed Python packages and uv's Pythons stay readable (`GIT_CONFIG_GLOBAL`, `PYTHONUSERBASE`, `UV_PYTHON_INSTALL_DIR`).
+3. **Caches**: one cache of the fleet's own (`<fleet root>/homes/cache`: `XDG_CACHE_HOME`, npm, uv, pip), shared by runs and gates, never the operator's `~/.cache` or `~/.npm`.
 4. **Read-Only System & Checkouts**: All system directories (`/usr`, `/lib`, `/bin`) and main project git checkouts (`~/code`) are strictly read-only.
 5. **Secrets & Network Isolation**: Secrets outside `pass_env` and network interfaces outside allowed ports are blocked at the kernel level.
 

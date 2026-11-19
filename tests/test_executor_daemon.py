@@ -54,6 +54,7 @@ class TestLocalBackendStartsExecutor:
         store.enqueue(FleetTask(id="queued-1", text="do work", status="queued", created_at=1.0))
 
         mock_cfg = MagicMock()
+        mock_cfg.root = tmp_path / "fleet"   # a MagicMock root became a directory named MagicMock in the cwd
         mock_cfg.backend.kind = "local"
         mock_cfg.backend.max_concurrent = 2
         mock_cfg.projects = {"t": MagicMock(path=str(repo_dir))}
@@ -105,6 +106,7 @@ class TestNoExecutorWhenNotLocalOrDisabled:
         monkeypatch.setenv("FLEET_ROOT", str(tmp_path / "fleet"))
 
         mock_cfg = MagicMock()
+        mock_cfg.root = tmp_path / "fleet"   # a MagicMock root became a directory named MagicMock in the cwd
         mock_cfg.backend.kind = "grid"
         mock_cfg.backend.max_concurrent = 1
         mock_cfg.projects = {}
@@ -138,6 +140,7 @@ class TestNoExecutorWhenNotLocalOrDisabled:
         monkeypatch.setenv("FLEET_EXECUTOR", "0")
 
         mock_cfg = MagicMock()
+        mock_cfg.root = tmp_path / "fleet"   # a MagicMock root became a directory named MagicMock in the cwd
         mock_cfg.backend.kind = "local"
         mock_cfg.backend.max_concurrent = 1
         mock_cfg.projects = {}
@@ -184,6 +187,7 @@ class TestCleanShutdown:
         monkeypatch.setenv("FLEET_ROOT", str(tmp_path / "fleet"))
 
         mock_cfg = MagicMock()
+        mock_cfg.root = tmp_path / "fleet"   # a MagicMock root became a directory named MagicMock in the cwd
         mock_cfg.backend.kind = "local"
         mock_cfg.backend.max_concurrent = 1
         mock_cfg.projects = {"t": MagicMock(path=str(repo_dir))}
@@ -238,6 +242,7 @@ class TestRunQueuedUnknownProject:
         monkeypatch.setenv("FLEET_ROOT", str(tmp_path / "fleet"))
 
         mock_cfg = MagicMock()
+        mock_cfg.root = tmp_path / "fleet"   # a MagicMock root became a directory named MagicMock in the cwd
         mock_cfg.backend.kind = "local"
         mock_cfg.backend.max_concurrent = 1
         mock_cfg.projects = {}

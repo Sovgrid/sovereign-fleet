@@ -101,13 +101,20 @@ class HarnessConformanceReport:
         }
 
 
+def _lane_token_stub(harness: CliHarness) -> Dict[str, str]:
+    """A harness that runs only with a lane token (claude-code: TOKEN_ENV) gets a stand-in, which the
+    kit's mock binary never uses, so the timeout and cancel checks reach the run."""
+    token_env = getattr(harness, "TOKEN_ENV", "")
+    return {token_env: "conformance-stub"} if token_env else {}
+
+
 async def check_sandbox(harness: CliHarness, tmp_root: Path) -> ConformanceCheckResult:
     """Verify Landlock sandbox policy generation and filesystem write confinement."""
     wt_dir = tmp_root / "sandbox_wt"
     wt_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Verify policy structure
-    policy = policy_for_worktree(str(wt_dir), harness.state_paths)
+    policy = policy_for_worktree(str(wt_dir), harness.state_paths, ro_state_paths=harness.ro_state_paths)
     wt_resolved = str(wt_dir.resolve())
     if not any(str(Path(p).resolve()) == wt_resolved for p in policy.read_write_paths):
         return ConformanceCheckResult(
@@ -206,7 +213,8 @@ async def check_timeout(harness: CliHarness, tmp_root: Path) -> ConformanceCheck
 
     started = time.monotonic()
     with _sandbox_env_for_probe():
-        result = await test_harness.execute_task({"text": "conformance_timeout"}, str(wt_dir), timeout=1)
+        result = await test_harness.execute_task({"text": "conformance_timeout"}, str(wt_dir), timeout=1,
+                                                 env=_lane_token_stub(test_harness))
     elapsed = time.monotonic() - started
 
     if result.get("exit_code") != 124:
@@ -247,7 +255,8 @@ async def check_cancel(harness: CliHarness, tmp_root: Path) -> ConformanceCheckR
 
     with _sandbox_env_for_probe():
         task = asyncio.create_task(
-            test_harness.execute_task({"text": "conformance_cancel"}, str(wt_dir), timeout=30)
+            test_harness.execute_task({"text": "conformance_cancel"}, str(wt_dir), timeout=30,
+                                      env=_lane_token_stub(test_harness))
         )
 
         # Allow subprocess group to launch

@@ -2,6 +2,7 @@
 
 import asyncio
 from collections import deque
+import contextvars
 import hashlib
 import json
 import logging
@@ -18,12 +19,22 @@ from fleet.core.memlimit import GroupWatch, scope_prefix
 from fleet.core.models import ModelAdapterResult, ModelEndpoint
 from fleet.core.quirks import resolve_opencode_model
 from fleet.core import usage as _usage
+from fleet.core.capability import Capability, task_capabilities
 from fleet.core.egress_proxy import EgressProxy
 from fleet.core.sandbox import (SandboxUnavailable, egress_allowlist, egress_audit_path, egress_env,
-                                make_sandbox, policy_for_worktree, sandbox_disabled)
+                                fleet_cache, home_env, make_run_home, make_sandbox, policy_for_worktree,
+                                remove_run_home, sandbox_disabled, seed_file, validate_task_domains)
+from fleet.core.toolgate import Budget, ToolGateError, count_task_budget_used
 from fleet.plugins.base import HarnessPlugin, PluginKind, PluginMeta
 
 logger = logging.getLogger("fleet.plugins.harness")
+
+# The run homes make_run_home created during one execute_task, removed when it ends.
+_RUN_HOMES: contextvars.ContextVar[Optional[List[Path]]] = contextvars.ContextVar("fleet_run_homes", default=None)
+
+
+class HarnessRefused(Exception):
+    """run_state cannot give this run a safe state; the run is refused, not started."""
 
 _HOME = Path.home()
 DEFAULT_TIMEOUT_SECONDS = 600
@@ -33,20 +44,26 @@ MAX_OUTPUT_BYTES = 10 * 1024 * 1024  # 10 MiB cap on output buffers
 DEFAULT_STALL_SECONDS = 480
 
 
+def _fmt_seconds(value: float) -> str:
+    """Format whole numbers as '2' and sub-second/fractional windows as '0.25'."""
+    val = float(value)
+    return str(int(val)) if val.is_integer() else f"{val:g}"
+
+
 class _Stalled(Exception):
     """Raised by _communicate_with_stall when nothing happened for stall_seconds."""
 
-    def __init__(self, stall_seconds: int) -> None:
+    def __init__(self, stall_seconds: float) -> None:
         self.stall_seconds = stall_seconds
-        super().__init__(f"stalled after {stall_seconds}s")
+        super().__init__(f"stalled after {_fmt_seconds(stall_seconds)}s")
 
 
 class _Looping(Exception):
     """Raised by _communicate_with_stall when the same output repeats for loop_seconds."""
 
-    def __init__(self, loop_seconds: int) -> None:
+    def __init__(self, loop_seconds: float) -> None:
         self.loop_seconds = loop_seconds
-        super().__init__(f"looping after {loop_seconds}s")
+        super().__init__(f"looping after {_fmt_seconds(loop_seconds)}s")
 
 
 def start_crash(result: Dict[str, Any], seconds: float) -> bool:
@@ -73,8 +90,11 @@ def start_crash(result: Dict[str, Any], seconds: float) -> bool:
 class CliHarness(HarnessPlugin):
     """Runs `build_command(prompt)` in the task's worktree, confined by the sandbox.
 
-    Subclasses name the CLI, its command line and the state dirs it must write (auth, sessions).
-    The sandbox lets the CLI write only there, in the worktree and in caches.
+    Subclasses name the CLI and its command line. Every run gets a fresh home of the fleet's own
+    (HOME and XDG dirs) that seed_home fills with what the CLI needs, and the fleet's cache; the
+    sandbox lets the CLI write only there and in the worktree, never the operator's home, where a
+    planted config would run code outside the sandbox later (review R1-R6, 2026-11-19).
+    `state_paths` are extra writable paths outside any home (a PTY device).
     """
 
     name: str = ""
@@ -82,6 +102,7 @@ class CliHarness(HarnessPlugin):
     label: str = ""          # short name for menus (the dashboard's harness picker)
     description: str = ""
     state_paths: Tuple[Path, ...] = ()
+    ro_state_paths: Tuple[Path, ...] = ()
     # Names the CLI's own service needs when [sandbox] egress = "allowlist" (subscription logins).
     egress_domains: Tuple[str, ...] = ()
     _OPTION_DEFAULTS: Dict[str, Any] = {}
@@ -90,6 +111,9 @@ class CliHarness(HarnessPlugin):
     needs_tool_calling: bool = True
     own_login: bool = False
     model_fixed: bool = False
+    # True when a local lane (`probe_url` set) needs adapt_model(endpoint) because the CLI
+    # takes its local server from env or a generated run-home config rather than step args.
+    adapts_local_lane: bool = False
     # Stall detection default for this CLI (`[harnesses.<name>.options] stall_seconds`
     # overrides it). 0 for CLIs that print nothing until they finish.
     default_stall_seconds: int = DEFAULT_STALL_SECONDS
@@ -126,9 +150,30 @@ class CliHarness(HarnessPlugin):
         """Turn a ModelEndpoint into extra CLI args, environment variables, and passed env vars."""
         return ModelAdapterResult()
 
+    def seed_home(self, home: Path) -> None:
+        """Fill a fresh run home with what the CLI needs (a login, a generated config). Default: nothing."""
+
     def run_state(self, env: Mapping[str, str]) -> Tuple[Tuple[Path, ...], Dict[str, str]]:
-        """(writable state paths, extra environment) for one run with the run's environment."""
-        return self.state_paths, {}
+        """(writable state paths, extra environment) for one run with the run's environment: a fresh
+        home of the fleet's own, seeded, plus the fleet cache. Raises HarnessRefused when no safe
+        state can be given."""
+        home = make_run_home(self.name)
+        homes = _RUN_HOMES.get()
+        if homes is not None:
+            homes.append(home)
+        try:
+            self.seed_home(home)
+        except Exception:
+            remove_run_home(home)
+            raise
+        cache = fleet_cache()
+        return (home, cache, *self.state_paths), home_env(home, cache)
+
+    def attach_capability(self, name: str, url: str) -> List[str]:
+        """Extra command-line arguments that give this CLI the MCP server at `url` (streamable
+        HTTP on loopback, the tool gate of one capability). A harness that does not override
+        this cannot run a task that asks for capabilities."""
+        raise NotImplementedError
 
     @classmethod
     def _args_default(cls) -> List[str]:
@@ -136,10 +181,26 @@ class CliHarness(HarnessPlugin):
         return []
 
     async def execute_task(self, task: Dict[str, Any], worktree_dir: str,
-                           timeout: int = DEFAULT_TIMEOUT_SECONDS, model: str = "",
+                           timeout: float = DEFAULT_TIMEOUT_SECONDS, model: str = "",
                            args: Sequence[str] = (), pass_env: Sequence[str] = (),
                            env: Optional[Mapping[str, str]] = None,
                            endpoint: Optional[ModelEndpoint] = None) -> Dict[str, Any]:
+        """Run the CLI on the task (_execute_task); the run's home is removed afterwards."""
+        homes: List[Path] = []
+        token = _RUN_HOMES.set(homes)
+        try:
+            return await self._execute_task(task, worktree_dir, timeout=timeout, model=model, args=args,
+                                            pass_env=pass_env, env=env, endpoint=endpoint)
+        finally:
+            _RUN_HOMES.reset(token)
+            for home in homes:
+                remove_run_home(home)
+
+    async def _execute_task(self, task: Dict[str, Any], worktree_dir: str,
+                            timeout: float = DEFAULT_TIMEOUT_SECONDS, model: str = "",
+                            args: Sequence[str] = (), pass_env: Sequence[str] = (),
+                            env: Optional[Mapping[str, str]] = None,
+                            endpoint: Optional[ModelEndpoint] = None) -> Dict[str, Any]:
         """Run the CLI on the task in its worktree. `model` and `args` come from the lane;
         `pass_env` names environment variables of the daemon that may reach this CLI, `env` adds
         values for this run only (the lane's provider key). Every other credential is removed.
@@ -164,8 +225,11 @@ class CliHarness(HarnessPlugin):
         section_env = (section.env or {}) if section is not None else {}
         section_paths = (section.state_paths or []) if section is not None else []
         # as the run will see it: a lane token may also come from the daemon's own environment
-        state_paths, state_env = self.run_state({**{k: os.environ[k] for k in pass_env if k in os.environ},
-                                                 **(env or {}), **section_env})
+        try:
+            state_paths, state_env = self.run_state({**{k: os.environ[k] for k in pass_env if k in os.environ},
+                                                     **(env or {}), **section_env})
+        except (HarnessRefused, OSError, ValueError) as e:
+            return self._result(126, "", f"refused to run: {e}")
         effective_paths = state_paths + tuple(Path(p) for p in section_paths)
         # Stall detection: [harnesses.<name>.options] stall_seconds, read like
         # permission_mode for Claude Code. Default default_stall_seconds, 0 switches it off, never larger
@@ -174,40 +238,90 @@ class CliHarness(HarnessPlugin):
                  if section is not None and section.options.get("stall_seconds") is not None
                  else self.default_stall_seconds)
         try:
-            stall = int(stall)
+            stall = float(stall)
         except (TypeError, ValueError):
-            stall = self.default_stall_seconds
+            stall = float(self.default_stall_seconds)
         if stall > timeout:
-            stall = timeout
+            stall = float(timeout)
         # Loop detection: [harnesses.<name>.options] loop_seconds. 0 switches it off,
         # capped at the run timeout. Same per-harness default pattern as stall_seconds.
         loop = (section.options.get("loop_seconds")
                 if section is not None and section.options.get("loop_seconds") is not None
                 else self.default_loop_seconds)
         try:
-            loop = int(loop)
+            loop = float(loop)
         except (TypeError, ValueError):
-            loop = self.default_loop_seconds
+            loop = float(self.default_loop_seconds)
         if loop > timeout:
-            loop = timeout
+            loop = float(timeout)
 
         # egress = "allowlist": this run's own proxy, the only way out besides the local models.
         base_url = endpoint.base_url if endpoint is not None else ""
         egress = None
-        if load_config().sandbox.egress == "allowlist" and not sandbox_disabled():
-            egress = EgressProxy([*egress_allowlist(provider_model, [base_url, *args, *section_args]),
-                                  *self.egress_domains],
-                                 audit_path=egress_audit_path(str(task.get("id", ""))))
-            await egress.start()
+        try:   # the last check before the proxy is built: a task from any backend passes here
+            task_allowed = validate_task_domains(task.get("allowed_domains"))
+        except ValueError as e:
+            return self._result(2, "", f"refused to run: {e}")
+        cfg = await asyncio.to_thread(load_config)
+        if task_allowed and cfg.sandbox.egress != "allowlist":
+            logger.warning("task %s: allowed_domains has no effect with sandbox.egress = \"ports\"",
+                           task.get("id", ""))
+        # Capabilities the task asks for (intent `capabilities`): each a confined third-party MCP
+        # server behind its own tool gate (core/capability.py). The agent starts only when all of
+        # them answered; one that does not come up fails the run before a token is spent.
         try:
-            sandbox = make_sandbox(policy_for_worktree(worktree_dir, effective_paths,
-                                                       egress_port=egress.port if egress else None))
+            wanted = task_capabilities(task.get("capabilities"))
+        except ValueError as e:
+            return self._result(2, "", f"refused to run: {e}")
+        if wanted and type(self).attach_capability is CliHarness.attach_capability:
+            return self._result(2, "", f"refused to run: the {self.name} harness cannot attach "
+                                       f"capabilities ({', '.join(wanted)})")
+        capabilities: List[Capability] = []
+        budget_cap = task.get("commission_budget")
+        task_id_str = str(task.get("id", ""))
+        shared_task_budget: Optional[Budget] = None
+        if wanted and isinstance(budget_cap, int) and budget_cap > 0:
+            prior_used = await asyncio.to_thread(
+                count_task_budget_used, task_id_str, cfg.root / "toolcalls"
+            )
+            shared_task_budget = Budget(max_calls=budget_cap, initial_used=prior_used)
+        try:
+            for name in wanted:
+                section = cfg.capabilities.get(name)
+                if section is not None and isinstance(budget_cap, int) and budget_cap > 0:
+                    eff_calls = min(section.max_calls, budget_cap) if section.max_calls > 0 else budget_cap
+                    section = section.model_copy(update={"max_calls": eff_calls})
+                capability = Capability(name, section=section)
+                capabilities.append(capability)
+                await capability.start(task_id_str, task_allowed, task_budget=shared_task_budget)
+                args = [*args, *self.attach_capability(name, capability.url)]
+        except (ToolGateError, OSError) as e:
+            for capability in capabilities:
+                await capability.stop()
+            return self._result(125, "", f"capability did not start: {e}")
+        try:
+            if cfg.sandbox.egress == "allowlist" and not sandbox_disabled():
+                egress = EgressProxy(
+                    [*egress_allowlist(provider_model, [base_url, *args, *section_args], task_allowed),
+                     *self.egress_domains],
+                    audit_path=egress_audit_path(task_id_str))
+                await egress.start()
+        except OSError as e:
+            for capability in capabilities:
+                await capability.stop()
+            return self._result(125, "", f"egress proxy did not start: {e}")
+        try:
+            policy = policy_for_worktree(worktree_dir, effective_paths,
+                                         egress_port=egress.port if egress else None,
+                                         ro_state_paths=self.ro_state_paths)
+            policy.ports = [*policy.ports, *(c.port for c in capabilities)]   # its gates, nothing else
+            sandbox = make_sandbox(policy)
             try:
                 argv = sandbox.wrap([*self.build_command(task.get("text", ""), model), *section_args, *args])
             except SandboxUnavailable as e:
                 return self._result(126, "", f"refused to run unsandboxed: {e}")
-            memory_max = load_config().sandbox.memory_max
-            argv = [*scope_prefix(memory_max), *argv]
+            memory_max = cfg.sandbox.memory_max
+            argv = [*scope_prefix(memory_max, kind="agent"), *argv]
             run_env = sandbox.build_safe_env()
             run_env.update({k: os.environ[k] for k in pass_env if k in os.environ})
             run_env.update(env or {})
@@ -241,14 +355,25 @@ class CliHarness(HarnessPlugin):
             finally:
                 await watch.stop()
             if watch.fired:
-                return {**result, "exit_code": 137, "stderr": watch.message()}
+                result = {**result, "exit_code": 137, "stderr": watch.message()}
+            drafts: list[dict[str, Any]] = []
+            for capability in capabilities:
+                for entry in capability.read_drafts(status="pending"):
+                    item = dict(entry)
+                    if task_allowed and "allowed_domains" not in item:
+                        item["allowed_domains"] = list(task_allowed)
+                    drafts.append(item)
+            if drafts and isinstance(result, dict):
+                result["drafts"] = drafts
             return result
         finally:
+            for capability in capabilities:
+                await capability.stop()
             if egress is not None:
                 await egress.stop()
 
-    async def _finish(self, process, worktree_dir: str, timeout: int, stall: int,
-                       loop: int) -> Dict[str, Any]:
+    async def _finish(self, process, worktree_dir: str, timeout: float, stall: float,
+                       loop: float) -> Dict[str, Any]:
         """Wait for the agent: its result, or 124 after a stall or the timeout."""
         seen = bytearray()  # what the agent wrote before a kill: its tokens were spent
 
@@ -261,22 +386,22 @@ class CliHarness(HarnessPlugin):
         except _Stalled as e:
             await kill_group(process)
             return self._result(124, await killed(),
-                                f"stalled: no output and no worktree change for {e.stall_seconds}s")
+                                f"stalled: no output and no worktree change for {_fmt_seconds(e.stall_seconds)}s")
         except _Looping as e:
             await kill_group(process)
             return self._result(124, await killed(),
-                                f"looping: the same output repeated for {e.loop_seconds}s "
+                                f"looping: the same output repeated for {_fmt_seconds(e.loop_seconds)}s "
                                 f"without a worktree change")
         except asyncio.CancelledError:
             await kill_group(process)
             raise
         except asyncio.TimeoutError:
             await kill_group(process)
-            return self._result(124, await killed(), f"timed out after {timeout}s")
+            return self._result(124, await killed(), f"timed out after {_fmt_seconds(timeout)}s")
         return self._result(process.returncode, _decode(stdout), _decode(stderr))
 
-    async def _communicate_with_stall(self, process, worktree_dir: str, timeout: int,
-                                      stall_seconds: int, loop_seconds: int,
+    async def _communicate_with_stall(self, process, worktree_dir: str, timeout: float,
+                                      stall_seconds: float, loop_seconds: float,
                                       stdout_buf: bytearray) -> Tuple[bytes, bytes]:
         """Read stdout and stderr incrementally like communicate(), but end early on a stall.
 
@@ -463,8 +588,7 @@ class ClaudeCodeHarness(CliHarness):
     binary = "claude"
     label = "Claude Code"
     description = "Claude Code CLI"
-    state_paths = (_HOME / ".claude", _HOME / ".claude.json", _HOME / ".config/claude",
-                   _HOME / ".local/share/claude")
+    state_paths: Tuple[Path, ...] = ()       # its run home only (run_state)
 
     own_login: bool = True
     model_fixed: bool = True
@@ -476,21 +600,28 @@ class ClaudeCodeHarness(CliHarness):
     TOKEN_ENV = "CLAUDE_CODE_OAUTH_TOKEN"
 
     def run_state(self, env: Mapping[str, str]) -> Tuple[Tuple[Path, ...], Dict[str, str]]:
-        """With a lane token (key_env = "CLAUDE_CODE_OAUTH_TOKEN", one year, from `claude
-        setup-token`) the CLI gets a config directory of its own under the fleet root, so an agent
-        never sees the operator's ~/.claude (session transcripts, memory, settings). Without one,
-        the operator's login as before."""
+        """Only with a lane token (key_env = "CLAUDE_CODE_OAUTH_TOKEN", one year, from `claude
+        setup-token`): the CLI then keeps its config in its run home (CLAUDE_CONFIG_DIR). Without one
+        it would need the operator's own ~/.claude (hooks that run outside the sandbox, session
+        transcripts, memory), so the run is refused (review R5, 2026-11-19)."""
         if not env.get(self.TOKEN_ENV):
-            return self.state_paths, {}
-        home = load_config().root / "claude-config"
-        home.mkdir(parents=True, exist_ok=True)
-        return (home,), {"CLAUDE_CONFIG_DIR": str(home), "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
+            raise HarnessRefused("claude-code runs only with a lane token (key_env = \"CLAUDE_CODE_OAUTH_TOKEN\", "
+                                 "from `claude setup-token`); without one it would use the operator's own ~/.claude")
+        paths, run_env = super().run_state(env)
+        return paths, {**run_env, "CLAUDE_CONFIG_DIR": str(paths[0] / ".claude"),
+                       "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"}
 
     _OPTION_DEFAULTS: Dict[str, Any] = {"permission_mode": "acceptEdits"}
 
     def adapt_model(self, endpoint: ModelEndpoint) -> ModelAdapterResult:
         # Claude Code uses its own subscription login and bundled model
         return ModelAdapterResult()
+
+    def attach_capability(self, name: str, url: str) -> List[str]:
+        # only this server (no MCP servers of the operator's own config), its tools pre-approved:
+        # which of them exist and may be called is the tool gate's decision, not the CLI's
+        config = json.dumps({"mcpServers": {name: {"type": "http", "url": url}}})
+        return ["--mcp-config", config, "--strict-mcp-config", "--allowedTools", f"mcp__{name}"]
 
     def build_command(self, prompt: str, model: str = "") -> List[str]:
         # edits are approved; shell commands are not (the sandbox confines both)
@@ -507,9 +638,19 @@ class AgyHarness(CliHarness):
     binary = "agy"
     label = "Antigravity (agy)"
     description = "Antigravity CLI (own login, models from its catalog)"
-    # Measured 2026-10-22 (agy 1.4.5): it writes its sessions under ~/.gemini/antigravity-cli and a
-    # project file under ~/.gemini/config/projects; its terminal tool opens a PTY (/dev/ptmx).
-    state_paths = (_HOME / ".gemini/antigravity-cli", _HOME / ".gemini/config", Path("/dev/ptmx"))
+    # agy keeps everything under $HOME: its login (~/.gemini/antigravity-cli/antigravity-oauth-token
+    # with SSH_TTY=1, installation_id, ~/.config/antigravity/credential-user-scope) and, in the same
+    # directory, its conversations, brain, knowledge, settings and hooks. The operator's own agy (the
+    # coordinator) uses that directory, so a run gets its own home seeded with the three login files
+    # only (review R1, 2026-11-19; agy 1.5.11 has no data-dir option). Measured 2026-11-19: a fresh
+    # home with these files answers `agy -p`.
+    state_paths = (Path("/dev/ptmx"),)
+    LOGIN_FILES = (
+        ".gemini/antigravity-cli/antigravity-oauth-token",
+        ".gemini/antigravity-cli/installation_id",
+        ".config/antigravity/credential-user-scope",
+    )
+    operator_home: Path = _HOME
     # Found with the egress audit (2026-10-26): the rest of what it tries (docs MCP, avatars,
     # telemetry) stays blocked without harm.
     egress_domains = ("daily-cloudcode-pa.googleapis.com", "www.googleapis.com", "antigravity-unleash.goog")
@@ -522,6 +663,17 @@ class AgyHarness(CliHarness):
     # Tool permissions are approved: the fleet's sandbox confines what the tools can do.
     # agy's own --mode auto needs a terminal sandbox agy does not find on Linux, so it is not used.
     _OPTION_DEFAULTS: Dict[str, Any] = {"skip_permissions": True}
+
+    def seed_home(self, home: Path) -> None:
+        for rel in self.LOGIN_FILES:
+            src = self.operator_home / rel
+            if src.is_file() and not src.is_symlink():
+                seed_file(home, rel, src.read_bytes())
+
+    def run_state(self, env: Mapping[str, str]) -> Tuple[Tuple[Path, ...], Dict[str, str]]:
+        """SSH_TTY=1 makes agy 1.5.11+ keep its token in a file instead of the D-Bus Secret Service."""
+        paths, run_env = super().run_state(env)
+        return paths, {**run_env, "SSH_TTY": "1"}
 
     def adapt_model(self, endpoint: ModelEndpoint) -> ModelAdapterResult:
         # The model id is agy's own; it reaches build_command as `model`.
@@ -545,7 +697,9 @@ class CursorHarness(CliHarness):
     binary = "agent"
     label = "Cursor"
     description = "Cursor CLI (own account; free plan: Auto only, Cursor picks the model)"
-    state_paths = (_HOME / ".cursor", _HOME / ".config/cursor")
+    # Its own run home: the operator's ~/.cursor holds MCP servers, plugins and scripts it starts
+    # outside any sandbox (review R6, 2026-11-19). The lane's API key is all it needs.
+    state_paths: Tuple[Path, ...] = ()
     egress_domains = ("*.cursor.sh",)  # api2 and the agent host; its updater stays blocked
 
     own_login: bool = True
@@ -600,13 +754,31 @@ class OpenCodeHarness(CliHarness):
     binary = "opencode"
     label = "opencode"
     description = "OpenCode CLI (local or remote models)"
-    state_paths = (_HOME / ".config/opencode", _HOME / ".local/share/opencode",
-                   _HOME / ".local/state/opencode")
+    # Its own run home (review R4, 2026-11-19): the operator's ~/.config/opencode names MCP servers
+    # and plugins (commands opencode starts) and ~/.local/share/opencode holds every session. The run
+    # gets a config generated from the operator's with the providers and models only (CONFIG_KEYS).
+    state_paths: Tuple[Path, ...] = ()
+    CONFIG_KEYS = ("$schema", "provider", "model", "small_model", "permission")
+    operator_home: Path = _HOME
 
     supported_api_kinds: Tuple[str, ...] = (
         "openai_compatible", "openai", "vllm_local", "anthropic", "google", "gemini",
         "mistral", "groq", "deepseek", "openrouter", "nvidia", "nvidia_nim", "cerebras", "opencode",
     )
+
+    def seed_home(self, home: Path) -> None:
+        for name in ("opencode.json", "config.json"):
+            src = self.operator_home / ".config/opencode" / name
+            if src.is_file() and not src.is_symlink():
+                try:
+                    data = json.loads(src.read_text(encoding="utf-8"))
+                except ValueError as e:
+                    raise HarnessRefused(f"{src} is not valid JSON: {e}") from None
+                if not isinstance(data, dict):
+                    raise HarnessRefused(f"{src} is not a JSON object")
+                kept = {k: data[k] for k in self.CONFIG_KEYS if k in data}
+                seed_file(home, ".config/opencode/opencode.json", json.dumps(kept, indent=1).encode())
+                return
     needs_tool_calling: bool = True
 
     _OPTION_DEFAULTS: Dict[str, Any] = {"auto": True}
@@ -640,11 +812,14 @@ class GooseHarness(CliHarness):
     binary = "goose"
     label = "goose"
     description = "Block Goose CLI with MCP extensions"
-    state_paths = (_HOME / ".config/goose", _HOME / ".local/share/goose",
-                   _HOME / ".local/state/goose")
+    # Its own run home (review R3, 2026-11-19): the operator's ~/.config/goose/config.yaml lists
+    # extensions, commands goose desktop starts outside any sandbox. The lane's env names provider
+    # and model; GOOSE_DISABLE_KEYRING keeps secrets off the D-Bus keyring.
+    state_paths: Tuple[Path, ...] = ()
 
     supported_api_kinds: Tuple[str, ...] = ("openai_compatible", "openai", "vllm_local")
     needs_tool_calling: bool = True
+    adapts_local_lane: bool = True
 
     max_turns: int = 80
     max_tool_repetitions: int = 5
@@ -670,6 +845,13 @@ class GooseHarness(CliHarness):
         pass_env = [endpoint.key_env] if endpoint.key_env else []
         return ModelAdapterResult(env=env, pass_env=pass_env)
 
+    def attach_capability(self, name: str, url: str) -> List[str]:
+        return ["--with-streamable-http-extension", url]
+
+    def run_state(self, env: Mapping[str, str]) -> Tuple[Tuple[Path, ...], Dict[str, str]]:
+        paths, run_env = super().run_state(env)
+        return paths, {**run_env, "GOOSE_DISABLE_KEYRING": "1"}
+
     def build_command(self, prompt: str, model: str = "") -> List[str]:
         # --no-session: do not grow the user's session database (unattended runs)
         # --no-profile --with-builtin developer: reproducible toolset, not the user's personal extensions
@@ -693,7 +875,7 @@ class GooseHarness(CliHarness):
         return parts
 
     async def execute_task(self, task: Dict[str, Any], worktree_dir: str,
-                           timeout: int = DEFAULT_TIMEOUT_SECONDS, model: str = "",
+                           timeout: float = DEFAULT_TIMEOUT_SECONDS, model: str = "",
                            args: Sequence[str] = (), pass_env: Sequence[str] = (),
                            env: Optional[Mapping[str, str]] = None,
                            endpoint: Optional[ModelEndpoint] = None) -> Dict[str, Any]:
@@ -734,17 +916,51 @@ class PiHarness(CliHarness):
     binary = "pi"
     label = "Pi"
     description = "Pi coding agent CLI"
-    state_paths = (_HOME / ".pi", _HOME / ".config/pi", _HOME / ".local/share/pi")
+    state_paths: Tuple[Path, ...] = ()       # its own run home (review R6, 2026-11-19)
 
     supported_api_kinds: Tuple[str, ...] = ("openai_compatible", "openai", "vllm_local", "anthropic", "google", "groq")
     needs_tool_calling: bool = True
+    adapts_local_lane: bool = True
 
     _OPTION_DEFAULTS: Dict[str, Any] = {"tools": "read,edit,write"}
 
+    # An OpenAI-compatible server (a lane's local model) is a provider Pi only knows from
+    # ~/.pi/agent/models.json: the adapter hands the endpoint to run_state, which writes that file
+    # into the run's home (provider "fleet"; the key stays in the environment as "$KEY_ENV").
+    ENDPOINT_ENV = "FLEET_PI_ENDPOINT"
+    _KEY_ENV_RE = re.compile(r"^[A-Z_][A-Z0-9_]{0,63}$")
+
     def adapt_model(self, endpoint: ModelEndpoint) -> ModelAdapterResult:
-        args = ["--model", endpoint.model_id] if endpoint.model_id else []
         pass_env = [endpoint.key_env] if endpoint.key_env else []
+        if endpoint.base_url and endpoint.model_id:
+            spec = {"baseUrl": endpoint.base_url.rstrip("/"), "id": endpoint.model_id,
+                    "key_env": endpoint.key_env or "", "context": int(endpoint.context or 0)}
+            return ModelAdapterResult(args=["--provider", "fleet", "--model", endpoint.model_id],
+                                      env={self.ENDPOINT_ENV: json.dumps(spec)}, pass_env=pass_env)
+        args = ["--model", endpoint.model_id] if endpoint.model_id else []
         return ModelAdapterResult(args=args, pass_env=pass_env)
+
+    def run_state(self, env: Mapping[str, str]) -> Tuple[Tuple[Path, ...], Dict[str, str]]:
+        """A fresh home; with a lane's local endpoint, a models.json naming only that endpoint.
+        PI_OFFLINE: no catalog refresh or version check from inside the sandbox."""
+        paths, run_env = super().run_state(env)
+        raw = env.get(self.ENDPOINT_ENV)
+        if raw:
+            try:
+                spec = json.loads(raw)
+                base, model_id = str(spec["baseUrl"]), str(spec["id"])
+                key_env, context = str(spec.get("key_env") or ""), int(spec.get("context") or 0)
+            except (ValueError, KeyError, TypeError) as e:
+                raise HarnessRefused(f"bad pi endpoint: {e}") from None
+            if not re.match(r"^https?://[^\s/@]+(:\d+)?(/\S*)?$", base) or (key_env and not self._KEY_ENV_RE.match(key_env)):
+                raise HarnessRefused("bad pi endpoint: base URL or key variable")
+            model: Dict[str, Any] = {"id": model_id}
+            if context > 0:
+                model["contextWindow"] = context
+            provider = {"baseUrl": base, "api": "openai-completions",
+                        "apiKey": f"${key_env}" if key_env else "local", "models": [model]}
+            seed_file(paths[0], ".pi/agent/models.json", json.dumps({"providers": {"fleet": provider}}, indent=1).encode())
+        return paths, {**run_env, "PI_OFFLINE": "1", "PI_SKIP_VERSION_CHECK": "1", "PI_TELEMETRY": "0"}
 
     def build_command(self, prompt: str, model: str = "") -> List[str]:
         tools_val = (self._section.options.get("tools") if self._section and self._section.options.get("tools") is not None else "read,edit,write")
@@ -765,8 +981,19 @@ class AiderHarness(CliHarness):
     binary = "aider"
     label = "aider"
     description = "Aider CLI (the engine commits, not aider)"
-    state_paths = (_HOME / ".aider", _HOME / ".aider.conf.yml",
-                   _HOME / ".aider.model-settings.yml")
+    # Its own run home (review R6, 2026-11-19), seeded with the operator's two config files, the
+    # model settings path pointed at the copy. They are copied fresh each run, never written back.
+    state_paths: Tuple[Path, ...] = ()
+    operator_home: Path = _HOME
+
+    def seed_home(self, home: Path) -> None:
+        settings = self.operator_home / ".aider.model-settings.yml"
+        if settings.is_file() and not settings.is_symlink():
+            seed_file(home, ".aider.model-settings.yml", settings.read_bytes())
+        conf = self.operator_home / ".aider.conf.yml"
+        if conf.is_file() and not conf.is_symlink():
+            text = conf.read_text(encoding="utf-8").replace(str(settings), str(home / ".aider.model-settings.yml"))
+            seed_file(home, ".aider.conf.yml", text.encode("utf-8"))
 
     supported_api_kinds: Tuple[str, ...] = (
         "openai_compatible", "openai", "vllm_local", "anthropic", "google", "gemini",
@@ -796,10 +1023,13 @@ class AiderHarness(CliHarness):
         return [self.effective_binary, "--message", prompt, *args, "--no-auto-commits", "--exit",
                 "--no-gitignore", "--chat-history-file", "/dev/null",
                 "--input-history-file", "/dev/null", "--no-check-update", "--no-analytics",
+                # a fresh run home looks like a first start: aider would offer the release notes and,
+                # with --yes-always, open a browser (seen live 2026-11-19)
+                "--no-show-release-notes",
                 *(["--model", model] if model else [])]
 
     async def execute_task(self, task: Dict[str, Any], worktree_dir: str,
-                           timeout: int = DEFAULT_TIMEOUT_SECONDS, model: str = "",
+                           timeout: float = DEFAULT_TIMEOUT_SECONDS, model: str = "",
                            args: Sequence[str] = (), pass_env: Sequence[str] = (),
                            env: Optional[Mapping[str, str]] = None,
                            endpoint: Optional[ModelEndpoint] = None) -> Dict[str, Any]:

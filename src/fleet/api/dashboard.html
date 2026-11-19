@@ -3423,6 +3423,82 @@
       color: var(--cyan);
       background: rgba(118, 185, 0, 0.1);
     }
+
+    .visually-hidden:where(:not(:focus-within, :active)) {
+      position: absolute !important;
+      clip-path: inset(50%) !important;
+      overflow: hidden !important;
+      width: 1px !important;
+      height: 1px !important;
+      margin: -1px !important;
+      padding: 0 !important;
+      border: 0 !important;
+      white-space: nowrap !important;
+    }
+
+    .signer-setup-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 1rem;
+      align-items: start;
+    }
+
+    .signer-field {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      margin-block-end: 0.75rem;
+    }
+
+    .signer-hint {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      line-height: 1.4;
+    }
+
+    .signer-input {
+      width: 100%;
+      box-sizing: border-box;
+      font: inherit;
+      font-size: max(1rem, 1em);
+      padding: 0.65rem 0.75rem;
+      min-height: 48px;
+      background: var(--input-bg);
+      color: var(--text-main);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+    }
+
+    .signer-input:focus-visible,
+    .signer-btn:focus-visible {
+      outline: 3px solid var(--cyan);
+      outline-offset: 2px;
+    }
+
+    .signer-input:is(:user-invalid, .user-invalid-fallback) {
+      border-color: var(--rose);
+    }
+
+    .signer-error-msg {
+      color: var(--rose);
+      font-size: 0.8rem;
+      line-height: 1.35;
+    }
+
+    .signer-btn {
+      min-height: 48px;
+      padding: 0.6rem 1rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .signer-qr-frame {
+      background: #fff;
+      padding: 0.5rem;
+      border-radius: var(--radius-sm);
+      display: inline-block;
+      margin-top: 0.5rem;
+    }
   </style>
 </head>
 <body>
@@ -3647,6 +3723,145 @@
 
     <!-- Tab 1: TASKS -->
     <section class="tab-content active" id="pane-tasks">
+      <div class="panel" id="signer-setup-card" style="margin-bottom: 1rem;">
+        <div class="panel-header">
+          <div class="panel-header-left">
+            <span class="prompt-glyph">&gt;</span>
+            <span class="panel-title" id="signer-setup-title">OPERATOR SIGNER</span>
+          </div>
+          <span class="panel-badge" id="signer-status-badge">unpaired</span>
+        </div>
+        <div class="panel-body">
+          <div id="signer-live-status" class="visually-hidden" aria-live="polite"></div>
+          <p class="signer-hint" id="signer-amber-warning" style="margin-top: 0; color: var(--amber);">
+            Manually approve every permission in Amber, check that no permissions are enabled below in the list, and never choose Remember.
+          </p>
+          <div id="signer-pin-box" hidden style="margin-bottom: 0.75rem; padding: 0.65rem 0.8rem; border: 1px solid var(--amber); border-radius: var(--radius-sm); background: rgba(245, 158, 11, 0.08);">
+            <div style="font-size: 0.84rem; font-weight: 600; color: var(--amber);">Compare fingerprint on Amber, then pin root-owned anchor:</div>
+            <pre id="signer-pin-cmd" style="margin: 0.4rem 0 0; font-size: 0.82rem; white-space: pre-wrap; word-break: break-all;"></pre>
+          </div>
+          <div class="signer-setup-grid" id="signer-pairing-controls">
+            <div>
+              <button type="button" id="btn-signer-pair-qr" class="btn signer-btn">
+                Pair Phone Signer (QR)
+              </button>
+              <div id="signer-qr-container" hidden style="margin-top: 0.65rem;">
+                <div class="signer-qr-frame">
+                  <img id="signer-qr-img" src="" alt="Nostr Connect QR code for pairing phone signer" width="210" height="210">
+                </div>
+                <div id="signer-qr-relay" class="signer-hint" style="margin-top: 0.4rem; word-break: break-all;"></div>
+              </div>
+            </div>
+            <form id="signer-bunker-form" method="post" action="/api/fleet/signer/bunker" aria-labelledby="signer-setup-title" novalidate>
+              <div class="signer-field">
+                <label for="signer-bunker-input" class="control-label">Remote Bunker URI (another device)</label>
+                <div id="signer-bunker-hint" class="signer-hint">Paste bunker://&lt;64-hex&gt;?relay=wss://... from another host (same-machine relays are refused).</div>
+                <input
+                  type="url"
+                  id="signer-bunker-input"
+                  name="bunker_uri"
+                  class="signer-input"
+                  aria-describedby="signer-bunker-hint"
+                  data-error="signer-bunker-error"
+                  aria-invalid="false"
+                  required
+                  pattern="bunker://[0-9a-fA-F]{64}\?.*"
+                  autocorrect="off"
+                  autocapitalize="none"
+                  spellcheck="false"
+                  autocomplete="off"
+                >
+                <div id="signer-bunker-error" class="signer-error-msg" hidden></div>
+              </div>
+              <button type="submit" id="btn-signer-bunker" class="btn signer-btn">
+                Connect Remote Bunker
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="privateers-card" style="margin-bottom: 1rem;">
+        <div class="panel-header">
+          <div class="panel-header-left">
+            <span class="prompt-glyph">&gt;</span>
+            <span class="panel-title" id="privateers-title">PRIVATEERS</span>
+          </div>
+          <span class="panel-badge" id="privateers-count-badge">0 commissioned</span>
+        </div>
+        <div class="panel-body">
+          <div id="privateer-live-status" class="visually-hidden" aria-live="polite"></div>
+          <div id="privateer-list" style="margin-bottom: 0.75rem; font-size: 0.85rem; color: var(--text-muted);">
+            No Privateers created yet.
+          </div>
+          <form id="privateer-create-form" aria-labelledby="privateers-title" novalidate style="display: grid; gap: 0.55rem; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); align-items: end;">
+            <div class="signer-field">
+              <label for="priv-name-input" class="control-label">Name</label>
+              <input type="text" id="priv-name-input" class="signer-input" placeholder="weather-bot" required pattern="[a-z0-9][a-z0-9_-]{0,63}" autocomplete="off">
+            </div>
+            <div class="signer-field">
+              <label for="priv-caps-input" class="control-label">Capabilities (comma-separated)</label>
+              <input type="text" id="priv-caps-input" class="signer-input" placeholder="fetch,browser" required autocomplete="off">
+            </div>
+            <div class="signer-field">
+              <label for="priv-budget-input" class="control-label">Budget (calls/task)</label>
+              <input type="number" id="priv-budget-input" class="signer-input" value="50" min="1" max="10000" required>
+            </div>
+            <div class="signer-field">
+              <label for="priv-domains-input" class="control-label">Allowed domains (required for network)</label>
+              <input type="text" id="priv-domains-input" class="signer-input" placeholder="example.com" autocomplete="off">
+            </div>
+            <div>
+              <button type="submit" id="btn-privateer-create" class="btn signer-btn">New Privateer</button>
+            </div>
+          </form>
+          <div id="privateer-form-error" class="signer-error-msg" hidden></div>
+        </div>
+      </div>
+
+      <div class="panel" id="routines-card" style="margin-bottom: 1rem;">
+        <div class="panel-header">
+          <div class="panel-header-left">
+            <span class="prompt-glyph">&gt;</span>
+            <span class="panel-title" id="routines-title">ROUTINES</span>
+          </div>
+          <span class="panel-badge" id="routines-count-badge">0 active</span>
+        </div>
+        <div class="panel-body">
+          <div id="routine-live-status" class="visually-hidden" aria-live="polite"></div>
+          <div id="routine-action-error" class="signer-error-msg" role="alert" hidden></div>
+          <div id="routine-list" style="margin-bottom: 0.75rem; font-size: 0.85rem; color: var(--text-muted);">
+            No routines configured yet.
+          </div>
+          <form id="routine-create-form" aria-labelledby="routines-title" novalidate style="display: grid; gap: 0.55rem; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); align-items: end;">
+            <div class="signer-field">
+              <label for="rout-id-input" class="control-label">ID</label>
+              <input type="text" id="rout-id-input" class="signer-input" placeholder="pilot-fri" required pattern="[a-z0-9][a-z0-9_-]{0,63}" autocomplete="off">
+            </div>
+            <div class="signer-field">
+              <label for="rout-title-input" class="control-label">Title</label>
+              <input type="text" id="rout-title-input" class="signer-input" placeholder="Friday Lermoos Report" required autocomplete="off">
+            </div>
+            <div class="signer-field">
+              <label for="rout-cron-input" class="control-label">Cron (5 fields) or interval s</label>
+              <input type="text" id="rout-cron-input" class="signer-input" placeholder="0 7,18 * * 5 or 3600s" required autocomplete="off">
+            </div>
+            <div class="signer-field">
+              <label for="rout-lateness-input" class="control-label">Max lateness (s)</label>
+              <input type="number" id="rout-lateness-input" class="signer-input" value="3600" min="0" max="604800" required>
+            </div>
+            <div class="signer-field" style="grid-column: 1 / -1;">
+              <label for="rout-prompt-input" class="control-label">Task prompt</label>
+              <input type="text" id="rout-prompt-input" class="signer-input" placeholder="Generate verified Pilot (f) Lermoos briefing" required autocomplete="off">
+            </div>
+            <div>
+              <button type="submit" id="btn-routine-create" class="btn signer-btn">Propose Routine</button>
+            </div>
+          </form>
+          <div id="routine-form-error" class="signer-error-msg" hidden></div>
+        </div>
+      </div>
+
       <div class="attention-strip" id="attention-strip" hidden></div>
       <!-- Task Dispatch Panel -->
       <div class="panel">
@@ -4534,10 +4749,35 @@
 
     function riskLine(t) {
       const r = (t.metadata && t.metadata.risk) || null;
-      if (!r) return '';
-      var colorMap = { low: 'var(--emerald)', medium: 'var(--amber)', high: 'var(--rose)' };
-      var color = colorMap[r.level] || 'var(--text-muted)';
-      return '<div style="margin-top: 0.35rem; font-size: 0.8rem; color: ' + color + '; font-family: var(--font), monospace;">Risk: ' + escapeHtml(r.level) + ', ' + escapeHtml(r.reason) + ' (' + escapeHtml(r.model || '?') + ')</div>';
+      const drafts = (t.metadata && t.metadata.pending_drafts) || [];
+      let html = '';
+      if (r) {
+        var colorMap = { low: 'var(--emerald)', medium: 'var(--amber)', high: 'var(--rose)' };
+        var color = colorMap[r.level] || 'var(--text-muted)';
+        html += '<div style="margin-top: 0.35rem; font-size: 0.8rem; color: ' + color + '; font-family: var(--font), monospace;">Risk: ' + escapeHtml(r.level) + ', ' + escapeHtml(r.reason) + ' (' + escapeHtml(r.model || '?') + ')</div>';
+      }
+      if (Array.isArray(drafts) && drafts.length) {
+        html += drafts.map(function (d) {
+          var argsText = JSON.stringify(d.arguments || {}, null, 2);
+          var seq = String(d.seq || '');
+          var waitingSig = d.signature_status === 'awaiting_signature';
+          var btnLabel = waitingSig ? '[RESEND PROMPT]' : '[APPROVE DRAFT]';
+          var sigBadge = waitingSig
+            ? ' <span style="margin-left: 0.4rem; padding: 0.1rem 0.4rem; border-radius: 4px; background: color-mix(in srgb, var(--amber) 18%, transparent); color: var(--amber); font-size: 0.72rem;">Waiting for phone signature</span>'
+            : '';
+          return '<div style="margin-top: 0.45rem; padding: 0.5rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.78rem;">' +
+            '<div style="display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap;">' +
+              '<div style="color: var(--amber); font-family: var(--font), monospace;">Draft #' + escapeHtml(seq || '?') + ' · ' + escapeHtml(d.capability || 'capability') + ' · ' + escapeHtml(d.tool || '?') + sigBadge + '</div>' +
+              '<div style="display: flex; gap: 0.35rem;">' +
+                '<button type="button" class="task-action-btn btn-action-approve" data-task-id="' + escapeHtml(t.id) + '" data-seq="' + escapeHtml(seq) + '" onclick="event.stopPropagation(); approveDraft(this.dataset.taskId, this.dataset.seq)">' + btnLabel + '</button>' +
+                '<button type="button" class="task-action-btn btn-action-reject" data-task-id="' + escapeHtml(t.id) + '" data-seq="' + escapeHtml(seq) + '" onclick="event.stopPropagation(); rejectDraft(this.dataset.taskId, this.dataset.seq)">[REJECT DRAFT]</button>' +
+              '</div>' +
+            '</div>' +
+            '<pre style="margin: 0.3rem 0 0; white-space: pre-wrap; word-break: break-word; font-size: 0.75rem;">' + escapeHtml(argsText) + '</pre>' +
+          '</div>';
+        }).join('');
+      }
+      return html;
     }
 
     // Tab Navigation
@@ -4982,6 +5222,9 @@
       if (t.status === 'in_progress') {
         exitCodeText = '[RUNNING]';
         exitCodeClass = 'style="color: var(--cyan);"';
+      } else if (t.result && t.result.could_not) {
+        exitCodeText = 'exit_code=0 [COULD NOT]';
+        exitCodeClass = 'style="color: var(--amber);"';
       } else if (t.result && t.result.exit_code !== undefined) {
         exitCodeText = `exit_code=${t.result.exit_code} (${t.result.exit_code === 0 ? '[OK] SUCCESS' : '[FAIL] ERROR'})`;
         exitCodeClass = t.result.exit_code === 0 ? 'style="color: var(--emerald);"' : 'style="color: var(--rose);"';
@@ -5062,6 +5305,7 @@
               ${statusPill}
               ${laneBadge}
               ${pairBadgeHtml}
+              ${t.source === 'front_door' ? '<span class="provider-pill" style="border-color: var(--amber); color: var(--amber);" title="Queued by a front-door assistant (OpenClaw); always waits for your approval">via front door</span>' : ''}
               ${ref ? (reachable(ref.url)
                 ? `<a class="provider-pill issue-pill" href="${escapeHtml(ref.url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${escapeHtml(ref.label)}</a>`
                 : `<span class="provider-pill issue-pill" title="${escapeHtml(ref.url)}">${escapeHtml(ref.label)}</span>`) : ''}
@@ -5070,7 +5314,7 @@
             </div>
             <div class="task-header-right" style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
               ${t.status === 'awaiting_approval' ? `
-                <button type="button" class="task-action-btn btn-action-approve" data-task-id="${escapeHtml(t.id)}" onclick="event.stopPropagation(); approveTask(this.dataset.taskId)">[APPROVE]</button>
+                ${!(t.metadata && Array.isArray(t.metadata.pending_drafts) && t.metadata.pending_drafts.length) ? `<button type="button" class="task-action-btn btn-action-approve" data-task-id="${escapeHtml(t.id)}" onclick="event.stopPropagation(); approveTask(this.dataset.taskId)">[APPROVE]</button>` : ''}
                 <button type="button" class="task-action-btn btn-action-reject" data-task-id="${escapeHtml(t.id)}" onclick="event.stopPropagation(); rejectTask(this.dataset.taskId)">[REJECT]</button>
               ` : ''}
             </div>
@@ -5846,6 +6090,38 @@
         }
       } catch (err) {
         console.error('Reject failed', err);
+      }
+    }
+
+    async function approveDraft(taskId, seq) {
+      try {
+        const res = await fetch(`/api/fleet/tasks/${encodeURIComponent(taskId)}/drafts/${encodeURIComponent(seq)}/approve`, { method: 'POST' });
+        if (res.ok) {
+          const live = document.getElementById('signer-live-status');
+          if (live && res.status === 202) {
+            live.textContent = `Waiting for phone signature on draft #${seq}.`;
+          }
+          await loadTasks();
+        } else {
+          const err = await res.json().catch(() => ({}));
+          alert(`Draft approval failed: ${err.detail || 'Unknown error'}`);
+        }
+      } catch (err) {
+        console.error('Approve draft failed', err);
+      }
+    }
+
+    async function rejectDraft(taskId, seq) {
+      try {
+        const res = await fetch(`/api/fleet/tasks/${encodeURIComponent(taskId)}/drafts/${encodeURIComponent(seq)}/reject`, { method: 'POST' });
+        if (res.ok) {
+          await loadTasks();
+        } else {
+          const err = await res.json();
+          alert(`Draft reject failed: ${err.detail || 'Unknown error'}`);
+        }
+      } catch (err) {
+        console.error('Reject draft failed', err);
       }
     }
 
@@ -7218,7 +7494,405 @@
       }).join('');
     }
 
+    let signerPollTimer = null;
+
+    function announceSignerStatus(text) {
+      const el = document.getElementById('signer-live-status');
+      if (el) el.textContent = text;
+    }
+
+    function setBunkerFieldError(msg) {
+      const input = document.getElementById('signer-bunker-input');
+      const errEl = document.getElementById('signer-bunker-error');
+      if (!input || !errEl) return;
+      const errId = input.dataset.error || 'signer-bunker-error';
+      const ids = (input.getAttribute('aria-describedby') || '').split(/\s+/).filter(id => id && id !== errId);
+      if (msg) {
+        input.classList.add('user-invalid-fallback');
+        input.setAttribute('aria-invalid', 'true');
+        errEl.textContent = msg;
+        errEl.hidden = false;
+        ids.push(errId);
+        announceSignerStatus(msg);
+      } else {
+        input.classList.remove('user-invalid-fallback');
+        input.setAttribute('aria-invalid', 'false');
+        errEl.textContent = '';
+        errEl.hidden = true;
+      }
+      if (ids.length) input.setAttribute('aria-describedby', ids.join(' '));
+      else input.removeAttribute('aria-describedby');
+    }
+
+    function renderSignerState(st) {
+      const card = document.getElementById('signer-setup-card');
+      const badge = document.getElementById('signer-status-badge');
+      const pinBox = document.getElementById('signer-pin-box');
+      const pinCmd = document.getElementById('signer-pin-cmd');
+      const controls = document.getElementById('signer-pairing-controls');
+      if (!card || !badge) return;
+
+      if (st && st.pinned && st.anchor_valid) {
+        badge.textContent = `Pinned: ${st.operator_fingerprint || 'verified'}`;
+        badge.style.color = 'var(--emerald)';
+        if (pinBox) pinBox.hidden = true;
+        if (controls) controls.hidden = true;
+        if (signerPollTimer) { clearInterval(signerPollTimer); signerPollTimer = null; }
+        return;
+      }
+
+      if (controls) controls.hidden = false;
+      if (st && st.paired) {
+        badge.textContent = `Paired (unpinned): ${st.operator_fingerprint || ''}`;
+        badge.style.color = 'var(--amber)';
+        if (pinBox && pinCmd) {
+          pinCmd.textContent = st.pin_command || `sudo fleet signer pin ${st.operator_fingerprint || ''}`;
+          pinBox.hidden = false;
+        }
+        const qrBox = document.getElementById('signer-qr-container');
+        if (qrBox) qrBox.hidden = true;
+        if (signerPollTimer) { clearInterval(signerPollTimer); signerPollTimer = null; }
+      } else {
+        badge.textContent = (st && st.pairing_pending) ? 'Waiting for phone scan...' : 'Unpaired';
+        badge.style.color = 'var(--text-muted)';
+        if (pinBox) pinBox.hidden = true;
+      }
+    }
+
+    async function loadSigner() {
+      try {
+        const res = await fetch('/api/fleet/signer');
+        if (!res.ok) return;
+        renderSignerState(await res.json());
+      } catch (err) {
+        console.debug('Signer status check skipped', err);
+      }
+    }
+
+    function initSignerControls() {
+      const qrBtn = document.getElementById('btn-signer-pair-qr');
+      const form = document.getElementById('signer-bunker-form');
+      const input = document.getElementById('signer-bunker-input');
+      if (qrBtn) {
+        qrBtn.addEventListener('click', async () => {
+          qrBtn.disabled = true;
+          try {
+            const res = await fetch('/api/fleet/signer/pair', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ host: window.location.hostname || '' }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+              announceSignerStatus(data.detail || 'Could not start signer QR pairing');
+              return;
+            }
+            const img = document.getElementById('signer-qr-img');
+            const relayEl = document.getElementById('signer-qr-relay');
+            const box = document.getElementById('signer-qr-container');
+            if (img && data.qr_svg) img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(data.qr_svg);
+            if (relayEl) relayEl.textContent = `Relay: ${data.relay_url || ''}`;
+            if (box) box.hidden = false;
+            announceSignerStatus('Scan the Nostr Connect QR code with Amber on your phone.');
+            await loadSigner();
+            if (!signerPollTimer) {
+              signerPollTimer = setInterval(loadSigner, 1500);
+            }
+          } catch (err) {
+            announceSignerStatus('Signer QR setup failed');
+          } finally {
+            qrBtn.disabled = false;
+          }
+        });
+      }
+      if (input) {
+        input.addEventListener('input', () => setBunkerFieldError(''));
+        input.addEventListener('blur', () => {
+          if (input.value.trim() && !input.checkValidity()) {
+            setBunkerFieldError('Enter a valid bunker://<64-hex>?relay=wss://... URI from another host.');
+          }
+        });
+      }
+      if (form) {
+        form.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const val = (input ? input.value : '').trim();
+          if (!val || (input && !input.checkValidity())) {
+            setBunkerFieldError('Enter a valid bunker://<64-hex>?relay=wss://... URI from another host.');
+            if (input) input.focus();
+            return;
+          }
+          const btn = document.getElementById('btn-signer-bunker');
+          if (btn) btn.disabled = true;
+          try {
+            const res = await fetch('/api/fleet/signer/bunker', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ bunker_uri: val }),
+            });
+            // a proxy or a crash answers without JSON: say what the daemon said, not "network error"
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+              setBunkerFieldError(data.detail || `Remote bunker pairing failed (HTTP ${res.status}).`);
+              if (input) input.focus();
+              return;
+            }
+            setBunkerFieldError('');
+            if (input) input.value = '';
+            renderSignerState(data);
+            announceSignerStatus('Remote bunker paired. Run the sudo pin command shown.');
+          } catch (err) {
+            setBunkerFieldError('Network error while connecting to remote bunker.');
+          } finally {
+            if (btn) btn.disabled = false;
+          }
+        });
+      }
+    }
+
+    async function loadPrivateers() {
+      try {
+        const res = await fetch('/api/fleet/privateers');
+        if (!res.ok) return;
+        const data = await res.json();
+        renderPrivateers(data.privateers || []);
+      } catch (err) {
+        console.debug('loadPrivateers skipped', err);
+      }
+    }
+
+    function renderPrivateers(items) {
+      const listEl = document.getElementById('privateer-list');
+      const badgeEl = document.getElementById('privateers-count-badge');
+      if (!listEl || !badgeEl) return;
+      const activeCount = items.filter((p) => p.commissioned).length;
+      badgeEl.textContent = `${activeCount} active`;
+      if (!items.length) {
+        listEl.innerHTML = '<span style="color: var(--text-muted);">No Privateers created yet.</span>';
+        return;
+      }
+      listEl.innerHTML = items.map((p) => {
+        const st = escapeHtml(p.commission_status || 'uncommissioned');
+        const caps = escapeHtml((p.capabilities || []).join(', ') || '-');
+        const doms = escapeHtml((p.allowed_domains || []).join(', ') || 'any');
+        return '<div style="display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; padding: 0.45rem 0.6rem; border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 0.35rem; flex-wrap: wrap;">' +
+          '<div><strong>' + escapeHtml(p.name) + '</strong> <span class="panel-badge">' + st + '</span> · <span style="font-family: var(--font), monospace; font-size: 0.78rem;">' + escapeHtml(p.fingerprint || '') + '</span><br><span style="font-size: 0.78rem; color: var(--text-muted);">caps: ' + caps + ' · budget: ' + escapeHtml(String(p.budget || 0)) + ' · domains: ' + doms + '</span></div>' +
+          '<button type="button" class="task-action-btn btn-action-reject" data-priv-name="' + escapeHtml(p.name) + '" onclick="revokePrivateer(this.dataset.privName)">[REVOKE]</button>' +
+        '</div>';
+      }).join('');
+    }
+
+    async function revokePrivateer(name) {
+      try {
+        const res = await fetch(`/api/fleet/privateers/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        if (res.ok) await loadPrivateers();
+      } catch (err) {
+        console.error('revokePrivateer failed', err);
+      }
+    }
+
+    function initPrivateerControls() {
+      const form = document.getElementById('privateer-create-form');
+      const errEl = document.getElementById('privateer-form-error');
+      const liveEl = document.getElementById('privateer-live-status');
+      if (!form) return;
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (errEl) { errEl.textContent = ''; errEl.hidden = true; }
+        const name = (document.getElementById('priv-name-input')?.value || '').trim().toLowerCase();
+        const caps = (document.getElementById('priv-caps-input')?.value || '').split(',').map((s) => s.trim()).filter(Boolean);
+        const budget = parseInt(document.getElementById('priv-budget-input')?.value || '50', 10);
+        const domains = (document.getElementById('priv-domains-input')?.value || '').split(',').map((s) => s.trim()).filter(Boolean);
+        if (!name || !caps.length) {
+          if (errEl) { errEl.textContent = 'Enter a Privateer name and at least one capability.'; errEl.hidden = false; }
+          return;
+        }
+        const btn = document.getElementById('btn-privateer-create');
+        if (btn) btn.disabled = true;
+        try {
+          const res = await fetch('/api/fleet/privateers', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, capabilities: caps, budget: Number.isFinite(budget) ? budget : 50, allowed_domains: domains }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            if (errEl) { errEl.textContent = data.detail || 'Failed to commission Privateer'; errEl.hidden = false; }
+            return;
+          }
+          form.reset();
+          if (liveEl) liveEl.textContent = `Commission prompt sent to Amber for Privateer ${name}.`;
+          await loadPrivateers();
+        } catch (err) {
+          if (errEl) { errEl.textContent = 'Network error while creating Privateer.'; errEl.hidden = false; }
+        } finally {
+          if (btn) btn.disabled = false;
+        }
+      });
+    }
+
+    async function loadRoutines() {
+      try {
+        const res = await fetch('/api/fleet/routines');
+        if (!res.ok) return;
+        const data = await res.json();
+        renderRoutines(data.routines || []);
+      } catch (err) {
+        console.error('loadRoutines failed', err);
+      }
+    }
+
+    function _fmtRoutineTs(sec) {
+      if (!sec) return '-';
+      try {
+        return new Date(sec * 1000).toLocaleString();
+      } catch (e) {
+        return String(sec);
+      }
+    }
+
+    function renderRoutines(items) {
+      const listEl = document.getElementById('routine-list');
+      const badgeEl = document.getElementById('routines-count-badge');
+      if (!listEl || !badgeEl) return;
+      const activeCount = items.filter((r) => r.status === 'active').length;
+      badgeEl.textContent = `${activeCount} active`;
+      if (!items.length) {
+        listEl.innerHTML = '<span style="color: var(--text-muted);">No routines configured yet.</span>';
+        return;
+      }
+      listEl.innerHTML = items.map((r) => {
+        const sched = r.schedule || {};
+        const schedTxt = sched.kind === 'cron' ? `cron "${sched.expr}"` : `every ${sched.every_seconds}s`;
+        const hist = Array.isArray(r.history) ? r.history : [];
+        const missedCount = hist.filter((h) => h.status === 'missed').length;
+        const nextTs = (r.replay_next_runs && r.replay_next_runs[0]) ? _fmtRoutineTs(r.replay_next_runs[0]) : '-';
+        const pend = r.pending_change;
+        const btns = [];
+        if (r.status === 'awaiting_approval' || pend) {
+          btns.push(`<button type="button" class="task-action-btn btn-action-approve" data-rid="${escapeHtml(r.id)}" data-rev="${escapeHtml(r.review_id || '')}" onclick="routineAction(this.dataset.rid, 'approve', this.dataset.rev)">[APPROVE]</button>`);
+          btns.push(`<button type="button" class="task-action-btn btn-action-reject" data-rid="${escapeHtml(r.id)}" data-rev="${escapeHtml(r.review_id || '')}" onclick="routineAction(this.dataset.rid, 'reject', this.dataset.rev)">[REJECT]</button>`);
+        }
+        if (r.status === 'active') {
+          btns.push(`<button type="button" class="task-action-btn" data-rid="${escapeHtml(r.id)}" onclick="routineAction(this.dataset.rid, 'pause')">[PAUSE]</button>`);
+        } else if (r.status === 'paused') {
+          btns.push(`<button type="button" class="task-action-btn" data-rid="${escapeHtml(r.id)}" onclick="routineAction(this.dataset.rid, 'resume')">[RESUME]</button>`);
+        }
+        if (r.status === 'active' || r.status === 'paused') {
+          btns.push(`<button type="button" class="task-action-btn" data-rid="${escapeHtml(r.id)}" onclick="routineAction(this.dataset.rid, 'run')">[RUN NOW]</button>`);
+        }
+        btns.push(`<button type="button" class="task-action-btn btn-action-reject" data-rid="${escapeHtml(r.id)}" onclick="routineAction(this.dataset.rid, 'delete')">[DELETE]</button>`);
+
+        // What an approval makes active: the operator sees the prompt and the reach, not just the title.
+        let reviewHtml = '';
+        if (r.status === 'awaiting_approval') {
+          const it = r.intent || {};
+          const doms = (it.allowed_domains || []).join(', ') || 'none';
+          const caps = (it.capabilities || []).join(', ') || 'none';
+          const esc = Array.isArray(it.escalate_to) ? (it.escalate_to.join(', ') || 'none') : 'default';
+          reviewHtml = '<details style="margin-top:0.35rem; font-size:0.78rem;"><summary>What you approve</summary>' +
+            '<div>project: <code>' + escapeHtml(String(it.project || '-')) + '</code> · lane: <code>' + escapeHtml(String(r.lane || 'router')) +
+            '</code> · harness: <code>' + escapeHtml(String(r.harness || 'auto')) + '</code></div>' +
+            '<div>domains: <code>' + escapeHtml(doms) + '</code> · capabilities: <code>' + escapeHtml(caps) +
+            '</code> · escalate to: <code>' + escapeHtml(esc) + '</code></div>' +
+            '<pre style="white-space:pre-wrap; max-height:12rem; overflow:auto; margin:0.3rem 0 0;">' + escapeHtml(String(r.prompt || '')) + '</pre>' +
+            '<div style="color:var(--text-muted);">review ' + escapeHtml(String(r.review_id || '')) + '</div></details>';
+        }
+        let pendHtml = '';
+        if (pend) {
+          const afterRuns = (pend.replay_after || []).map(_fmtRoutineTs).join(', ');
+          pendHtml = '<div style="margin-top:0.35rem; padding:0.35rem 0.5rem; border-left:2px solid var(--amber); font-size:0.78rem;">' +
+            '<strong>Pending change awaiting approval:</strong> ' + escapeHtml(JSON.stringify(pend.diff || {})) +
+            '<br>Replay after approval: ' + escapeHtml(afterRuns) + '</div>';
+        }
+        const missedBadge = missedCount ? ` · <span style="color: var(--amber);">missed: ${missedCount}</span>` : '';
+        return '<div style="display:flex; flex-direction:column; gap:0.3rem; padding:0.5rem 0.65rem; border:1px solid var(--border); border-radius:var(--radius-sm); margin-bottom:0.4rem;">' +
+          '<div style="display:flex; align-items:center; justify-content:space-between; gap:0.6rem; flex-wrap:wrap;">' +
+            '<div><strong>' + escapeHtml(r.title) + '</strong> (<code>' + escapeHtml(r.id) + '</code>) <span class="panel-badge">' + escapeHtml(r.status) + '</span>' +
+            '<br><span style="font-size:0.78rem; color:var(--text-muted);">' + escapeHtml(schedTxt) + ' · window ' + escapeHtml(String(r.max_lateness_seconds)) + 's · next ' + escapeHtml(nextTs) + missedBadge + '</span></div>' +
+            '<div style="display:flex; gap:0.35rem; flex-wrap:wrap;">' + btns.join('') + '</div>' +
+          '</div>' +
+          reviewHtml + pendHtml +
+        '</div>';
+      }).join('');
+    }
+
+    async function routineAction(routineId, action, reviewId) {
+      const liveEl = document.getElementById('routine-live-status');
+      const errEl = document.getElementById('routine-action-error');
+      const showError = (msg) => {
+        if (liveEl) liveEl.textContent = msg;
+        if (errEl) { errEl.textContent = msg; errEl.hidden = !msg; }
+      };
+      showError('');
+      try {
+        const isDelete = action === 'delete';
+        const url = isDelete ? `/api/fleet/routines/${encodeURIComponent(routineId)}` : `/api/fleet/routines/${encodeURIComponent(routineId)}/${action}`;
+        const opts = { method: isDelete ? 'DELETE' : 'POST' };
+        if (action === 'approve' || action === 'reject') {
+          // bind the decision to the version on screen; a newer proposal is refused, not applied unseen
+          opts.headers = { 'Content-Type': 'application/json' };
+          opts.body = JSON.stringify({ review_id: reviewId || '' });
+        }
+        const res = await fetch(url, opts);
+        if (res.ok) {
+          if (liveEl) liveEl.textContent = `Routine ${routineId}: ${action} completed.`;
+        } else {
+          let detail = `HTTP ${res.status}`;
+          try { const j = await res.json(); if (j && j.detail) detail = typeof j.detail === 'string' ? j.detail : JSON.stringify(j.detail); } catch (_) {}
+          showError(`Routine ${routineId}: ${action} refused: ${detail}`);
+        }
+        await loadRoutines();
+        if (res.ok && action === 'run') await loadTasks();
+      } catch (err) {
+        console.error('routineAction failed', err);
+        showError(`Routine ${routineId}: ${action} failed: ${err}`);
+      }
+    }
+
+    function initRoutineControls() {
+      const form = document.getElementById('routine-create-form');
+      const errEl = document.getElementById('routine-form-error');
+      const liveEl = document.getElementById('routine-live-status');
+      if (!form) return;
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (errEl) { errEl.textContent = ''; errEl.hidden = true; }
+        const id = (document.getElementById('rout-id-input')?.value || '').trim().toLowerCase();
+        const title = (document.getElementById('rout-title-input')?.value || '').trim();
+        const rawSched = (document.getElementById('rout-cron-input')?.value || '').trim();
+        const maxLate = parseInt(document.getElementById('rout-lateness-input')?.value || '3600', 10);
+        const prompt = (document.getElementById('rout-prompt-input')?.value || '').trim();
+        if (!id || !title || !rawSched || !prompt) {
+          if (errEl) { errEl.textContent = 'Fill id, title, schedule, and task prompt.'; errEl.hidden = false; }
+          return;
+        }
+        const intMatch = /^(\d+)\s*s?$/i.exec(rawSched);
+        const schedule = intMatch ? { kind: 'interval', every_seconds: parseInt(intMatch[1], 10) } : { kind: 'cron', expr: rawSched };
+        try {
+          const res = await fetch('/api/fleet/routines', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id, title, prompt, schedule, max_lateness_seconds: Number.isFinite(maxLate) ? maxLate : 3600 }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            if (errEl) { errEl.textContent = data.detail || 'Failed to propose routine'; errEl.hidden = false; }
+            return;
+          }
+          form.reset();
+          if (liveEl) liveEl.textContent = `Routine ${id} proposed and awaiting operator approval.`;
+          await loadRoutines();
+        } catch (err) {
+          if (errEl) { errEl.textContent = 'Network error while proposing routine.'; errEl.hidden = false; }
+        }
+      });
+    }
+
     function refreshAllData() {
+      loadSigner();
+      loadPrivateers();
+      loadRoutines();
       loadCoordinator();
       loadRoster();
       loadLaneHealth();
@@ -7235,10 +7909,19 @@
 
     // Initialize UI
     restoreSortControl();
+    initSignerControls();
+    initPrivateerControls();
+    initRoutineControls();
     const footerPort = document.getElementById('footer-port');
     if (footerPort) footerPort.innerText = `PORT ${location.port || (location.protocol === 'https:' ? 443 : 80)}`;
     refreshAllData();
-    setInterval(() => { if (!document.hidden && daemonReachable !== false) loadIntake(); }, 60000);
+    setInterval(() => {
+      if (!document.hidden && daemonReachable !== false) {
+        loadIntake();
+        loadRoutines();
+        loadPrivateers();
+      }
+    }, 60000);
 
     // Poll the tasks every 3 seconds while the dashboard is visible; a hidden tab (a phone in a
     // pocket) asks nothing and catches up the moment it is shown again.

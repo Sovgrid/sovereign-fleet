@@ -84,6 +84,24 @@ async def matrix_loop(task_store) -> None:
         await asyncio.sleep(poll_sec)
 
 
+async def signer_resend_loop() -> None:
+    from fleet.api.app import signer_manager
+
+    mgr = signer_manager()
+    while True:
+        await _guarded(mgr.resend_open_requests(), "signer resend")
+        await asyncio.sleep(30)
+
+
+async def routine_loop() -> None:
+    from fleet.api.app import backend
+    from fleet.core.routines import tick_routines
+
+    while True:
+        await _guarded(asyncio.to_thread(tick_routines, backend_obj=backend()), "routines")
+        await asyncio.sleep(30)
+
+
 async def _guarded(coro, what: str) -> None:
     try:
         await coro
@@ -134,6 +152,10 @@ async def running(task_store):
     if enabled():
         tasks.append(asyncio.create_task(daily_lane_check(), name="lane-health"))
         tasks.append(asyncio.create_task(intake_loop(), name="issue-intake"))
+        tasks.append(asyncio.create_task(signer_resend_loop(), name="signer-resend"))
+        tasks.append(asyncio.create_task(routine_loop(), name="routines"))
+        from fleet.core.notify import loop as notify_loop
+        tasks.append(asyncio.create_task(notify_loop(), name="notify"))
         if cfg.matrix.enabled:
             tasks.append(asyncio.create_task(matrix_loop(task_store), name="matrix-sync"))
     try:

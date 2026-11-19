@@ -9,6 +9,7 @@ the task lifecycle without web dashboard access.
 from __future__ import annotations
 
 import html
+import json
 import logging
 import os
 import re
@@ -20,6 +21,7 @@ from typing import Any, Dict, List, Optional, Sequence
 import httpx
 
 from fleet.core.redact import redact
+from fleet.core.toolgate import _strip_userinfo_in_text
 from fleet.plugins.base import OutputPlugin, PluginKind, PluginMeta
 
 logger = logging.getLogger("fleet.plugins.output_matrix")
@@ -185,17 +187,43 @@ class MatrixOutputPlugin(OutputPlugin):
         task_id = task.get("id", "unknown")
         prompt = (task.get("text") or "").strip().splitlines()[0][:140]
         lane = task.get("lane") or "auto"
+        drafts = (
+            (task.get("metadata") or {}).get("pending_drafts")
+            or (task.get("result") or {}).get("pending_drafts")
+            or []
+        )
 
         lines = [
             f"[APPROVAL REQUIRED] **Task {task_id}**",
             f"Reason: {reason or 'Human verification required'}",
             f"Lane: `{lane}`",
             f"Prompt: {prompt}",
-            "",
-            "Reply commands:",
-            f"  `!fleet approve {task_id}`",
-            f"  `!fleet reject {task_id}`",
         ]
+        if drafts:
+            for d in drafts:
+                if not isinstance(d, dict):
+                    continue
+                seq = d.get("seq", "?")
+                cap = d.get("capability") or "capability"
+                tool = d.get("tool") or "?"
+                args_json = json.dumps(d.get("arguments") or {}, indent=2, ensure_ascii=False)
+                args_json = redact(_strip_userinfo_in_text(args_json), mask="[masked]")
+                lines.append("")
+                lines.append(f"Pending draft #{seq} ({cap}/{tool}):")
+                lines.extend(f"  {line}" for line in args_json.splitlines())
+            lines.extend([
+                "",
+                "Drafts are approved one by one in the dashboard.",
+                "Click Approve in the dashboard to prompt your phone signer; the signer shows the exact arguments.",
+                f"To reject the whole waiting task: `!fleet reject {task_id}`",
+            ])
+        else:
+            lines.extend([
+                "",
+                "Reply commands:",
+                f"  `!fleet approve {task_id}`",
+                f"  `!fleet reject {task_id}`",
+            ])
         text = "\n".join(lines)
         return await self.post_message(text)
 
@@ -216,6 +244,9 @@ class MatrixOutputPlugin(OutputPlugin):
             if not t:
                 return f"[WARN] Task `{tid}` not found."
             if t.status in ("awaiting_approval", "blocked"):
+                from fleet.core.capability import list_task_drafts
+                if (t.metadata or {}).get("pending_drafts") or list_task_drafts(tid, status="pending"):
+                    return f"[WARN] Task `{tid}` has pending drafts; drafts are approved one by one in the dashboard."
                 task_store.transition(tid, "queued", allowed_from=("awaiting_approval", "blocked"))
                 resp = f"[OK] Task `{tid}` approved by {sender or 'operator'} and queued."
                 await self.post_message(resp)

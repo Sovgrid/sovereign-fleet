@@ -48,6 +48,8 @@ allowed_domains = ["daily-cloudcode-pa.googleapis.com"]   # one of the names agy
 ### System Tools
 
 - **git**: Required for repository worktrees and branch management.
+- **nak** (optional): Required for Nostr identities, Buzz/ngit intake signature verification, and NIP-46 remote signing.
+- **qrencode** (optional): Renders UTF-8 QR codes cleanly in the terminal and SVG QR codes in the dashboard for `fleet signer pair`.
 
 ### Agent CLIs
 
@@ -59,7 +61,7 @@ At least one supported agent CLI must be installed on your system and available 
 - **Pi** (`pi`)
 - **Aider** (`aider`)
 
-Each CLI is sandboxed when run: it can only write to the task's worktree, its own state directories in your home directory (for login and session data), and tool caches (`~/.cache`, `~/.npm`). All other files, including `~/.ssh` and other credentials, cannot be accessed.
+Each CLI is sandboxed when run: it can only write to the task's worktree, a fresh home of the fleet's own for that run (seeded with the login or config the CLI needs, deleted afterwards) and the fleet's cache (`<fleet root>/homes/cache`). Nothing in your own home is writable, and all other files, including `~/.ssh` and other credentials, cannot be accessed.
 
 ## Installation
 
@@ -182,4 +184,4 @@ cli = "buzz"
 cli = "ngit"
 ```
 
-For full configuration details, operator procedures, and known limits, see [docs/NOSTR.md](docs/NOSTR.md).
+For full configuration details, NIP-46 remote operator signing (`fleet signer pair`, `sudo fleet signer pin`), Privateer commissions (`fleet privateer new`), operator procedures, and known limits, see [docs/NOSTR.md](docs/NOSTR.md).

@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
+from fleet.core import events
 from fleet.core.config import load_config
 
 logger = logging.getLogger("fleet.core.taskstore")
@@ -23,12 +24,28 @@ STATUSES = ("queued", "in_progress", "completed", "failed", "blocked", "skipped"
             "awaiting_approval", "cancelled", "archived")
 
 
+# Status changes that go to the event log (core/events.py); blocked and archived do not.
+EVENT_STATUSES = ("queued", "in_progress", "awaiting_approval", "completed", "failed", "cancelled", "skipped")
+
+
 def is_sensitive(meta: Dict[str, Any]) -> bool:
     """A task is sensitive if any caller marked it so: `sensitive` (CLI, tests), `is_sensitive`
     (coordinators) or the intent itself. One wrong key would route private work to a cloud lane,
     so every routing path asks here."""
     intent = meta.get("intent") if isinstance(meta.get("intent"), dict) else {}
     return bool(meta.get("sensitive") or meta.get("is_sensitive") or intent.get("is_sensitive"))
+
+
+def is_deferred(task: "FleetTask", now: Optional[float] = None) -> bool:
+    """True while metadata['not_before'] is in the future (waiting for a resting lane)."""
+    raw = (task.metadata or {}).get("not_before")
+    if raw is None:
+        return False
+    try:
+        not_before = float(raw)
+    except (TypeError, ValueError):
+        return False
+    return not_before > (time.time() if now is None else now)
 
 
 @dataclass
@@ -127,6 +144,8 @@ class TaskStore:
 
         self._mutate(add)
         logger.info("Enqueued task %s", task.id)
+        if task.status in EVENT_STATUSES:
+            events.emit_task(task)
         return task
 
     def get_task(self, task_id: str) -> Optional[FleetTask]:
@@ -144,12 +163,14 @@ class TaskStore:
         if status not in STATUSES:
             raise ValueError(f"Unknown status '{status}'")
         found: List[FleetTask] = []
+        before: List[str] = []
 
         def change(tasks: List[FleetTask]) -> bool:
             for t in tasks:
                 if t.id == task_id:
                     if allowed_from is not None and t.status not in allowed_from:
                         raise TransitionError(t, status)
+                    before.append(t.status)
                     t.status = status
                     if result is not None:
                         t.result = result
@@ -160,6 +181,11 @@ class TaskStore:
             return False
 
         self._mutate(change)
+        if found and before[0] != status and status in EVENT_STATUSES:
+            events.emit_task(found[0])
+            if before[0] == "awaiting_approval" and status in ("queued", "failed"):
+                # the only ways out of awaiting_approval besides cancel: approve and reject
+                events.emit_task(found[0], "task.approved" if status == "queued" else "task.rejected")
         return found[0] if found else None
 
     def update_metadata(self, task_id: str, fields: Dict[str, Any]) -> bool:
@@ -267,6 +293,10 @@ class TaskStore:
             return bool(requeued or failed)
 
         self._mutate(change)
+        for tid in requeued:
+            events.emit("task.queued", task_id=tid, data={"id": tid, "status": "queued"})
+        for tid in failed:
+            events.emit("task.failed", task_id=tid, data={"id": tid, "status": "failed"})
         return requeued, failed
 
     def archive_completed(self) -> int:
@@ -321,12 +351,13 @@ class TaskStore:
             return False, "waiting", waiting_on
         return True, "ready", []
 
-    def get_runnable_tasks(self) -> List[FleetTask]:
-        """Returns all queued tasks whose dependencies have successfully completed."""
+    def get_runnable_tasks(self, now: Optional[float] = None) -> List[FleetTask]:
+        """Returns all queued tasks whose dependencies have successfully completed and whose
+        not_before time (if set) has elapsed."""
         all_tasks = self.load_tasks()
         runnable = []
         for t in all_tasks:
-            if t.status == "queued":
+            if t.status == "queued" and not is_deferred(t, now=now):
                 ready, state, _ = self.check_dependencies(t, all_tasks)
                 if ready:
                     runnable.append(t)

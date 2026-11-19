@@ -1,35 +1,56 @@
 #!/usr/bin/env python3
-"""Sovereign Fleet MCP server for coordinators (Claude Code, Antigravity, Cursor, Claude Desktop).
+"""Sovereign Fleet MCP server for coordinators and front-door assistants.
 
 A stdio JSON-RPC server: a coordinator queues tasks, follows them, approves or stops them, and
-reads the health of the fleet's lanes and issue sources. Every tool is a thin call to the
-daemon's API with the daemon's token (FLEET_API_TOKEN or the token file); the daemon decides.
+reads the health of the fleet's lanes and issue sources. In ``--mode front_door`` (for untrusted
+or front-door assistants like OpenClaw), only task dispatch and read-only status/health tools are
+exposed; approval, reject, cancel, retry, clear, budget-tighten, active lane probes, and issue
+sync triggers are removed from ``tools/list`` and refused on ``tools/call``.
 """
 
+import argparse
+import contextvars
 import json
 import os
+import re
 import ssl
 import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Callable, Dict, List, Optional
+import uuid
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 try:
     from fleet import __version__
     from fleet.api.auth import load_token
+    from fleet.core.idempotency import AUTO_PREFIX, fingerprint
 except ImportError:  # run as a script: python3 src/fleet/api/mcp_server.py
     sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
     from fleet import __version__
     from fleet.api.auth import load_token
+    from fleet.core.idempotency import AUTO_PREFIX, fingerprint
 
 PROTOCOL_VERSION = "2024-11-05"
+SUPPORTED_PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 TIMEOUT = 15.0
 LANE_CHECK_TIMEOUT = 180.0   # one probe per lane, some providers answer slowly
+DISPATCH_TIMEOUT = 60.0      # a grid dispatch triages the text with the local model (~20 s seen)
+DISPATCH_TRIES = 3           # safe to repeat: every dispatch carries an idempotency key
+
+_REQUEST_FN: contextvars.ContextVar[Optional[Callable[[str, str, Optional[Dict[str, Any]], float], Any]]] = (
+    contextvars.ContextVar("fleet_mcp_request_fn", default=None)
+)
+_BASE_URL_OVERRIDE: contextvars.ContextVar[Optional[str]] = (
+    contextvars.ContextVar("fleet_mcp_base_url", default=None)
+)
 
 
 def _get_api_url() -> str:
+    override = _BASE_URL_OVERRIDE.get()
+    if override:
+        return override
     env_url = os.environ.get("FLEET_API_URL")
     if env_url:
         return env_url
@@ -104,6 +125,9 @@ class ApiError(Exception):
 def _api_request(method: str, path: str, payload: Optional[Dict[str, Any]] = None,
                  timeout: float = TIMEOUT) -> Any:
     """The daemon's JSON answer; raises ApiError with the daemon's own reason."""
+    override = _REQUEST_FN.get()
+    if override is not None:
+        return override(method, path, payload, timeout)
     api_url = _get_api_url()
     url = f"{api_url.rstrip('/')}{path}"
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
@@ -133,6 +157,10 @@ def _api_request(method: str, path: str, payload: Optional[Dict[str, Any]] = Non
 
 # ── tools ─────────────────────────────────────────────────────────────────────
 
+_IDEM_DESC = ("Optional. A key that names this request (1-128 of A-Z a-z 0-9 . _ : -), e.g. the id of "
+              "the message that asked for it. Send the same key when you retry after a timeout or "
+              "error: the fleet returns the task the first attempt queued instead of a second one.")
+
 _TASK_ID = {"task_id": {"type": "string", "description": "The task id, e.g. 'task-1792245939-6bd2'."}}
 
 TOOLS: List[Dict[str, Any]] = [
@@ -143,7 +171,9 @@ TOOLS: List[Dict[str, Any]] = [
             "allowed_paths and gate_cmd) so the task runs with a scope and a test as its gate; "
             "without one the text is triaged by the local model. The fleet routes it to a lane "
             "unless you name one, runs it sandboxed, gates it and lands it. Risky wording waits for "
-            "an approval under the safe_auto tier."),
+            "an approval under the safe_auto tier. Never self-dispatch to a lane using your own "
+            "coordinator harness/subscription; do hard work directly or delegate to free, local, "
+            "or another provider's lanes."),
         "inputSchema": {
             "type": "object",
             "properties": {
@@ -153,14 +183,20 @@ TOOLS: List[Dict[str, Any]] = [
                     "description": (
                         "Task contract: project (fleet.toml key), title, acceptance_criteria (list); "
                         "optional allowed_paths (globs), gate_cmd ({\"pytest\": path} or {\"npm\": script}), "
-                        "category, assigned_lane (omit to let the router pick)."),
+                        "category, assigned_lane (omit to let the router pick). "
+                        "allowed_domains: optional list of extra public host names the task's egress proxy may reach. "
+                        "capabilities: optional list of configured capability names ([capabilities.<name>] in fleet.toml) "
+                        "to attach to the run."),
                 },
                 "lane": {"type": "string",
-                         "description": "Optional lane id (see fleet_lane_health); omit to let the router pick."},
+                         "description": ("Optional lane id (see fleet_lane_health); omit to let the router pick. "
+                                         "Never name a lane backed by your own coordinator harness/subscription (no self-dispatch).")},
                 "harness": {"type": "string", "default": "auto",
                             "description": "Optional CLI: claude-code, opencode, goose, pi, aider or auto."},
                 "depends_on": {"type": "array", "items": {"type": "string"},
                                "description": "Task ids that must finish first (local backend)."},
+                "idempotency_key": {"type": "string",
+                                    "description": _IDEM_DESC},
             },
             "required": ["prompt"],
         },
@@ -289,18 +325,62 @@ def _issue_label(task: Dict[str, Any]) -> str:
 _OPEN = ("queued", "in_progress", "awaiting_approval")
 
 
+def _dispatch_with_retry(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """POST the task; a timeout, an unreachable daemon or a 409 "still being processed" is tried
+    again with the same idempotency key, which returns the first attempt's task if it got queued."""
+    for attempt in range(DISPATCH_TRIES):
+        try:
+            return _api_request("POST", "/api/fleet/tasks", payload, timeout=DISPATCH_TIMEOUT)
+        except ApiError as e:
+            msg = str(e)
+            transient = msg.startswith("cannot reach") or (msg.startswith("HTTP 409") and "still being" in msg)
+            if not transient or attempt == DISPATCH_TRIES - 1:
+                raise
+            time.sleep(2 * (attempt + 1))
+    raise AssertionError("unreachable")
+
+
 def tool_dispatch(args: Dict[str, Any]) -> str:
     if not str(args.get("prompt") or "").strip():
         raise ApiError("prompt is empty")
     metadata: Dict[str, Any] = {"harness": args.get("harness") or "auto"}
     if args.get("intent"):
         metadata["intent"] = args["intent"]
-    res = _api_request("POST", "/api/fleet/tasks", {
-        "text": args["prompt"], "lane": args.get("lane") or None,
-        "depends_on": args.get("depends_on") or [], "metadata": metadata})
+    key = args.get("idempotency_key") or None
+    if key is not None and not isinstance(key, str):
+        raise ApiError("idempotency_key must be a string")
+    if _ACTIVE_MODE.get() == "front_door":
+        intent = args.get("intent") or {}
+        if not isinstance(intent, dict):
+            raise ApiError("intent must be an object")
+        extra = sorted(set(intent) - FRONT_DOOR_INTENT_KEYS)
+        if extra:
+            # these widen what a run may reach or spend; the operator sets them, not the front door
+            raise ApiError(f"intent key(s) {', '.join(extra)} are not allowed in front_door mode; "
+                           f"allowed: {', '.join(sorted(FRONT_DOOR_INTENT_KEYS))}")
+        metadata = {"harness": "auto", "source": "front_door", "require_approval": True}
+        if intent:
+            metadata["intent"] = dict(intent)
+        if key is None:
+            # A chat client that retries a timed-out call sends the same request again. The same
+            # request while its first task still waits is that retry, not a second order.
+            key = AUTO_PREFIX + fingerprint({"text": args["prompt"], "metadata": metadata,
+                                             "depends_on": args.get("depends_on") or []})[:32]
+    if key is None:
+        key = "call:" + uuid.uuid4().hex     # one key per call, so the retry below cannot queue twice
+    payload = {"text": args["prompt"], "lane": args.get("lane") or None,
+               "depends_on": args.get("depends_on") or [], "metadata": metadata,
+               "idempotency_key": key}
+    res = _dispatch_with_retry(payload)
     waits = res.get("status") == "awaiting_approval"
+    if waits and _ACTIVE_MODE.get() == "front_door":
+        wait_note = " It waits for operator approval in the dashboard or Matrix."
+    elif waits:
+        wait_note = " It waits for an approval: fleet_approve_task."
+    else:
+        wait_note = ""
     return (f"Queued {res.get('id')} ({res.get('status')}; lane {res.get('lane') or 'picked by the router'})."
-            + (" It waits for an approval: fleet_approve_task." if waits else "")
+            + wait_note
             + f"\nFollow it with fleet_get_task_status(task_id='{res.get('id')}').")
 
 
@@ -368,7 +448,19 @@ def tool_status(args: Dict[str, Any]) -> str:
         risk = (t.get("metadata") or {}).get("risk") or {}
         if risk.get("level"):
             lines.append(f"Risk: {risk['level']}, {risk.get('reason', '')} ({risk.get('model', '?')}).")
-        lines.append("Waits for an approval: fleet_approve_task or fleet_reject_task.")
+        drafts = (t.get("metadata") or {}).get("pending_drafts") or []
+        for d in drafts:
+            args_str = json.dumps(d.get("arguments") or {}, ensure_ascii=False)
+            lines.append(f"Pending draft #{d.get('seq')} ({d.get('capability')}/{d.get('tool')}): {args_str}")
+        if drafts:
+            lines.append(
+                "Pending drafts wait for the operator; drafts are approved one by one in the dashboard. "
+                "Click Approve to prompt your phone signer; the signer shows the exact arguments."
+            )
+        elif _ACTIVE_MODE.get() == "front_door":
+            lines.append("Waits for operator approval in the dashboard or Matrix.")
+        else:
+            lines.append("Waits for an approval: fleet_approve_task or fleet_reject_task.")
     return "\n".join(lines)
 
 
@@ -401,6 +493,9 @@ def _lane_problem_lines(records: Dict[str, Dict[str, Any]]) -> List[str]:
         elif status in ("dead", "retired"):
             since = f" since {_when(rec['since'])}" if rec.get("since") else ""
             lines.append(f"  - {name}: {status}: {rec.get('reason') or '?'}{since}")
+        elif rec.get("resting_until"):
+            why = rec.get("resting_reason") or "resting"
+            lines.append(f"  - {name}: resting until {_when(rec['resting_until'])}: {why}")
     return lines
 
 
@@ -432,6 +527,8 @@ def tool_health(args: Dict[str, Any]) -> str:
 
 def tool_lanes(args: Dict[str, Any]) -> str:
     if args.get("check"):
+        if _ACTIVE_MODE.get() == "front_door":
+            raise ApiError("lane probing (check=true) is disabled in front_door mode")
         res = _api_request("POST", "/api/fleet/lanes/check", {"apply": True}, timeout=LANE_CHECK_TIMEOUT)
     else:
         res = _api_request("GET", "/api/fleet/lanes")
@@ -445,6 +542,9 @@ def tool_lanes(args: Dict[str, Any]) -> str:
         notice = lane.get("notice") or {}
         if notice.get("retires"):
             why = (why + "; " if why else "") + f"provider retires it on {notice['retires']}"
+        if lane.get("resting_until"):
+            rest = f"resting until {_when(lane['resting_until'])} ({lane.get('resting_reason') or 'resting'})"
+            why = (why + "; " if why else "") + rest
         lines.append(f"- {lane.get('id')}: {lane.get('status')}" + (f": {why}" if why else ""))
     new = [d for d in res.get("discovered") or [] if d.get("verified")]
     if new:
@@ -456,6 +556,8 @@ def tool_lanes(args: Dict[str, Any]) -> str:
 def tool_intake(args: Dict[str, Any]) -> str:
     lines = []
     if args.get("sync"):
+        if _ACTIVE_MODE.get() == "front_door":
+            raise ApiError("issue intake sync is disabled in front_door mode")
         project = urllib.parse.quote(str(args["sync"]), safe="")
         res = _api_request("POST", f"/api/fleet/intake/{project}/sync", timeout=60.0)
         actions = res.get("actions") or []
@@ -517,6 +619,114 @@ def tool_ledger(args: Dict[str, Any]) -> str:
     return "\n".join(_ledger.format_ledger(view))
 
 
+# MCP Apps (SEP-1865): two read-only cards. A host renders the ui:// resource named in a tool's
+# _meta.ui.resourceUri and feeds it the tool's structuredContent. The cards hold no approve, reject,
+# cancel or retry control and send no tools/call; a decision is made in the dashboard or in Amber.
+APP_MIME_TYPE = "text/html;profile=mcp-app"
+TASK_CARD_URI = "ui://fleet/task-card"
+APPROVAL_CARD_URI = "ui://fleet/approval-card"
+_APPS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mcp_apps")
+APP_RESOURCES: List[Dict[str, Any]] = [
+    {"uri": TASK_CARD_URI, "name": "fleet-task-card", "title": "Fleet task card",
+     "description": "Read-only card: title, status, lane, project, changed files and landing of one task.",
+     "mimeType": APP_MIME_TYPE, "file": "task-card.html"},
+    {"uri": APPROVAL_CARD_URI, "name": "fleet-approval-card", "title": "Fleet approval card",
+     "description": "Read-only card: the approval brief of one task. It cannot approve anything.",
+     "mimeType": APP_MIME_TYPE, "file": "approval-card.html"},
+]
+TOOLS.extend([
+    {"name": "fleet_show_task",
+     "description": "Show one task as a card in hosts that render MCP Apps (read-only).",
+     "inputSchema": {"type": "object", "properties": dict(_TASK_ID), "required": ["task_id"]},
+     "_meta": {"ui": {"resourceUri": TASK_CARD_URI}}},
+    {"name": "fleet_show_approval",
+     "description": ("Show the approval brief of one task as a card in hosts that render MCP Apps "
+                     "(read-only: it shows the question, it never approves)."),
+     "inputSchema": {"type": "object", "properties": dict(_TASK_ID), "required": ["task_id"]},
+     "_meta": {"ui": {"resourceUri": APPROVAL_CARD_URI}}},
+])
+
+
+class _Structured(str):
+    """A tool answer with machine-readable data next to its text (MCP structuredContent)."""
+    data: Dict[str, Any]
+
+    def __new__(cls, text: str, data: Dict[str, Any]) -> "_Structured":
+        obj = super().__new__(cls, text)
+        obj.data = data
+        return obj
+
+
+def _task_for_card(args: Dict[str, Any]) -> Dict[str, Any]:
+    task_id = str(args.get("task_id") or "").strip()
+    if not task_id:
+        raise ApiError("task_id is required")
+    return _api_request("GET", f"/api/fleet/tasks/{urllib.parse.quote(task_id, safe='')}")
+
+
+def _card_title(t: Dict[str, Any]) -> str:
+    intent = (t.get("metadata") or {}).get("intent") or {}
+    first = (t.get("text") or "").strip().splitlines()
+    return str(intent.get("title") or (first[0] if first else "") or t.get("id"))[:200]
+
+
+_SAFE_TASK_ID = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
+
+
+def _card_links(t: Dict[str, Any]) -> Dict[str, str]:
+    """Links the card may offer. The fleet link uses the daemon's own address (never a literal
+    host) and deep-links to #/t/<task_id> when the id is safe. An Amber link appears only when
+    the daemon supplies a nostrsigner: link with the task (brief.links.amber)."""
+    base = _get_api_url().rstrip("/") + "/static/app/"
+    tid = t.get("id")
+    fleet_url = f"{base}#/t/{tid}" if isinstance(tid, str) and tid not in (".", "..") and _SAFE_TASK_ID.match(tid) else base
+    links = {"fleet": fleet_url}
+    amber = ((t.get("brief") or {}).get("links") or {}).get("amber")
+    if isinstance(amber, str) and amber.startswith("nostrsigner:"):
+        links["amber"] = amber
+    return links
+
+
+def tool_show_task(args: Dict[str, Any]) -> str:
+    t = _task_for_card(args)
+    r = t.get("result") or {}
+    landing = r.get("landing") or {}
+    meta = t.get("metadata") or {}
+    data = {
+        "task_id": t.get("id"), "title": _card_title(t), "status": t.get("status"),
+        "lane": t.get("lane"), "project": (meta.get("intent") or {}).get("project") or meta.get("project"),
+        "changed_files": len(r["changed_files"]) if isinstance(r.get("changed_files"), list) else None,
+        "landing": landing.get("status") or landing.get("mode") or None,
+        "links": _card_links(t),
+    }
+    return _Structured(f"{data['task_id']} [{data['status']}]: {data['title']}", data)
+
+
+def tool_show_approval(args: Dict[str, Any]) -> str:
+    t = _task_for_card(args)
+    brief = t.get("brief")
+    data = {"task_id": t.get("id"), "title": _card_title(t), "status": t.get("status"),
+            "brief": brief if isinstance(brief, dict) else None, "links": _card_links(t)}
+    text = (str(brief.get("question")) if isinstance(brief, dict)
+            else f"{t.get('id')} is not waiting for an approval (status {t.get('status')}).")
+    return _Structured(text, data)
+
+
+def _resource_list() -> List[Dict[str, Any]]:
+    return [{k: v for k, v in r.items() if k != "file"} for r in APP_RESOURCES]
+
+
+def _resources_read(req_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
+    uri = params.get("uri")
+    res = next((r for r in APP_RESOURCES if r["uri"] == uri), None)
+    if res is None:
+        return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32002, "message": f"Unknown resource: {uri}"}}
+    with open(os.path.join(_APPS_DIR, res["file"]), encoding="utf-8") as f:
+        html = f.read()
+    return {"jsonrpc": "2.0", "id": req_id, "result": {"contents": [
+        {"uri": res["uri"], "mimeType": APP_MIME_TYPE, "text": html}]}}
+
+
 HANDLERS: Dict[str, Callable[[Dict[str, Any]], str]] = {
     "fleet_dispatch_task": tool_dispatch,
     "fleet_list_tasks": tool_list,
@@ -533,59 +743,230 @@ HANDLERS: Dict[str, Callable[[Dict[str, Any]], str]] = {
     "fleet_get_budgets": tool_budgets,
     "fleet_tighten_budget": tool_tighten_budget,
     "fleet_get_ledger": tool_ledger,
+    "fleet_show_task": tool_show_task,
+    "fleet_show_approval": tool_show_approval,
 }
 assert set(HANDLERS) == {t["name"] for t in TOOLS}
 _SCHEMAS = {t["name"]: t["inputSchema"] for t in TOOLS}
 
+VALID_MODES = ("full", "front_door")
+FRONT_DOOR_TOOL_NAMES = frozenset({
+    "fleet_dispatch_task",
+    "fleet_list_tasks",
+    "fleet_get_task_status",
+    "fleet_get_task_receipt",
+    "fleet_system_health",
+    "fleet_lane_health",
+    "fleet_issue_intake",
+    "fleet_get_budgets",
+    "fleet_get_ledger",
+    "fleet_show_task",
+    "fleet_show_approval",
+})
+FRONT_DOOR_READ_TOOL_NAMES = FRONT_DOOR_TOOL_NAMES - {"fleet_dispatch_task"}
+# Intent keys a front door may set. Lane pins, extra egress domains, capabilities, Privateers and
+# cloud escalation widen what a run may reach or spend: only the operator sets those.
+FRONT_DOOR_INTENT_KEYS = frozenset({
+    "project", "title", "acceptance_criteria", "allowed_paths", "gate_cmd", "category",
+})
+_FRONT_DOOR_OVERRIDES: Dict[str, Dict[str, Any]] = {
+    "fleet_dispatch_task": {
+        "description": (
+            "Queue a coding task for the operator. Every task queued here waits for the operator's "
+            "approval in the dashboard or Matrix before it runs. Give an `intent` (project, title, "
+            "acceptance_criteria; best with allowed_paths and gate_cmd)."),
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "prompt": {"type": "string", "description": "What to do, as precise as a ticket."},
+                "intent": {
+                    "type": "object",
+                    "description": (
+                        "Task contract: project (fleet.toml key), title, acceptance_criteria (list); "
+                        "optional allowed_paths (globs), gate_cmd ({\"pytest\": path} or {\"npm\": script}), "
+                        "category. No lane, domains, capabilities or escalation here."),
+                },
+                "depends_on": {"type": "array", "items": {"type": "string"},
+                               "description": "Task ids that must finish first (local backend)."},
+                "idempotency_key": {"type": "string",
+                                    "description": _IDEM_DESC},
+            },
+            "required": ["prompt"],
+        },
+    },
+    "fleet_lane_health": {
+        "description": "Read stored lane health and retired/discovered model status (probing disabled in front_door mode).",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+    "fleet_issue_intake": {
+        "description": "Read issue intake sources and queue counts (sync disabled in front_door mode).",
+        "inputSchema": {"type": "object", "properties": {}},
+    },
+}
+_DEFAULT_MODE = "full"
+_ACTIVE_MODE: contextvars.ContextVar[str] = contextvars.ContextVar("fleet_mcp_mode", default="full")
+
+
+def _resolve_mode(argv: Optional[Sequence[str]] = None) -> str:
+    """Resolve the MCP exposure mode from CLI flags or FLEET_MCP_MODE (default 'full')."""
+    env_mode = os.environ.get("FLEET_MCP_MODE", "full").strip().lower() or "full"
+    parser = argparse.ArgumentParser(prog="fleet.api.mcp_server", add_help=True)
+    parser.add_argument(
+        "--mode",
+        choices=VALID_MODES,
+        default=env_mode if env_mode in VALID_MODES else "__invalid__",
+        help="Tool exposure mode: 'full' (coordinator) or 'front_door' (dispatch + read-only status, no approvals).",
+    )
+    ns = parser.parse_args(list(argv) if argv is not None else [])
+    if ns.mode not in VALID_MODES:
+        parser.error(f"invalid FLEET_MCP_MODE: {env_mode!r}; expected one of {', '.join(VALID_MODES)}")
+    return str(ns.mode)
+
+
+def _tools_for_mode(mode: str, *, scope: Optional[str] = None) -> List[Dict[str, Any]]:
+    if mode == "full":
+        return TOOLS
+    if mode != "front_door":
+        raise ValueError(f"unknown MCP mode: {mode!r}")
+    allowed = FRONT_DOOR_READ_TOOL_NAMES if scope == "read" else FRONT_DOOR_TOOL_NAMES
+    out: List[Dict[str, Any]] = []
+    for tool in TOOLS:
+        name = tool["name"]
+        if name not in allowed:
+            continue
+        ov = _FRONT_DOOR_OVERRIDES.get(name)
+        out.append({**tool, **ov} if ov else tool)
+    return out
+
+
+# Templates are MCP prompts (ARCHITECTURE.md): the daemon's templates, read through its API, appear
+# as prompts in goose and other hosts. Getting a prompt only fills text; it never queues a task.
+def _templates(project: Optional[str] = None) -> List[Dict[str, Any]]:
+    path = "/api/fleet/templates" + (f"?project={urllib.parse.quote(project)}" if project else "")
+    return list((_api_request("GET", path) or {}).get("templates") or [])
+
+
+def _prompt_entry(t: Dict[str, Any]) -> Dict[str, Any]:
+    return {"name": t["id"], "title": t.get("name") or t["id"],
+            "description": (t.get("description") or t.get("name") or "")[:200],
+            "arguments": [{"name": b["id"], "description": b.get("label") or b["id"], "required": False}
+                          for b in t.get("blanks") or []]}
+
+
+def _prompts_list(req_id: Any) -> Dict[str, Any]:
+    try:
+        return {"jsonrpc": "2.0", "id": req_id, "result": {"prompts": [_prompt_entry(t) for t in _templates()]}}
+    except ApiError as e:
+        return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32603, "message": str(e)}}
+
+
+def _prompts_get(req_id: Any, params: Dict[str, Any]) -> Dict[str, Any]:
+    from fleet.core.templates import fill
+    name = params.get("name")
+    args = params.get("arguments") or {}
+    if not isinstance(name, str) or not isinstance(args, dict):
+        return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32602, "message": "prompts/get needs a name"}}
+    try:
+        tpl = next((t for t in _templates(args.get("project") or None) if t["id"] == name), None)
+    except ApiError as e:
+        return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32603, "message": str(e)}}
+    if tpl is None:
+        return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32602, "message": f"Unknown prompt: {name}"}}
+    text = fill(tpl, {k: v for k, v in args.items() if isinstance(v, str)})
+    return {"jsonrpc": "2.0", "id": req_id, "result": {
+        "description": tpl.get("description") or tpl["name"],
+        "messages": [{"role": "user", "content": {"type": "text", "text": text}}]}}
+
 
 def _result(req_id: Any, text: str, error: bool = False) -> Dict[str, Any]:
     result: Dict[str, Any] = {"content": [{"type": "text", "text": text}]}
+    if isinstance(text, _Structured):
+        result["structuredContent"] = text.data
     if error:
         result["isError"] = True
     return {"jsonrpc": "2.0", "id": req_id, "result": result}
 
 
-def handle_request(req: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def handle_request(
+    req: Dict[str, Any],
+    *,
+    mode: Optional[str] = None,
+    scope: Optional[str] = None,
+    default_protocol_version: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    active_mode = mode if mode is not None else _DEFAULT_MODE
+    if active_mode not in VALID_MODES:
+        raise ValueError(f"unknown MCP mode: {active_mode!r}")
+    tools = _tools_for_mode(active_mode, scope=scope)
+    schemas = {t["name"]: t["inputSchema"] for t in tools}
+
     method = req.get("method")
     req_id = req.get("id")
 
     if method == "initialize":
+        params = req.get("params") or {}
+        client_ver = params.get("protocolVersion") if isinstance(params, dict) else None
+        proto_ver = (
+            client_ver
+            if isinstance(client_ver, str) and client_ver in SUPPORTED_PROTOCOL_VERSIONS
+            else (default_protocol_version or PROTOCOL_VERSION)
+        )
         return {"jsonrpc": "2.0", "id": req_id, "result": {
-            "protocolVersion": PROTOCOL_VERSION,
-            "capabilities": {"tools": {}},
+            "protocolVersion": proto_ver,
+            "capabilities": {"tools": {}, "prompts": {}, "resources": {}},
             "serverInfo": {"name": "sovereign-fleet-mcp", "version": __version__},
         }}
     if method in ("notifications/initialized", "notifications/cancelled"):
         return None
     if method == "ping":
         return {"jsonrpc": "2.0", "id": req_id, "result": {}}
+    if method == "prompts/list":
+        return _prompts_list(req_id)
+    if method == "prompts/get":
+        return _prompts_get(req_id, req.get("params") or {})
+    if method == "resources/list":
+        return {"jsonrpc": "2.0", "id": req_id, "result": {"resources": _resource_list()}}
+    if method == "resources/read":
+        return _resources_read(req_id, req.get("params") or {})
     if method == "tools/list":
-        return {"jsonrpc": "2.0", "id": req_id, "result": {"tools": TOOLS}}
+        return {"jsonrpc": "2.0", "id": req_id, "result": {"tools": tools}}
     if method == "tools/call":
         params = req.get("params") or {}
-        handler = HANDLERS.get(params.get("name"))
-        if handler is None:
+        name = params.get("name")
+        if name not in schemas:
+            if name in HANDLERS and active_mode != "full":
+                if scope == "read" and name in FRONT_DOOR_TOOL_NAMES:
+                    return {"jsonrpc": "2.0", "id": req_id,
+                            "error": {"code": -32602, "message": f"Tool '{name}' requires scope 'propose'"}}
+                return {"jsonrpc": "2.0", "id": req_id,
+                        "error": {"code": -32602, "message": f"Tool '{name}' is disabled in {active_mode} mode"}}
             return {"jsonrpc": "2.0", "id": req_id,
-                    "error": {"code": -32602, "message": f"Unknown tool: {params.get('name')}"}}
+                    "error": {"code": -32602, "message": f"Unknown tool: {name}"}}
+        handler = HANDLERS[name]
         args = params.get("arguments") or {}
-        known = set(_SCHEMAS[params["name"]].get("properties") or {})
+        known = set(schemas[name].get("properties") or {})
         unknown = sorted(set(args) - known) if isinstance(args, dict) else []
         if unknown:
             # an ignored argument would answer a different question than the one asked
             return _result(req_id, f"Error: unknown argument {', '.join(unknown)}; "
-                                   f"{params['name']} takes {', '.join(sorted(known)) or 'no arguments'}", error=True)
+                                   f"{name} takes {', '.join(sorted(known)) or 'no arguments'}", error=True)
+        tok = _ACTIVE_MODE.set(active_mode)
         try:
             return _result(req_id, handler(args))
         except ApiError as e:
             return _result(req_id, f"Error: {e}", error=True)
         except (TypeError, ValueError, KeyError) as e:
             return _result(req_id, f"Error: unexpected answer or argument ({type(e).__name__}: {e})", error=True)
+        finally:
+            _ACTIVE_MODE.reset(tok)
     if req_id is None:
         return None
     return {"jsonrpc": "2.0", "id": req_id, "error": {"code": -32601, "message": "Method not found"}}
 
 
-def main() -> None:
+def main(argv: Optional[Sequence[str]] = None) -> None:
+    global _DEFAULT_MODE
+    _DEFAULT_MODE = _resolve_mode(argv if argv is not None else sys.argv[1:])
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -596,7 +977,7 @@ def main() -> None:
             print(json.dumps({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": str(e)}}), flush=True)
             continue
         try:
-            resp = handle_request(req)
+            resp = handle_request(req, mode=_DEFAULT_MODE)
         except Exception as e:  # noqa: BLE001 - one bad request must not end the stdio server
             resp = {"jsonrpc": "2.0", "id": req.get("id") if isinstance(req, dict) else None,
                     "error": {"code": -32603, "message": str(e)}}

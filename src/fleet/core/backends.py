@@ -13,6 +13,8 @@ backend.grid_runner_dir (or FLEET_GRID_RUNNER_DIR).
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import importlib
 import inspect
 import json
@@ -21,12 +23,26 @@ import re
 import sys
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from fleet.core.config import _expand, builtin_harnesses, load_config
+from fleet.core.capability import (
+    execute_task_draft,
+    find_task_draft,
+    list_task_drafts,
+    task_capabilities,
+)
+from fleet.core.receipts import build_receipt
+from fleet.core.sandbox import validate_task_domains
 from fleet.core.taskstore import FleetTask, TaskStore, TransitionError, is_sensitive
+from fleet.core.toolgate import (
+    ToolGateError,
+    approve_draft as gate_approve_draft,
+    reject_draft as gate_reject_draft,
+)
 from fleet.core.usage import summarize_runs
 
 logger = logging.getLogger("fleet.core.backends")
@@ -100,6 +116,43 @@ class LocalBackend:
                     metadata["gate"] = gate_val
             if not lane and intent.get("assigned_lane"):
                 lane = intent["assigned_lane"]
+            if intent.get("capabilities") is not None:
+                try:   # a capability this installation does not have: refused at once
+                    wanted = task_capabilities(intent["capabilities"])
+                except ValueError as e:
+                    raise BackendError(str(e)) from e
+                if wanted:
+                    metadata["capabilities"] = wanted
+            if intent.get("allowed_domains") is not None:
+                try:   # refused here, so the sender hears it at once (the run checks again)
+                    names = validate_task_domains(intent["allowed_domains"])
+                except ValueError as e:
+                    raise BackendError(str(e)) from e
+                if names:
+                    metadata["allowed_domains"] = names
+            if intent.get("privateer") is not None and metadata.get("privateer") is None:
+                metadata["privateer"] = intent["privateer"]
+
+        priv_name = str(metadata.get("privateer") or "").strip()
+        if priv_name:
+            from fleet.core.privateer import PrivateerError, verify_privateer_commission
+
+            req_caps = metadata.get("capabilities") or []
+            if isinstance(req_caps, str):
+                req_caps = [req_caps]
+            req_doms = metadata.get("allowed_domains") or []
+            try:
+                comm = verify_privateer_commission(
+                    priv_name,
+                    required_capabilities=list(req_caps),
+                    required_domains=list(req_doms),
+                )
+            except PrivateerError as e:
+                raise BackendError(str(e)) from e
+            metadata["commission_event_id"] = comm["event_id"]
+            metadata["commission_budget"] = comm["budget"]
+            metadata["privateer_pubkey"] = comm["privateer_pubkey"]
+            metadata["privateer_npub"] = comm["privateer_npub"]
         task = FleetTask(
             id=f"task-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}",
             text=text,
@@ -116,12 +169,322 @@ class LocalBackend:
         except TransitionError as e:
             raise BackendError(str(e)) from e
 
-    def approve(self, task_id: str) -> Optional[FleetTask]:
+    def _run_coro(self, coro):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coro)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            return pool.submit(asyncio.run, coro).result()
+
+    def _task_pending_drafts(self, task: FleetTask) -> List[Dict[str, Any]]:
+        on_disk = list_task_drafts(task.id, status="pending")
+        if on_disk:
+            return on_disk
+        raw = (task.metadata or {}).get("pending_drafts") or []
+        out: List[Dict[str, Any]] = []
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            path = entry.get("draft_path")
+            if path and Path(path).is_file():
+                try:
+                    cur = json.loads(Path(path).read_text(encoding="utf-8"))
+                    if isinstance(cur, dict) and cur.get("status", "pending") == "pending":
+                        cur.setdefault("draft_path", str(path))
+                        out.append(cur)
+                except (OSError, ValueError):
+                    continue
+        return out
+
+    async def _approve_one_draft(
+        self,
+        task: FleetTask,
+        draft: Mapping[str, Any],
+        *,
+        approval_event: Dict[str, Any],
+        fleet_id: Optional[str] = None,
+    ) -> tuple[Dict[str, Any], Dict[str, Any]]:
+        draft_path = Path(str(draft["draft_path"]))
+        audit_path = Path(str(draft["audit_path"])) if draft.get("audit_path") else None
+        approved = await asyncio.to_thread(
+            gate_approve_draft,
+            draft_path,
+            approval_event=approval_event,
+            expected_fleet_id=fleet_id,
+            audit_path=audit_path,
+        )
+        domains = list(
+            (task.metadata or {}).get("allowed_domains")
+            or draft.get("allowed_domains")
+            or approved.get("allowed_domains")
+            or ()
+        )
+        call_res = await execute_task_draft(draft_path, allowed_domains=domains)
+        latest = json.loads(draft_path.read_text(encoding="utf-8"))
+        latest.setdefault("draft_path", str(draft_path))
+        return latest, call_res
+
+    async def request_draft_signature_async(
+        self,
+        task_id: str,
+        seq: int,
+        *,
+        by: str = "operator",
+        capability: Optional[str] = None,
+        signer_manager: Optional[Any] = None,
+    ) -> Optional[tuple[Dict[str, Any], Dict[str, Any], FleetTask]]:
+        """Initiate NIP-46 kind 4910 signature prompt for a pending draft (never executes directly)."""
+        task = self.store.get_task(task_id)
+        if task is None:
+            return None
+        if task.status != "awaiting_approval":
+            raise BackendError(f"Task {task_id} cannot request draft signature from status {task.status!r}")
+        try:
+            draft = find_task_draft(task_id, seq, capability=capability, status="pending")
+        except ToolGateError as e:
+            raise BackendError(str(e)) from e
+
+        from fleet.core.signer import SignerError, SignerManager
+
+        mgr = signer_manager or SignerManager()
+        try:
+            sig_req = await mgr.request_draft_signature(draft, by=by)
+        except SignerError as e:
+            raise BackendError(str(e)) from e
+
+        pending_list = list_task_drafts(task_id, status="pending")
+        for entry in pending_list:
+            if int(entry.get("seq") or 0) == int(draft["seq"]) and str(entry.get("capability") or "") == str(
+                draft.get("capability") or ""
+            ):
+                entry["signature_status"] = "awaiting_signature"
+                entry["signature_req_id"] = sig_req["req_id"]
+                entry["signature_expires_at"] = sig_req["expires_at"]
+        self.store.update_metadata(task_id, {"pending_drafts": pending_list or None})
+        latest_task = self.store.get_task(task_id) or task
+        return sig_req, draft, latest_task
+
+    def request_draft_signature(
+        self,
+        task_id: str,
+        seq: int,
+        *,
+        by: str = "operator",
+        capability: Optional[str] = None,
+        signer_manager: Optional[Any] = None,
+    ) -> Optional[tuple[Dict[str, Any], Dict[str, Any], FleetTask]]:
+        return self._run_coro(
+            self.request_draft_signature_async(
+                task_id, seq, by=by, capability=capability, signer_manager=signer_manager
+            )
+        )
+
+    async def complete_signed_draft_async(
+        self,
+        task_id: str,
+        seq: int,
+        *,
+        approval_event: Dict[str, Any],
+        capability: Optional[str] = None,
+        fleet_id: Optional[str] = None,
+    ) -> Optional[tuple[Dict[str, Any], FleetTask]]:
+        """Verify a signed kind 4910 event, execute the approved draft, and finalize task if done."""
+        task = self.store.get_task(task_id)
+        if task is None:
+            return None
+        if task.status != "awaiting_approval":
+            raise BackendError(f"Task {task_id} cannot be approved from status {task.status!r}")
+        try:
+            draft = find_task_draft(task_id, seq, capability=capability, status="pending")
+        except ToolGateError as e:
+            raise BackendError(str(e)) from e
+        try:
+            executed_draft, call_res = await self._approve_one_draft(
+                task, draft, approval_event=approval_event, fleet_id=fleet_id
+            )
+        except ToolGateError as e:
+            raise BackendError(str(e)) from e
+        updated_task = self._finalize_draft_approval(task, executed_draft, call_res)
+        return executed_draft, updated_task
+
+    async def approve_draft_async(
+        self,
+        task_id: str,
+        seq: int,
+        *,
+        approval_event: Optional[Dict[str, Any]] = None,
+        by: str = "operator",
+        capability: Optional[str] = None,
+        fleet_id: Optional[str] = None,
+    ) -> Optional[tuple[Dict[str, Any], FleetTask]]:
+        del by
+        if approval_event is None:
+            raise BackendError("operator signature required: call request_draft_signature() or pass kind 4910 event")
+        return await self.complete_signed_draft_async(
+            task_id, seq, approval_event=approval_event, capability=capability, fleet_id=fleet_id
+        )
+
+    def approve_draft(
+        self,
+        task_id: str,
+        seq: int,
+        *,
+        approval_event: Optional[Dict[str, Any]] = None,
+        by: str = "operator",
+        capability: Optional[str] = None,
+        fleet_id: Optional[str] = None,
+    ) -> Optional[tuple[Dict[str, Any], FleetTask]]:
+        return self._run_coro(
+            self.approve_draft_async(
+                task_id,
+                seq,
+                approval_event=approval_event,
+                by=by,
+                capability=capability,
+                fleet_id=fleet_id,
+            )
+        )
+
+    def reject_draft(
+        self,
+        task_id: str,
+        seq: int,
+        *,
+        by: str = "operator",
+        reason: str = "",
+        capability: Optional[str] = None,
+    ) -> Optional[tuple[Dict[str, Any], FleetTask]]:
+        task = self.store.get_task(task_id)
+        if task is None:
+            return None
+        if task.status != "awaiting_approval":
+            raise BackendError(f"Task {task_id} cannot be rejected from status {task.status!r}")
+        try:
+            draft = find_task_draft(task_id, seq, capability=capability, status="pending")
+            rejected = gate_reject_draft(
+                draft["draft_path"],
+                by=by,
+                reason=reason,
+                audit_path=Path(draft["audit_path"]) if draft.get("audit_path") else None,
+            )
+        except ToolGateError as e:
+            raise BackendError(str(e)) from e
+        remaining = list_task_drafts(task_id, status="pending")
+        chain_broken = bool((task.metadata or {}).get("chain_broken") or rejected.get("chain_broken"))
+        meta_update: Dict[str, Any] = {"pending_drafts": remaining or None}
+        if chain_broken:
+            meta_update["chain_broken"] = True
+        self.store.update_metadata(task_id, meta_update)
+        if remaining:
+            return rejected, self.store.get_task(task_id) or task
+        msg = reason or f"Draft #{seq} rejected by {by}"
+        result = {**(task.result or {}), "error": msg, "exit_code": 1}
+        if chain_broken:
+            result["chain_broken"] = True
+        updated = self._transition(task_id, "failed", ("awaiting_approval",), result)
+        if updated is not None:
+            receipt = build_receipt(updated, result, duration_seconds=0.0, spool_dir=self.store.spool_dir)
+            self.store.update_metadata(task_id, {"receipt": receipt})
+            updated = self.store.get_task(task_id) or updated
+        return rejected, updated
+
+    def _finalize_draft_approval(
+        self,
+        task: FleetTask,
+        executed_draft: Dict[str, Any],
+        call_result: Dict[str, Any],
+    ) -> FleetTask:
+        remaining = list_task_drafts(task.id, status="pending")
+        existing_sig = {
+            (int(d.get("seq") or 0), str(d.get("capability") or "")): d
+            for d in ((task.metadata or {}).get("pending_drafts") or [])
+            if isinstance(d, dict) and d.get("signature_status")
+        }
+        for entry in remaining:
+            prev = existing_sig.get((int(entry.get("seq") or 0), str(entry.get("capability") or "")))
+            if prev:
+                for key in ("signature_status", "signature_req_id", "signature_expires_at"):
+                    if key in prev:
+                        entry[key] = prev[key]
+        prior_executed = list((task.metadata or {}).get("executed_drafts") or [])
+        all_executed = [*prior_executed, executed_draft]
+        self.store.update_metadata(
+            task.id,
+            {
+                "pending_drafts": remaining or None,
+                "executed_drafts": all_executed,
+            },
+        )
+        if remaining:
+            return self.store.get_task(task.id) or task
+        prior = dict(task.result or {})
+        prior.pop("error", None)
+        merged = {
+            **prior,
+            "exit_code": 0,
+            "pending_drafts": [],
+            "executed_drafts": all_executed,
+            "draft_results": [*(prior.get("draft_results") or []), call_result],
+        }
+        duration = float(prior.get("duration_seconds") or 0.0)
+        receipt = build_receipt(task, merged, duration_seconds=duration, spool_dir=self.store.spool_dir)
+        merged["receipt"] = receipt
+        self.store.update_metadata(task.id, {"receipt": receipt})
+        updated = self._transition(task.id, "completed", ("awaiting_approval",), merged)
+        return updated or task
+
+    async def approve_async(self, task_id: str, *, by: str = "operator") -> Optional[FleetTask]:
+        task = self.store.get_task(task_id)
+        if task is None:
+            return None
+        if self._task_pending_drafts(task):
+            raise BackendError(
+                f"Task {task_id} has pending drafts; drafts are approved one by one in the dashboard"
+            )
         return self._transition(task_id, "queued", ("awaiting_approval",))
 
-    def reject(self, task_id: str) -> Optional[FleetTask]:
-        return self._transition(task_id, "failed", ("awaiting_approval",),
-                                {"error": "Rejected by user", "exit_code": 1})
+    def approve(self, task_id: str, *, by: str = "operator") -> Optional[FleetTask]:
+        task = self.store.get_task(task_id)
+        if task is None:
+            return None
+        if self._task_pending_drafts(task):
+            raise BackendError(
+                f"Task {task_id} has pending drafts; drafts are approved one by one in the dashboard"
+            )
+        return self._transition(task_id, "queued", ("awaiting_approval",))
+
+    def reject(self, task_id: str, *, by: str = "operator", reason: str = "Rejected by user") -> Optional[FleetTask]:
+        task = self.store.get_task(task_id)
+        if task is None:
+            return None
+        chain_broken = bool((task.metadata or {}).get("chain_broken"))
+        if task.status == "awaiting_approval":
+            for draft in self._task_pending_drafts(task):
+                try:
+                    rejected = gate_reject_draft(
+                        draft["draft_path"],
+                        by=by,
+                        reason=reason,
+                        audit_path=Path(draft["audit_path"]) if draft.get("audit_path") else None,
+                    )
+                    if rejected.get("chain_broken"):
+                        chain_broken = True
+                except ToolGateError as e:
+                    raise BackendError(str(e)) from e
+            meta_update: Dict[str, Any] = {"pending_drafts": None}
+            if chain_broken:
+                meta_update["chain_broken"] = True
+            self.store.update_metadata(task_id, meta_update)
+        result = {**(task.result or {}), "error": reason or "Rejected by user", "exit_code": 1}
+        if chain_broken:
+            result["chain_broken"] = True
+        updated = self._transition(task_id, "failed", ("awaiting_approval",), result)
+        if updated is not None:
+            receipt = build_receipt(updated, result, duration_seconds=0.0, spool_dir=self.store.spool_dir)
+            self.store.update_metadata(task_id, {"receipt": receipt})
+            updated = self.store.get_task(task_id) or updated
+        return updated
 
     def cancel(self, task_id: str) -> Optional[FleetTask]:
         task = self._transition(task_id, "cancelled", ("queued", "in_progress", "awaiting_approval"),
@@ -222,7 +585,8 @@ _GRID_SUCCESS = ("success", "completed", "merged", "landed", "pr_merged")
 # Coordinator intent keys the dispatcher accepts (see its _coordinator_intent).
 _INTENT_KEYS = ("title", "summary", "category", "project", "assigned_lane", "allowed_paths",
                 "gate_cmd", "acceptance_criteria", "complexity", "target_branch", "base_ref",
-                "tier", "is_sensitive", "summary_de", "harness_requested", "allowed_lanes")
+                "tier", "is_sensitive", "summary_de", "harness_requested", "allowed_lanes",
+                "allowed_domains", "capabilities")
 
 
 _SUBSCRIPTION_PROVIDERS = ("antigravity", "cursor", "microsoft", "copilot", "anthropic", "claude")
@@ -760,15 +1124,72 @@ class CompositeBackend:
             return self.local.enqueue(text, lane, depends_on, metadata, needs_approval, source=source)
         return self.grid.enqueue(text, lane, depends_on, metadata, needs_approval, source=source)
 
-    def approve(self, task_id: str) -> Optional[FleetTask]:
+    def approve(self, task_id: str, *, by: str = "operator") -> Optional[FleetTask]:
         if self.local.get_task(task_id):
-            return self.local.approve(task_id)
+            return self.local.approve(task_id, by=by)
         return self.grid.approve(task_id)
 
-    def reject(self, task_id: str) -> Optional[FleetTask]:
+    def reject(self, task_id: str, *, by: str = "operator", reason: str = "Rejected by user") -> Optional[FleetTask]:
         if self.local.get_task(task_id):
-            return self.local.reject(task_id)
+            return self.local.reject(task_id, by=by, reason=reason)
         return self.grid.reject(task_id)
+
+    async def request_draft_signature_async(
+        self,
+        task_id: str,
+        seq: int,
+        *,
+        by: str = "operator",
+        capability: Optional[str] = None,
+        signer_manager: Optional[Any] = None,
+    ):
+        if self.local.get_task(task_id):
+            return await self.local.request_draft_signature_async(
+                task_id, seq, by=by, capability=capability, signer_manager=signer_manager
+            )
+        raise BackendError(f"Draft approval is only supported for local tasks (not grid task {task_id})")
+
+    def request_draft_signature(
+        self,
+        task_id: str,
+        seq: int,
+        *,
+        by: str = "operator",
+        capability: Optional[str] = None,
+        signer_manager: Optional[Any] = None,
+    ):
+        if self.local.get_task(task_id):
+            return self.local.request_draft_signature(
+                task_id, seq, by=by, capability=capability, signer_manager=signer_manager
+            )
+        raise BackendError(f"Draft approval is only supported for local tasks (not grid task {task_id})")
+
+    def approve_draft(
+        self,
+        task_id: str,
+        seq: int,
+        *,
+        approval_event: Optional[Dict[str, Any]] = None,
+        by: str = "operator",
+        capability: Optional[str] = None,
+        fleet_id: Optional[str] = None,
+    ):
+        if self.local.get_task(task_id):
+            return self.local.approve_draft(
+                task_id,
+                seq,
+                approval_event=approval_event,
+                by=by,
+                capability=capability,
+                fleet_id=fleet_id,
+            )
+        raise BackendError(f"Draft approval is only supported for local tasks (not grid task {task_id})")
+
+    def reject_draft(self, task_id: str, seq: int, *, by: str = "operator",
+                     reason: str = "", capability: Optional[str] = None):
+        if self.local.get_task(task_id):
+            return self.local.reject_draft(task_id, seq, by=by, reason=reason, capability=capability)
+        raise BackendError(f"Draft rejection is only supported for local tasks (not grid task {task_id})")
 
     def cancel(self, task_id: str) -> Optional[FleetTask]:
         if self.local.get_task(task_id):

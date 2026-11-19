@@ -228,6 +228,24 @@ def test_a_name_with_one_private_answer_among_public_ones_is_refused(start_proxy
     assert _ask(proxy, f"CONNECT rebind.example.net:{echo} HTTP/1.1\r\n\r\n".encode()).startswith(b"HTTP/1.1 403")
 
 
+def test_start_creates_empty_audit_file_when_zero_requests(tmp_path):
+    audit = tmp_path / "sub" / "task-zero.jsonl"
+    proxy = EgressProxy(["example.com"], audit_path=audit)
+
+    async def _run():
+        await proxy.start()
+        try:
+            assert audit.exists()
+            assert audit.read_text(encoding="utf-8") == ""
+        finally:
+            await proxy.stop()
+
+    try:
+        asyncio.run(_run())
+    except PermissionError:
+        pytest.skip("this sandbox refuses local socket bind; runs outside it")
+
+
 def test_the_tunnel_goes_to_the_address_that_was_checked(start_proxy, echo, monkeypatch):
     proxy = start_proxy(echo, allowlist=("api.example.org",))
     _resolve_to(monkeypatch, "127.0.0.1")
@@ -237,3 +255,27 @@ def test_the_tunnel_goes_to_the_address_that_was_checked(start_proxy, echo, monk
         assert s.recv(4096).startswith(b"HTTP/1.1 200")
         s.sendall(b"ping")
         assert s.recv(4096) == b"ping"
+
+
+def test_a_request_that_cannot_be_logged_does_not_pass(start_proxy, echo, tmp_path):
+    proxy = start_proxy(echo)
+
+    def first_line() -> bytes:
+        with socket.create_connection(("127.0.0.1", proxy.port), timeout=5) as s:
+            s.sendall(f"CONNECT 127.0.0.1:{echo} HTTP/1.1\r\n\r\n".encode())
+            return s.recv(4096)
+
+    assert first_line().startswith(b"HTTP/1.1 200")
+    audit = tmp_path / "audit.jsonl"
+    assert audit.read_text().count("\n") == 1
+    audit.unlink()
+    audit.mkdir()                                  # the log cannot be written any more
+    assert first_line().startswith(b"HTTP/1.1 502")
+
+
+def test_a_proxy_without_its_log_does_not_start(tmp_path):
+    blocker = tmp_path / "file"
+    blocker.write_text("")
+    proxy = EgressProxy(["example.com"], audit_path=blocker / "sub" / "audit.jsonl")
+    with pytest.raises(OSError):
+        asyncio.run(proxy.start())

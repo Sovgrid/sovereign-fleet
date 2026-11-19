@@ -50,8 +50,9 @@ async def test_api_needs_the_token(method, path):
 @pytest.mark.asyncio
 async def test_public_paths_need_no_token():
     async with _client() as client:
-        for path in ("/", "/health", "/manifest.json", "/sw.js", "/static/icon.svg"):
+        for path in ("/classic", "/static/app/", "/health", "/manifest.json", "/sw.js", "/static/icon.svg"):
             assert (await client.get(path)).status_code == 200, path
+        assert (await client.get("/")).status_code == 307          # the start page redirects to the new shell
 
 
 @pytest.mark.asyncio

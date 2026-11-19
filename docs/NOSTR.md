@@ -12,8 +12,10 @@ The fleet signs all Nostr events with a keypair it owns. The secret never appear
 
 ```toml
 [nostr]
-key_file = "fleet-nsec"    # nsec file (mode 0600); absolute path or a name in [secrets] dir
-nak = "nak"                # the nak CLI used to derive the public key (default: "nak")
+key_file = "fleet-nsec"                       # nsec file (mode 0600); absolute path or a name in [secrets] dir
+nak = "nak"                                   # the nak CLI used to derive the public key (default: "nak")
+nip46_relay = ""                              # optional ws(s):// NIP-46 relay URL; empty = daemon /nip46 endpoint
+signer_anchor = "/etc/sovereign-fleet/signer.pub"  # root-owned anchor file holding pinned operator npub(s)
 ```
 
 - `key_file` points to an nsec file containing the fleet's secret key. Mode **0600** is required; `fleet config check` refuses a missing file or wrong mode.
@@ -176,11 +178,58 @@ The ```` ```fleet ```` block (JSON) sets the task contract: `allowed_paths`, `ga
 
 ---
 
+## 7. Remote operator signing & Privateer identities (NIP-46)
+
+Side-effecting `"ask"` capability calls and Privateer commissions require cryptographic signatures from an external NIP-46 Nostr signer (such as Amber on a phone). The fleet key never approves its own `"ask"` drafts or commissions.
+
+### Pairing & built-in `/nip46` relay
+
+- By default (`nip46_relay = ""`), the daemon exposes a memory-only authenticated NIP-46 WebSocket relay at `wss://<daemon-host>:<port>/nip46` (or `ws://` when daemon TLS is disabled). Events are delivered directly in memory with no disk relay storage.
+- Pair from the dashboard **Signer** card or CLI:
+
+```bash
+fleet signer pair --host signer.example:8444
+```
+
+- When pairing in Amber, choose **Manually approve every permission**, verify no permissions are pre-enabled below in the list, and never choose **Remember**. You can also pass `--bunker <bunker://...>` for a remote NIP-46 bunker relay.
+
+### Root-owned trust anchor (`sudo fleet signer pin`)
+
+Pairing alone does not authorize signatures: an attacker or rogue script with write access to user files cannot swap the trusted operator key without root privileges.
+
+```bash
+fleet signer status
+sudo fleet signer pin <fingerprint>
+```
+
+- This writes the paired operator `npub` into `[nostr] signer_anchor` (default `/etc/sovereign-fleet/signer.pub`, owned by `0:0`, mode `0644`). The verifier refuses symlinks, non-root ownership, or group/world-writable anchor files and parent directories.
+- If `fleet` is installed with `pip install --user` and `~/.local/bin` is not in root's `secure_path`, invoke system Python explicitly with `PYTHONPATH` pointing to the repository `src` directory:
+
+```bash
+sudo env PYTHONPATH=/path/to/sovereign-fleet/src /usr/bin/python3 -m fleet.api.cli signer pin <fingerprint>
+```
+
+### Signed draft approvals (`kind 4910`) & Privateer commissions (`kind 4911`)
+
+- **Draft approvals (`kind 4910`):** When an `"ask"` draft is triggered (`POST /api/fleet/tasks/{id}/drafts/{seq}/approve` or `fleet draft approve`), the daemon sends a `sign_event` request for `kind 4910` bound to `task_id`, `draft_seq`, `capability`, `tool`, and `args_sha256` and returns HTTP `202` (`awaiting_signature`). After verification against the root-owned anchor and the `flock`-serialized single-use replay log (`seen_approvals.jsonl`), `execute_approved_draft` re-verifies the event before execution and records it in `receipt["approvals"]`.
+- **Privateers (`kind 4911` & `kind 4912`):** Create and commission named Privateer identities (`<secrets.dir>/privateers/<name>.nsec`, mode `0600`, kept outside sandboxes):
+
+```bash
+fleet privateer new weather-bot --cap fetch --domain api.open-meteo.com --ttl-days 7 --budget 20
+fleet privateer list
+fleet privateer show weather-bot
+fleet privateer revoke weather-bot
+```
+
+- Runtime checks the commission's `kind 4911` signature against `signer_anchor`, allowed capabilities, `allowed_domains` subset (empty `domains` fails closed as tools-offline and is rejected for `network = true` capabilities), expiry, and cumulative per-task call budget (`budget`, shared across capabilities and retries) on dispatch and before execution. Finished active Privateer runs attach a Schnorr-verified `kind 4912` receipt (`verify_receipt_signature`) carrying a `call_log_heads` map across every capability `CallLog` chain used by the task.
+
+---
+
 ## Quick checklist
 
 | What | Where |
 | :--- | :--- |
-| Fleet identity | `[nostr] key_file`, `nak` |
+| Fleet identity | `[nostr] key_file`, `nak`, `nip46_relay`, `signer_anchor` |
 | Buzz relay | `[buzz] relay_url`, `cli` |
 | ngit CLI | `[ngit] cli` |
 | Per-project intake | `[projects.<name>.intake] provider`, `channel` / `repo` |
@@ -188,5 +237,8 @@ The ```` ```fleet ```` block (JSON) sets the task contract: `allowed_paths`, `ga
 | Issue label | `[projects.<name>.intake] label` |
 | Pull requests on Nostr | `[projects.<name>] landing = "pull_request"` and a `nostr://` remote |
 | Private repo flag | `ngit init --repo-relay-only` (or `git config nostr.repo-relay-only`) |
-| Config validation | `fleet config check` (refuses missing or improperly permissioned key file) |
+| Signer pairing | `fleet signer pair` / `fleet signer status` / dashboard Signer card |
+| Signer trust anchor | `sudo fleet signer pin <fingerprint>` (`/etc/sovereign-fleet/signer.pub`) |
+| Privateers | `fleet privateer new\|list\|show\|revoke` (commissions `kind 4911`, receipts `kind 4912`) |
+| Config validation | `fleet config check` (refuses missing, symlinked, or improperly permissioned key/anchor files) |
 | Show npub | `fleet config show` prints `nostr.npub` |

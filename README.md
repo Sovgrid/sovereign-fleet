@@ -19,7 +19,7 @@ Coding agents on your own hardware, fenced in by the Linux kernel. Nothing lands
 [![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12-38bdf8?style=flat-square)](https://github.com/Sovgrid/sovereign-fleet/blob/main/pyproject.toml)
 [![Sandbox](https://img.shields.io/badge/sandbox-Landlock%20ABI%206%2B%20%2B%20seccomp-10b981?style=flat-square)](#security-model)
 [![Harnesses](https://img.shields.io/badge/harnesses-Goose%20%C2%B7%20Claude%20%C2%B7%20OpenCode%20%C2%B7%20Aider%20%C2%B7%20Pi%20%C2%B7%20Antigravity%20%C2%B7%20Cursor-a855f7?style=flat-square)](https://github.com/Sovgrid/sovereign-fleet/blob/main/docs/HARNESS_PLUGINS.md)
-[![MCP](https://img.shields.io/badge/MCP-14%20tools-f59e0b?style=flat-square)](#api-and-mcp)
+[![MCP](https://img.shields.io/badge/MCP-17%20tools-f59e0b?style=flat-square)](#api-and-mcp)
 [![Goose Recipes](https://img.shields.io/badge/Goose%20recipes-3-06b6d4?style=flat-square)](https://github.com/Sovgrid/sovereign-fleet/blob/main/docs/EVALS_AND_BENCHMARKS.md)
 [![CI](https://github.com/Sovgrid/sovereign-fleet/actions/workflows/ci.yml/badge.svg)](https://github.com/Sovgrid/sovereign-fleet/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-64748b?style=flat-square)](https://github.com/Sovgrid/sovereign-fleet/blob/main/LICENSE)
@@ -38,7 +38,7 @@ Sovereign Fleet runs coding-agent CLIs (**Goose**, **Claude Code**, **OpenCode**
 - **Decoupled `(Harness × Model)` Router with Quota Windows:** Routes across local model servers (vLLM, SGLang, Ollama), free cloud tiers, and subscription CLIs alike. Thompson sampling ranks compatible `(harness, model)` pairs by cost-weighted minutes per correct result (`bakeoff_priors.json`), automatically rests rate-limited lanes until their quota reset, and replaces retired models with probed same-family successors.
 - **Spend Quota Deliberately (Budgets):** Local models, free tiers, your own subscriptions and paid-per-use providers each get a policy (`normal`, `reserve`, `manual`) with sensible defaults; the coordinator's own subscription stays in reserve, and a coordinator agent can tighten a policy over MCP but never loosen one. A weekly ledger shows the tokens your agents used and what they would have cost at a reference model's API list prices.
 - **Verify Before Claim (Sandboxed Quality Gates):** An agent's report is a claim, not proof. Every run must pass scope checks (`allowed_paths` + companion tests), AST syntax checks, the repository's own gate (`scripts/verify.sh` or `pytest`), and the task gate inside a credential-free sandbox before merging or opening a PR.
-- **Steer from Anywhere:** Dispatch and approve tasks from the installable mobile Web PWA (`/#token=...`), from coordinator agents via the 15-tool **MCP server**, by replying `!fleet approve <id>` in **Matrix**, or by labelling **GitHub / Gitea issues** with a ```` ```fleet ```` contract block.
+- **Steer from Anywhere:** Dispatch and approve tasks from the installable mobile Web PWA (`/` redirects to `/static/app/`, legacy dashboard at `/classic`; `/#token=...`), from coordinator agents via the 17-tool **MCP server** (including 11-tool `--mode front_door` and read-only MCP Apps cards), receive title-only "needs you" alerts via **ntfy**, **Matrix**, or one-way NIP-17 **Nostr DM** (off by default, pinned anchor recipient only), reply `!fleet approve <id>` in **Matrix**, or label **GitHub / Gitea issues** with a ```` ```fleet ```` contract block.
 
 ### In our own use
 
@@ -66,7 +66,7 @@ Status: **beta**: we run it every day; config can still change between minor rel
 | **Receipts, Autopsies & Review** | Every finished task writes an atomic JSON receipt in `<spool>/receipts/<task_id>.json` (`GET /api/fleet/tasks/{id}/receipt`, `fleet_get_task_receipt`). Failed tasks receive a deterministic autopsy (`root_cause`, `blocker_file`, `suggested_action`). When `auto_review` is enabled in runtime settings, landed feature tasks trigger a cross-lane review report (`reviews/<project>/<task_id>.md`) and an auto-fix task on critical/high findings. |
 | **Unattended harnesses & Conformance** | The CLIs run without asking: Claude Code with `--permission-mode acceptEdits`, OpenCode with `--auto`, Aider with `--yes-always`, Pi with `--tools read,edit,write`, the Antigravity CLI (`agy`) with `-p --dangerously-skip-permissions`, the Cursor CLI (binary `agent`) with `-p --trust --force --model <id>`, goose with `--no-session --no-profile --with-builtin developer --max-turns 80 --max-tool-repetitions 5` (its own tool set and stop rules, not your profile; retried once when it crashes at start). `fleet harnesses list` and `fleet harnesses test <name>` check the binary, Landlock enforcement and process-group timeout and cancel cleanup ([docs/HARNESS_PLUGINS.md](https://github.com/Sovgrid/sovereign-fleet/blob/main/docs/HARNESS_PLUGINS.md)). |
 | **Your own subscriptions** | CLIs that log in with your account, not an API key. agy uses its own Google login and model catalog. Claude Code with a lane token (`key_env = "CLAUDE_CODE_OAUTH_TOKEN"`, one year, from `claude setup-token`) runs in its own config directory under the fleet root, so an agent never sees your `~/.claude`. Cursor gets a user key in `CURSOR_API_KEY`, because its keyring login cannot refresh inside the sandbox; a free plan runs only `auto`, and the log names the model Cursor picked. A used-up window rests the lane until its reset. |
-| **Router (Lanes & Harness × Model Pairs)** | Supports both named lanes (`[lanes.<name>]`) and decoupled `(harness, model)` pairs (`[models.<name>]` + `HarnessPlugin`). Compatibility is computed from declared capabilities; Thompson sampling ranks pairs by cost-weighted minutes per correct result (seeded from `routing.priors_file` or `bakeoff_priors.json`), while named lanes rank by measured pass rate per task category over cost; a failed attempt hands the same worktree to the next choice with one repair pass. Sensitive tasks (`is_sensitive`) stay strictly on private sovereign endpoints, and so do their reviews and auto-fixes; the grid backend refuses a sensitive task without `metadata.intent` or on a lane fleet.toml does not call private. A provider limit rests the lane (120 s, or until midnight US/Pacific for a daily quota); `max_parallel` keeps a full lane behind lanes with room; a local lane runs only while its model server answers and can load its model on demand. `fleet router shadow` replays a grid runner's history against its dispatcher; each pick is logged to `<root>/router_decisions.jsonl`. |
+| **Router (Lanes & Harness × Model Pairs)** | Supports both named lanes (`[lanes.<name>]`) and decoupled `(harness, model)` pairs (`[models.<name>]` + `HarnessPlugin`). Compatibility is computed from declared capabilities; Thompson sampling ranks pairs by cost-weighted minutes per correct result (seeded from `routing.priors_file` or `bakeoff_priors.json`), while named lanes rank by measured pass rate per task category over cost; a failed attempt hands the same worktree to the next choice with one repair pass. Local routing honours `intent.allowed_lanes` across initial pick, repair, and escalation, and tasks may set `metadata.on_limit` (`switch`, `wait`, `wait_then_switch` with `metadata.wait_hours`) to wait on quota limits instead of failing over. Sensitive tasks (`is_sensitive`) stay strictly on private sovereign endpoints, and so do their reviews and auto-fixes; the grid backend refuses a sensitive task without `metadata.intent` or on a lane fleet.toml does not call private. A provider limit rests the lane (120 s, or until midnight US/Pacific for a daily quota); `max_parallel` keeps a full lane behind lanes with room; a local lane runs only while its model server answers and can load its model on demand. `fleet router shadow` replays a grid runner's history against its dispatcher; each pick is logged to `<root>/router_decisions.jsonl`. |
 | **Budgets** | How much of each provider's quota the fleet may use, set per provider in Settings > Budgets, grouped by what it costs you (on this machine, subscriptions, free tiers and free plans, paid per use): `normal` (ranked by measured quality), `reserve` (only after every normal lane) or `manual` (never picked automatically, in lane and pair routing alike; a lane or model you name still runs, within its usual limits). Defaults are derived, never stored: paid per use is `manual`, a subscription is `normal` unless it is the coordinator's own (`reserve`, so the coordinator keeps its quota), free and local are `normal`. A paid `[models]` endpoint no lane uses is `manual` too; Budgets lists only the providers of lanes, so loosen that one with `budget_policies` in settings.json. Only your deviations are stored, each with who, when and why. A coordinator can tighten a policy over MCP (`fleet_tighten_budget`) but never loosen one. |
 | **Usage ledger** | Every agent run's tokens, read from the CLI's own output: OpenCode (`--format json`), goose (`--output-format stream-json`), Aider and the Cursor CLI; the JSON is turned back into readable text for the log and the loop check. Claude Code, Pi and agy are not measured yet. Each task keeps its runs (`usage_runs`: lane, harness, time, tokens) and their sum (`usage`). The ledger adds up the last seven days: tokens per cost class, tokens of failed attempts, what you paid (the cost a provider reports, else the tokens at the catalog price of the run's own model; paid tokens with neither are named as having no price, `paid_unpriced_tokens`, instead of reading as free), and a list-price range at a reference model's API prices from the models.dev catalog (the low end prices input of runs without cache reads, such as a local vLLM, at the cache-read price). A run killed for a stall, a loop, the timeout or memory keeps what it reported, a retry keeps its earlier runs, archiving keeps a task in the week, and cancelled tasks or tasks waiting on a PR count once an agent ran. Not counted yet: the run a cancel ends, and a task's runs after a rejection. Set the reference as `ledger_reference` in settings.json or `[ledger] reference` in fleet.toml (settings win); see it with `fleet ledger`, `GET /api/fleet/ledger`, the MCP tool `fleet_get_ledger` or the line at the top of Settings > Budgets. |
 | **Lane health** | `fleet lanes check`, and daily in the daemon (`routing.health_hour`): one tiny request per API lane with its real key, `probe_url` for local lanes, `opencode models` for opencode lanes. A dead lane (key rejected, credit used up) leaves the ranking until a check passes. A retired model (HTTP 410, or gone from the provider's list and deprecated on [models.dev](https://models.dev)) is replaced by the newest same-family successor that passes the probe; without one the lane stays out. New free models no lane uses are listed, and with `routing.discover` become lanes. The dashboard and the MCP tools `fleet_system_health` and `fleet_lane_health` show why and since when. |
@@ -74,7 +74,7 @@ Status: **beta**: we run it every day; config can still change between minor rel
 | **Goose Recipes & Evals** | Goose recipes (recipe format `1.0.0`) in `recipes/*/recipe.yaml` (`fleet-ab-proposal-eval/recipe.yaml`, `fleet-self-improvement/recipe.yaml`, `fleet-bench-runner/recipe.yaml`) for deterministic A/B proposal evaluation, self-improvement loops, and benchmark execution. Loaded on demand via `goose run --recipe` with zero context overhead on regular tasks ([docs/EVALS_AND_BENCHMARKS.md](https://github.com/Sovgrid/sovereign-fleet/blob/main/docs/EVALS_AND_BENCHMARKS.md)). |
 | **Model roster** | The lanes of your fleet.toml, nothing built in (models, prices and free tiers change faster than releases). For each lane: switched off in the dashboard (the router then skips it too), dead or retired at the last health check, resting after a provider limit, CLI missing, local model not loaded, key missing, or online. Keys are only checked for presence. |
 | **Provider keys** | Per lane `key_env` + `key_file` (or a credential plugin): the key goes into that CLI run's environment only. A `CredentialPlugin` (`[plugins] credentials`) can supply keys from a vault or a key manager; the package ships none. |
-| **Dashboard & Mobile** | Three tabs, the essentials first and the rest one tap away. Tasks: a prompt with Dispatch (a project field where the backend needs one; templates, harness and model, and dependencies under Options; a pair that cannot run is greyed out with its reason, a refused dispatch says why), a strip only when tasks wait for approval or failed, open work by default, each task with its status, lane and source issue. Each view has an order that fits it (Open: running, approvals, then the queue in run order; Failed and Done: newest end time first, cards show when a task ended); a Sort menu next to the search switches to newest, oldest or by lane and is remembered per view; new tasks never move the list while you scroll (a "N new tasks" pill instead); 50 cards, then "Show 50 more". A held task shows the model's risk rating when `[approval]` is set. Help has a "Working with tasks" section. Agents: each model once with the harnesses that can run it and the router's pass rate per pair (tap one to dispatch with it), which harnesses are ready, the grid runner's lanes that fleet.toml does not describe folded away, and the lane health in one line. Settings in the order you set them up: the coordinator, Budgets (pick a policy, then that row's Save), then autonomy and groups that open on demand (limits, quality gates, keys and sandbox) with Save at the end, then issue sources. Text is at least 11 px with WCAG AA contrast. Sign-in by link (`/#token=...`), installable PWA that loads changes on the next open. |
+| **Dashboard & Mobile** | The slim mobile-first shell at `/static/app/` is now the start page (`/` returns a `307` redirect so `#token=` fragments and `#/t/<task_id>` deep links survive, while the legacy dashboard stays available at `/classic` from About). It shows Home, Tasks (with structured approval briefs on held tasks), Task detail (tries, landing, files, test output, receipt, drafts), Schedule (operator-approved routines with `review_id` binding), Providers & Models, Ledger, Plugins, Access (scoped tokens shown once), Connect phone (Amber pairing + `kind 4919` "Send a test approval"), and Notifications (optional title-only **ntfy**, **Matrix**, and one-way NIP-17 **Nostr DM** alerts to the pinned key over operator relays). Live updates arrive over SSE (`/api/v1/events`) with polite `5 s` / `60 s` fallback polling; untrusted text is rendered strictly via `textContent`, file-based prompt templates come from `/api/fleet/templates`, and text stays >= 11 px with WCAG AA contrast. Sign-in via one-tap link (`/#token=...`) exchanges the token for the HttpOnly session cookie. |
 | **Cancel** | Local backend: marks the task cancelled; cancels the asyncio task so the agent's and the gates' process groups are killed; keeps the work on the `fleet/<id>` branch. Grid backend: the runner stops the agent. |
 
 ## Security model
@@ -86,10 +86,14 @@ what it can reach instead of trusting it.
 - **Sandbox, enforced by the kernel.** Each CLI starts through `python -m fleet.core.sandbox`,
   which restricts itself and then execs the CLI. The restriction is inherited by every child and
   cannot be lifted:
-  - Landlock filesystem rules: the task's worktree, the CLI's own state dirs (its login,
-    sessions) and `~/.cache` / `~/.npm` are writable. System dirs, tool dirs (`~/.nvm`,
+  - Landlock filesystem rules: the task's worktree, a fresh home of the fleet's own for this run
+    (`HOME` and the XDG dirs point there; the harness seeds it with what the CLI needs, such as a
+    login file or a config without MCP servers, and it is deleted after the run) and the fleet's
+    cache (`<fleet root>/homes/cache`) are writable. System dirs, tool dirs (`~/.nvm`,
     `~/.local/bin`, ...) and the repository's git data are read-only. Everything else, such as
-    `~/.ssh`, other credentials and the rest of your home, cannot be opened.
+    `~/.ssh`, other credentials and the rest of your home, cannot be opened. Nothing in your home
+    is writable, so a run cannot plant a config, hook, extension or cached package that your own
+    tools would later run outside the sandbox. Gates run the same way.
   - Landlock TCP rule: outgoing connections only to ports 443, 80, 53 and `FLEET_SANDBOX_PORTS`
     (for local model servers). A port is not a host, so with `[sandbox] egress = "allowlist"` each
     agent run gets its own egress proxy instead: the agent may connect only to that proxy and the
@@ -122,15 +126,58 @@ what it can reach instead of trusting it.
   an HMAC of the token, never the token itself; cookie requests must come from the same origin).
   The token is `FLEET_API_TOKEN`, or the file `~/.config/sovereign-fleet/api_token`, created with
   mode 0600 on first start.
+- **Each client gets only the rights it needs.** `fleet token create openclaw --scope propose` makes a
+  named token for one client (shown once, stored hashed, revocable with `fleet token revoke`):
+  `read` sees, `propose` may queue tasks that always wait for you, and `operate` may also approve,
+  cancel and retry. Settings, budgets, keys and the signer stay with the daemon's own token and the
+  dashboard. Give front doors (chat bridges, agents in other apps) a `propose` token as their
+  `FLEET_API_TOKEN`.
 - **Loopback by default.** `fleet daemon` binds `127.0.0.1`. To reach it from your phone, bind
   your VPN address (for example a Tailscale IP) with a TLS certificate, never `0.0.0.0` on an
   untrusted network.
+
+### Privateer: capabilities for tasks beyond code
+
+**Sovereign Fleet** is the application; **Privateer** is its feature for work beyond code (what other tools call a "bot"): *"Send them out. Make them prove it. Sign what counts."* A privateer sailed with a written, limited commission from its sovereign, a *letter of marque*, and had to prove before a *prize court* that everything it brought home had happened within that commission. Sovereign Fleet does the same for an agent: a task is commissioned with explicit capabilities (`[capabilities.<name>]` in `fleet.toml`, `capabilities` and `allowed_domains` in the task intent), the third-party stdio MCP server is confined in its own kernel sandbox behind a tool gate, and the result is checked against logs the agent cannot write. In one sentence: *a Privateer sails with a letter of marque: confined by the kernel, checked at the gate, signed on return.*
+
+- **Sandboxed server (`core/capability.py`):** the MCP server runs in its own Landlock sandbox with an empty scratch
+  directory as `$HOME`/`$TMPDIR` (no worktree, no credentials), strict TCP/netlink sockets, and a
+  systemd `MemoryMax` ceiling; `sweep()` cleans leftover process groups at daemon start.
+- **Task egress allowlist:** with `network = true`, its own proxy allows only the task's
+  `allowed_domains` (not fleet defaults) and logs attempts to `<root>/egress/<task>.<cap>.jsonl`.
+- **Tool gate (`core/toolgate.py`) & evidence check (`core/evidence.py`):** default deny per tool, `"allow"` / `"ask"` / `"deny"` rules, call budgets (`max_calls`,
+  `max_calls_per_tool`), `max_drafts`, draft deduplication, result truncation, URL scheme checks,
+  tool-list `pin` / `manifest_sha256` checks, effect annotations (`effects`), a built-in read-only
+  `fetch` capability, and a hash-chained log at `<root>/toolcalls/<task>.<cap>.jsonl` (storing argument/result SHA-256 hashes
+  and byte sizes, not response bodies). If the capability fails to start, the run is refused
+  (`exit 125`). `check_evidence` is wired into `core/engine.py` for tasks with `evidence_recipe` and
+  verifies route and JSON schema/shape against the explicit call and egress logs, not verbatim value
+  presence in fetched pages. Egress proxies create their audit log on startup, so a run with no request
+  leaves an empty log; a proxy that cannot write its log does not start, and a request that cannot be
+  logged is refused.
+- **Phone signing (`kind 4910`), Privateer identities & signed receipts (`kind 4911` / `4912`):** `"ask"` drafts
+  require a Schnorr-verified `kind 4910` Nostr approval over the exact tool name and arguments digest from the
+  operator's paired phone signer (`fleet signer pair`), verified against a root-owned trust anchor
+  (`[nostr] signer_anchor`, pinned with `sudo fleet signer pin <fingerprint>`). Named Privateer identities
+  (`fleet privateer new|list|show|revoke`, nsec stored outside sandboxes) accept tasks only under a
+  signed `kind 4911` commission (`capabilities`, `allowed_domains` — empty fails closed as offline, expiry, cumulative per-task call `budget`) and return
+  Schnorr-signed `kind 4912` receipts (`verify_receipt_signature`). See [docs/NOSTR.md](docs/NOSTR.md).
+- **Scheduled Routines (`core/routines.py`, `/api/fleet/routines`, `fleet routine`):** persistent
+  `cron` and interval schedules stored under `<fleet.root>/routines/routines.json` (`flock`, atomic
+  writes, survive daemon restarts). New routines and edits to active routines wait in `awaiting_approval`
+  / `pending_change` with before/after diff and upcoming-run replay until the operator approves.
+  Each routine defines `max_lateness_seconds`: in-window runs dispatch normal Fleet tasks (with gates
+  and receipts), while runs missed past `max_lateness` are recorded as `missed` and surfaced automatically
+  in the next dispatched run's prompt and metadata. Supports pause, resume, delete, and on-demand `run`.
+- **Current limits & planned Privateer parts:** only `goose` and `claude-code`
+  attach capabilities today; remote HTTP capability servers are not supported; capability resources and prompts are
+  not forwarded to agents; in `sandbox.egress = "ports"` mode UDP is not filtered for the agent.
 
 ## System requirements
 
 - **Operating System:** Linux only (kernel >= 6.12 with Landlock ABI 6 for fail-closed filesystem and network isolation).
 - **Python:** >= 3.11.
-- **Prerequisites:** `git` and at least one agent CLI on `$PATH` (`claude`, `opencode`, `goose`, `pi`, `aider`, `agy` or Cursor's `agent`).
+- **Prerequisites:** `git` and at least one agent CLI on `$PATH` (`claude`, `opencode`, `goose`, `pi`, `aider`, `agy` or Cursor's `agent`); optionally `nak` and `qrencode` for Nostr intake and NIP-46 QR pairing.
 - See the [Installation guide](https://github.com/Sovgrid/sovereign-fleet/blob/main/docs/INSTALL.md) for full setup instructions and kernel verification.
 
 ## Quick start
@@ -140,7 +187,7 @@ See the [Installation guide](https://github.com/Sovgrid/sovereign-fleet/blob/mai
 ```bash
 git clone <this repository> sovereign-fleet && cd sovereign-fleet
 pip install -e ".[dev]"            # Python 3.11+
-pytest                             # about 800 tests; the sandbox tests need Landlock ABI 6
+pytest                             # ~1,400+ tests; the sandbox tests need Landlock ABI 6
 
 fleet daemon                       # http://127.0.0.1:8444, prints where the API token is
 ```
@@ -223,6 +270,7 @@ fleet config check     # repos exist, TLS files readable, token file private, no
 | `[lanes.<name>]` | a lane: `cost`, `private`, `categories`, `provider`, `key_env`, `key_file`, `max_parallel`, `probe_url`, `switch_to`, `steps` (harness, model, args) |
 | `[models.<name>]` | reusable model endpoint: `provider`, `model_id`, `base_url`, `key_env`, `key_file`, `cost`, `private`, `probe_url`, `context`, `tool_calling`, `reasoning`, `harnesses` |
 | `[harnesses.<name>]` | per-harness overrides: `binary`, `args`, `env`, `state_paths`, `options` |
+| `[capabilities.<name>]` | confined stdio MCP server for a task: `command`, `read_only`, `env`, `network`, `rules`, `max_calls`, `max_calls_per_tool`, `call_timeout`, `start_timeout`, `max_result_bytes`, `max_parallel_calls`, `max_restarts`, `memory_max`, `pin`, `allowed_url_schemes`, `hash_only_args` |
 | `[projects.<name>]` | `path`, `aliases`, `default_branch`, `gate`, `landing`, `remote`, `provider`, `backend`, `private` (every task is sensitive: private lanes only, also after a failure); `fleet run --project <name>` uses them |
 | `[projects.<name>.intake]` | `enabled`, `provider`, `repo`, `label`, `authors`, `interval_min` |
 
@@ -336,9 +384,17 @@ All routes except `/`, `/health`, `/manifest.json`, `/sw.js` and `/static/*` nee
 
 | Route | What it does |
 | :--- | :--- |
-| `GET/POST /api/fleet/tasks`, `DELETE /api/fleet/tasks?status=` | List, queue, purge; each task has `source` and, from an issue, `issue` (`repo`, `number`, `url`) |
+| `GET/POST /api/fleet/tasks`, `DELETE /api/fleet/tasks?status=` | List, queue, purge; each task has `source` and, from an issue, `issue` (`repo`, `number`, `url`); a queue request may carry `idempotency_key` (or `Idempotency-Key`): a retry with the same key and request returns the first task, a different request with that key gets 422 |
 | `GET /api/fleet/tasks/{id}`, `GET /api/fleet/tasks/{id}/receipt` | One task, or its structured execution receipt |
 | `POST /api/fleet/tasks/{id}/approve`, `reject`, `cancel`, `retry`, `delegate-local`, `archive`, `unarchive` | Lifecycle; invalid transitions answer 400 |
+| `GET /api/fleet/drafts`, `GET /api/fleet/tasks/{id}/drafts`, `POST /api/fleet/tasks/{id}/drafts/{seq}/approve\|reject` | Pending and task-scoped `"ask"` capability drafts (approve returns `202` awaiting `kind 4910` signature) |
+| `GET/POST /api/fleet/signer`, `POST .../pair\|bunker\|test`, `GET .../test/{req_id}`, `DELETE /api/fleet/signer`, `WS /nip46` | Paired NIP-46 operator signer state, built-in memory-only `/nip46` WebSocket relay, QR/bunker pairing, `kind 4919` phone signer test |
+| `GET/POST /api/fleet/notify`, `POST /api/fleet/notify/test` | "Needs you" title-only notifications (ntfy, Matrix, and one-way NIP-17 Nostr DM to the pinned key), settings and test trigger (admin) |
+| `GET/POST/DELETE /api/fleet/tokens`, `/api/fleet/tokens/{id}` | Scoped API tokens (`read`, `propose`, `operate`, `admin`), stored hashed, secret shown once at creation (admin) |
+| `GET /api/v1/events` | Append-only event stream (`sse` with `Last-Event-ID` / `?since=` resume, max 4 streams per token/session, or `?format=json`) |
+| `GET /api/fleet/templates`, `GET /api/fleet/plugins` | File-based prompt templates (built-in, global, project) and registered plugin inventory |
+| `GET/POST /api/fleet/privateers`, `GET /api/fleet/privateers/{name}`, `POST .../commission`, `DELETE /api/fleet/privateers/{name}` | Named Privateer identities, `kind 4911` commissions, revocation |
+| `GET/POST /api/fleet/routines`, `GET/PUT/DELETE /api/fleet/routines/{id}`, `POST .../approve\|reject\|pause\|resume\|run` | Persistent `cron`/interval routines, `pending_change` diff + replay, operator approvals, on-demand triggers. `approve` and `reject` take `{"review_id": ...}` from the `GET` the operator reviewed; a change proposed after that is refused, not applied unseen (`fleet routine approve <id>` shows the version and its `--review-id`) |
 | `POST /api/fleet/tasks/archive-completed` | Archive all completed |
 | `GET/POST /api/fleet/settings`, `POST /api/fleet/settings/reset` | Validated, persisted settings (budget policies change only through the budget routes; reset keeps them) |
 | `GET /api/fleet/budgets`, `PUT/DELETE /api/fleet/budgets/{provider}` | Per provider: policy, recommended default and why, lanes, this week's measured tasks, resting state, last change; set a policy either way, or back to the default |
@@ -380,14 +436,18 @@ extensions:
     timeout: 300
 ```
 
+For untrusted or front-door assistants (**OpenClaw**, **Goose**, chat bridges) that should only hand off work and read status without approval/cancel/retry/budget rights, add `["-m", "fleet.api.mcp_server", "--mode", "front_door"]` (or `FLEET_MCP_MODE=front_door`): this restricts `tools/list` and `tools/call` to the **11** front-door tools (`fleet_dispatch_task`, `fleet_list_tasks`, `fleet_get_task_status`, `fleet_get_task_receipt`, `fleet_system_health`, `fleet_lane_health` (read-only), `fleet_issue_intake` (read-only), `fleet_get_budgets`, `fleet_get_ledger`, `fleet_show_task`, and `fleet_show_approval`), refusing `approve`/`reject`/`cancel`/`retry`/`clear`/`tighten`/`probe`/`sync` at the server. Every task queued via `front_door` stays in `awaiting_approval`, and its `intent` is restricted to `project`, `title`, `acceptance_criteria`, `allowed_paths`, `gate_cmd`, and `category`.
+
+The MCP server also exposes file-based prompt templates as MCP Prompts (`prompts/list`, `prompts/get`) and two read-only SEP-1865 MCP Apps cards (`ui://fleet/task-card`, `ui://fleet/approval-card`, mimeType `text/html;profile=mcp-app`) via `fleet_show_task` and `fleet_show_approval` (rendered live in Goose Desktop `1.46.0` as read-and-route cards linking to `<base>/static/app/#/t/<task_id>` with zero approve/reject controls).
+
 It reads the token like the daemon does (`FLEET_API_TOKEN` or the token file). Over `https` a host name
 gets full certificate verification; a daemon reached by IP address (its certificate names a host, not
 the IP) is pinned to exactly the daemon's own certificate, from `FLEET_TLS_CERT` or `daemon.tls_cert`,
-and refused without one. `FLEET_INSECURE_SKIP_VERIFY=1` switches the check off. Tools:
+and refused without one. `FLEET_INSECURE_SKIP_VERIFY=1` switches the check off. Tools (all **17** in `full` mode):
 
 | Tool | What it does |
 | :--- | :--- |
-| `fleet_dispatch_task` | Queue a task; with an `intent` (project, title, acceptance criteria, allowed paths, gate) it runs with a contract; says when it waits for approval |
+| `fleet_dispatch_task` | Queue a task (with automatic `idempotency_key` and retries); with an `intent` (project, title, acceptance criteria, allowed paths, gate) it runs with a contract; says when it waits for approval |
 | `fleet_list_tasks` | Open work by default (or any status), newest first, with the source issue |
 | `fleet_get_task_status`, `fleet_get_task_receipt` | One task (lanes tried, commit, pull request or branch, issue, why it failed, changed files, log tail) or its structured JSON receipt |
 | `fleet_approve_task`, `fleet_reject_task`, `fleet_cancel_task`, `fleet_retry_task` | Act on a task |
@@ -398,6 +458,7 @@ and refused without one. `FLEET_INSECURE_SKIP_VERIFY=1` switches the check off. 
 | `fleet_get_budgets` | Per provider: budget policy, the recommended default and this week's tasks |
 | `fleet_tighten_budget` | Make a provider's budget policy stricter (loosening only in the dashboard) |
 | `fleet_get_ledger` | This week's tokens and what they would have cost at the reference model's API list prices |
+| `fleet_show_task`, `fleet_show_approval` | Show one task or approval brief as a read-only MCP App card (`ui://fleet/task-card`, `ui://fleet/approval-card`) |
 
 Errors come back as tool errors (`isError`) with the daemon's reason.
 
@@ -425,7 +486,9 @@ class MyAgentHarness(CliHarness):
     name = "my-agent"
     binary = "my-agent"                       # looked up in PATH
     description = "My agent CLI"
-    state_paths = (Path.home() / ".config/my-agent",)   # the only extra place it may write
+    # It runs in a fresh home of the fleet's own; seed_home copies in what it needs.
+    def seed_home(self, home: Path) -> None:
+        ...
 
     def build_command(self, prompt: str) -> list[str]:
         return [self.binary, "--prompt", prompt]
@@ -486,6 +549,7 @@ Next, each behind a measurement:
 2. Memory limits in more places: a cgroup v2 backend for daemons that own a delegated cgroup (containers running as root), next to the systemd scope and the process-group watchdog.
 3. More harnesses through the conformance kit and a bake-off before they get lanes: DeepSeek Harness (`dsh`) and mini-swe-agent.
 4. Public harness evaluation: run open harness benchmark tasks on local models and publish the numbers next to the bake-off.
+5. Privateer (tasks beyond code): `core/evidence.py` is wired into the engine, `"ask"` drafts use phone-signed `kind 4910` approvals with a root-owned trust anchor, Privateer identities issue `kind 4911` commissions and `kind 4912` signed receipts, and `core/routines.py` handles operator-approved persistent schedules with `max_lateness` catch-up and missed-run reporting.
 
 ## Development
 

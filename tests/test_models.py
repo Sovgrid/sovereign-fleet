@@ -2,6 +2,7 @@
 
 import json
 import tomllib
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 import pytest
@@ -9,7 +10,7 @@ from httpx import ASGITransport, AsyncClient
 
 from fleet.api.app import app
 from fleet.api.cli import main
-from fleet.core.config import FleetConfig, ModelEndpoint
+from fleet.core.config import FleetConfig, LaneSpec, LaneStep, ModelEndpoint
 from fleet.core.engine import FleetEngine
 from fleet.core.models import (
     compatible_harnesses_for_model,
@@ -331,3 +332,86 @@ async def test_api_models_endpoint(monkeypatch):
         claude_compat = models_by_name["claude"]["compatibility"]
         assert claude_compat["claude-code"]["compatible"] is True
         assert claude_compat["goose"]["compatible"] is False
+
+
+@pytest.mark.asyncio
+async def test_run_lane_passes_local_endpoint_to_goose_and_pi(tmp_path):
+    url = "http://127.0.0.1:30001/v1"
+    lanes = {
+        "local_goose": LaneSpec(
+            cost="local",
+            private=True,
+            probe_url=url,
+            steps=[LaneStep(harness="goose", model="qwen3.6-35b")],
+        ),
+        "local_pi": LaneSpec(
+            cost="local",
+            private=True,
+            probe_url=url,
+            steps=[LaneStep(harness="pi", model="qwen3.6-35b")],
+        ),
+        "local_aider": LaneSpec(
+            cost="local",
+            private=True,
+            probe_url=url,
+            steps=[LaneStep(harness="aider", model="openai/qwen3.6-35b")],
+        ),
+        "local_opencode": LaneSpec(
+            cost="local",
+            private=True,
+            probe_url=url,
+            steps=[LaneStep(harness="opencode", model="local-qwen/qwen3.6-35b")],
+        ),
+    }
+    models = {
+        "qwen": ModelEndpoint(
+            provider="vllm_local",
+            base_url=url,
+            model_id="qwen3.6-35b",
+            cost="local",
+            private=True,
+            probe_url=url,
+            context=65536,
+        )
+    }
+    engine = FleetEngine(repo_path=str(tmp_path), task_store=TaskStore(), lanes=lanes, models=models)
+    for cls in (GooseHarness, PiHarness, AiderHarness, OpenCodeHarness):
+        h = cls()
+        h.execute_task = AsyncMock(return_value={"exit_code": 0})
+        engine.register_harness(h)
+    engine.worktree_mgr.has_work = AsyncMock(return_value=True)
+
+    task = FleetTask(id="task-local-ep", text="Check local endpoint", status="queued")
+
+    await engine._run_lane("local_goose", "hi", Path(tmp_path), task)
+    goose_kw = engine.harnesses["goose"].execute_task.call_args.kwargs
+    assert goose_kw["model"] == ""
+    goose_ep = goose_kw["endpoint"]
+    assert goose_ep.base_url == url
+    assert goose_ep.model_id == "qwen3.6-35b"
+    assert goose_ep.context == 65536
+    adapted_goose = GooseHarness().adapt_model(goose_ep)
+    assert adapted_goose.env["GOOSE_PROVIDER"] == "openai"
+    assert adapted_goose.env["GOOSE_MODEL"] == "qwen3.6-35b"
+    assert adapted_goose.env["OPENAI_HOST"] == "http://127.0.0.1:30001"
+    assert adapted_goose.env["OPENAI_BASE_PATH"] == "v1/chat/completions"
+    assert adapted_goose.env["GOOSE_CONTEXT_LIMIT"] == "65536"
+
+    await engine._run_lane("local_pi", "hi", Path(tmp_path), task)
+    pi_kw = engine.harnesses["pi"].execute_task.call_args.kwargs
+    assert pi_kw["model"] == ""
+    pi_ep = pi_kw["endpoint"]
+    assert pi_ep.base_url == url
+    assert pi_ep.model_id == "qwen3.6-35b"
+    assert PiHarness().adapt_model(pi_ep).args == ["--provider", "fleet", "--model", "qwen3.6-35b"]
+    assert "--model" not in PiHarness().build_command("hi", "")
+
+    await engine._run_lane("local_aider", "hi", Path(tmp_path), task)
+    aider_kw = engine.harnesses["aider"].execute_task.call_args.kwargs
+    assert "endpoint" not in aider_kw
+    assert aider_kw["model"] == "openai/qwen3.6-35b"
+
+    await engine._run_lane("local_opencode", "hi", Path(tmp_path), task)
+    oc_kw = engine.harnesses["opencode"].execute_task.call_args.kwargs
+    assert "endpoint" not in oc_kw
+    assert oc_kw["model"] == "local-qwen/qwen3.6-35b"

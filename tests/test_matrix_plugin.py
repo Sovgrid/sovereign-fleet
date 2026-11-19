@@ -267,3 +267,93 @@ def test_the_daemon_passes_the_list_on():
     source = (Path(__file__).parents[1] / "src/fleet/api/background.py").read_text(encoding="utf-8")
     assert "allowed_senders=" in source
 
+
+@pytest.mark.asyncio
+async def test_g11_step1_matrix_refuses_task_approve_with_pending_drafts(tmp_path):
+    """G11 step 1: Matrix '!fleet approve <id>' must refuse tasks that have pending capability drafts."""
+    store = TaskStore(spool_dir=str(tmp_path / "spool"))
+    store.enqueue(
+        FleetTask(
+            id="t-draft-mx",
+            text="Send update",
+            status="awaiting_approval",
+            metadata={"pending_drafts": [{"seq": 1, "capability": "mail", "tool": "send", "arguments": {"to": "a@b.c"}}]},
+        )
+    )
+    plugin = MatrixOutputPlugin(room_id="!r:m.org", token="tok", allowed_senders=[OPERATOR])
+    with patch.object(plugin, "post_message", new_callable=AsyncMock):
+        resp = await plugin.handle_command("!fleet approve t-draft-mx", store, sender=OPERATOR)
+    assert "[WARN]" in resp
+    assert "one by one in the dashboard" in resp
+    assert store.get_task("t-draft-mx").status == "awaiting_approval"
+
+
+@pytest.mark.asyncio
+async def test_g11_step3_matrix_request_approval_shows_full_draft_arguments():
+    """G11 step 3: Matrix push for awaiting drafts includes full arguments and no !fleet approve."""
+    plugin = MatrixOutputPlugin(room_id="!fleet:matrix.org", token="tok")
+    long_body = "Report summary: " + ("detail-" * 45)
+    args = {"to": "ops@example.com", "subject": "Morning dispatch", "body": long_body}
+    task = {
+        "id": "task-draft-push",
+        "text": "Send morning update",
+        "lane": "local-qwen",
+        "metadata": {
+            "pending_drafts": [
+                {
+                    "seq": 2,
+                    "capability": "mail",
+                    "tool": "send_email",
+                    "arguments": args,
+                    "args_sha256": "abc123",
+                }
+            ]
+        },
+    }
+    with patch.object(plugin, "post_message", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = "$ev_draft"
+        eid = await plugin.request_approval(task, reason="Pending capability draft approval (send_email)")
+    assert eid == "$ev_draft"
+    msg = mock_post.call_args[0][0]
+    assert "[APPROVAL REQUIRED]" in msg
+    assert "Pending draft #2" in msg
+    assert "mail/send_email" in msg
+    assert "ops@example.com" in msg
+    assert long_body in msg
+    assert "!fleet approve" not in msg
+    assert "dashboard" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_g11_f2_matrix_request_approval_masks_visible_and_strips_userinfo():
+    """F2: Matrix push renders redacted secrets visibly as [masked] and strips URL user:pass@."""
+    plugin = MatrixOutputPlugin(room_id="!fleet:matrix.org", token="tok")
+    secret_tok = "sk-" + "a1b2c3d4" * 3
+    task = {
+        "id": "task-draft-redact",
+        "text": "Notify webhook",
+        "lane": "local-qwen",
+        "metadata": {
+            "pending_drafts": [
+                {
+                    "seq": 1,
+                    "capability": "web",
+                    "tool": "post",
+                    "arguments": {
+                        "url": "https://alice@mail:s3cret@example.com/hook",
+                        "header": "Authorization: Bearer tok-secret-999",
+                        "key": secret_tok,
+                    },
+                }
+            ]
+        },
+    }
+    with patch.object(plugin, "post_message", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = "$ev_mask"
+        await plugin.request_approval(task, reason="Pending capability draft approval (post)")
+    msg = mock_post.call_args[0][0]
+    assert "s3cret" not in msg and "alice@mail" not in msg
+    assert "https://example.com/hook" in msg
+    assert "tok-secret-999" not in msg and secret_tok not in msg
+    assert "[masked]" in msg
+

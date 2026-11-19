@@ -66,8 +66,9 @@ def test_scope_prefix_on_when_systemd_run_and_manager_available(monkeypatch):
     _scope_on(monkeypatch)
     expected = ["systemd-run", "--user", "--scope", "--quiet", "--collect",
                 "-p", "MemoryMax=8G", "-p", "MemorySwapMax=0", "--"]
-    assert ml.scope_prefix("8G") == expected
-    assert ml.scope_prefix("128M")[6] == "MemoryMax=128M"
+    got = ml.scope_prefix("8G")
+    assert got[5].startswith("--unit=fleet-o") and got[:5] + got[6:] == expected
+    assert ml.scope_prefix("128M")[7] == "MemoryMax=128M"
     assert ml.scope_prefix("128M")[-3:-1] == ["-p", "MemorySwapMax=0"]
 
 
@@ -167,8 +168,9 @@ async def test_execute_task_puts_memory_prefix_first(monkeypatch, tmp_path):
     monkeypatch.setattr("asyncio.create_subprocess_exec", fake_exec)
     await OpenCodeHarness().execute_task({"text": "Fix the bug"}, "/tmp/wt")
     argv = seen["argv"]
-    prefix = ml.scope_prefix("8G")
-    assert argv[:len(prefix)] == prefix
+    prefix = ml.scope_prefix("8G", kind="agent")
+    assert argv[5].startswith("--unit=fleet-o") and "-agent-" in argv[5]   # random suffix per run
+    assert argv[:5] + argv[6:len(prefix)] == prefix[:5] + prefix[6:]
     assert argv[0] == "systemd-run"
     body = argv[len(prefix):]
     assert body[:3] == [sys.executable, "-m", "fleet.core.sandbox"]
@@ -196,8 +198,9 @@ async def test_run_gate_puts_memory_prefix_first(monkeypatch, tmp_path):
     res = await gates.run_gate("repo", [str(script)], wt, 60)
     assert res.passed, res.excerpt
     argv = seen["argv"]
-    prefix = ml.scope_prefix("8G")
-    assert argv[:len(prefix)] == prefix
+    prefix = ml.scope_prefix("8G", kind="gate")
+    assert argv[5].startswith("--unit=fleet-o") and "-gate-" in argv[5]   # random suffix per run
+    assert argv[:5] + argv[6:len(prefix)] == prefix[:5] + prefix[6:]
     assert argv[0] == "systemd-run"
     body = argv[len(prefix):]
     assert body[:3] == [sys.executable, "-m", "fleet.core.sandbox"]
@@ -236,7 +239,7 @@ def test_memory_limit_kills_a_runaway_child(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_watch_group_kills_over_limit():
-    """A child that allocates 300 MB under a 100M limit is killed within 10 s and
+    """A child that allocates 300 MB under a 100M limit is killed promptly and
     watch_group returns > 100 MB."""
     proc = subprocess.Popen(
         [sys.executable, "-c",
@@ -246,8 +249,8 @@ async def test_watch_group_kills_over_limit():
     )
     try:
         mem_bytes = await asyncio.wait_for(
-            ml.watch_group(proc.pid, 100 * 1024 * 1024, interval=0.5),
-            timeout=10,
+            ml.watch_group(proc.pid, 100 * 1024 * 1024, interval=0.05),
+            timeout=5,
         )
     finally:
         # Ensure process is gone regardless
@@ -261,7 +264,7 @@ async def test_watch_group_kills_over_limit():
 
 @pytest.mark.asyncio
 async def test_watch_group_does_not_kill_under_limit():
-    """A child that allocates 10 MB under a 100M limit is not killed (cancel after 3 s)."""
+    """A child that allocates 10 MB under a 100M limit is not killed across several poll ticks."""
     proc = subprocess.Popen(
         [sys.executable, "-c",
          "a = bytearray(10 * 1024 * 1024); import time; time.sleep(30)"],
@@ -270,9 +273,9 @@ async def test_watch_group_does_not_kill_under_limit():
     )
     try:
         watch = asyncio.create_task(
-            ml.watch_group(proc.pid, 100 * 1024 * 1024, interval=0.5),
+            ml.watch_group(proc.pid, 100 * 1024 * 1024, interval=0.05),
         )
-        await asyncio.sleep(3)
+        await asyncio.sleep(0.35)
         watch.cancel()
         try:
             await watch
@@ -384,3 +387,66 @@ async def test_run_gate_returns_137_when_watchdog_fires(monkeypatch, tmp_path):
     res = await gates.run_gate("repo", [str(script)], wt, 60)
     assert res.exit_code == 137
     assert "memory limit" in res.excerpt
+
+# ── orphan scopes: an agent outlives a crashed daemon in its own scope ────────────────────────
+
+def _fake_proc(tmp_path, pid, starttime):
+    d = tmp_path / str(pid)
+    d.mkdir(parents=True, exist_ok=True)
+    # comm may hold spaces and parentheses; field 22 counts after the last ')'
+    fields = ["S"] + ["0"] * 18 + [str(starttime)] + ["0"] * 30
+    (d / "stat").write_text(f"{pid} (python3 (x) y) " + " ".join(fields) + "\n")
+
+
+def test_scope_unit_names_carry_the_owner_identity(monkeypatch, tmp_path):
+    _scope_on(monkeypatch)
+    _fake_proc(tmp_path, os.getpid(), 4242)
+    monkeypatch.setattr(ml, "_PROC", str(tmp_path))
+    ml._owner_tag.cache_clear()
+    prefix = ml.scope_prefix("8G", kind="agent")
+    unit = [a for a in prefix if a.startswith("--unit=")]
+    assert len(unit) == 1
+    assert unit[0].startswith(f"--unit=fleet-o{os.getpid()}s4242-agent-")
+    assert prefix[-1] == "--"
+    assert ml._starttime(os.getpid(), str(tmp_path)) == "4242"
+
+
+class _Systemctl:
+    def __init__(self, units):
+        self.units, self.calls = units, []
+
+    def __call__(self, argv, **kw):
+        self.calls.append(argv)
+        out = "\n".join(f"{u} loaded active running x" for u in self.units) if "list-units" in argv else ""
+        return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
+
+
+def test_reap_kills_only_scopes_whose_owner_is_verifiably_gone(monkeypatch, tmp_path):
+    _fake_proc(tmp_path, 100, 5000)          # alive owner, same start time: a `fleet run` in a terminal
+    _fake_proc(tmp_path, 200, 9999)          # pid 200 recycled by an unrelated process
+    units = ["fleet-o100s5000-agent-aa11.scope",      # keep
+             "fleet-o200s7000-gate-bb22.scope",       # owner pid reused -> orphan
+             "fleet-o300s1234-cap-cc33.scope",        # owner gone -> orphan
+             "fleet-garbage.scope",                   # not ours in this format -> leave alone
+             "run-r1234.scope"]                       # anything else -> leave alone
+    fake = _Systemctl(units)
+    reaped = ml.reap_orphan_scopes(run=fake, proc=str(tmp_path))
+    assert reaped == ["fleet-o200s7000-gate-bb22.scope", "fleet-o300s1234-cap-cc33.scope"]
+    killed = [c for c in fake.calls if "kill" in c]
+    assert {c[-1] for c in killed} == set(reaped)
+    assert all("--signal=SIGKILL" in c for c in killed)
+    assert not any("fleet-o100s5000-agent-aa11.scope" in c for c in fake.calls if "list-units" not in c)
+
+
+def test_reap_is_quiet_without_systemd(monkeypatch, tmp_path):
+    def broken(argv, **kw):
+        raise FileNotFoundError("systemctl")
+    assert ml.reap_orphan_scopes(run=broken, proc=str(tmp_path)) == []
+
+
+def test_daemon_start_reaps_before_recovery(monkeypatch):
+    """The reap runs in the app lifespan, before background.running() (where recover() requeues)."""
+    import inspect
+    import fleet.api.app as app_module
+    src = inspect.getsource(app_module.lifespan)
+    assert src.index("reap_orphan_scopes") < src.index("background.running")

@@ -11,18 +11,20 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
-import uvicorn
-import uvicorn.config
-
-from fleet.api import app as app_module
-from fleet.api.app import app
 from fleet.core import config as fleet_config
-from fleet.core.engine import FleetEngine
 from fleet.core.settings import load_settings
 from fleet.core.taskstore import FleetTask, TaskStore
-from fleet.plugins.registry import harness_registry, list_harnesses
+
+if TYPE_CHECKING:
+    from fleet.core.engine import FleetEngine
+
+
+def _app_module():
+    """Lazy-import fleet.api.app so root CLI subcommands (signer pin, config check) do not require daemon web deps."""
+    from fleet.api import app as mod
+    return mod
 
 
 class QueryRedactingFilter(logging.Filter):
@@ -42,6 +44,7 @@ def _without_query(text: str) -> str:
 
 def build_log_config() -> dict:
     """uvicorn's logging config with the query filter on the access log."""
+    import uvicorn.config
     log_cfg = copy.deepcopy(uvicorn.config.LOGGING_CONFIG)
     log_cfg.setdefault("filters", {})["no_query"] = {"()": "fleet.api.cli.QueryRedactingFilter"}
     log_cfg["handlers"]["access"].setdefault("filters", []).append("no_query")
@@ -55,6 +58,8 @@ def run_daemon(
     ssl_keyfile: Optional[str] = None,
 ) -> None:
     """Starts the standalone FastAPI control plane and daemon."""
+    import uvicorn
+    from fleet.api.app import app
     from fleet.api.auth import load_token, token_file
 
     load_token()  # create the token file on first start, before any request
@@ -77,8 +82,16 @@ def routing_inputs(cfg, store):
     """Lanes, past attempts (own store + optional grid history) and lanes that cannot run now:
     CLI missing, reported down by the grid status API, or a local model that is not loaded and
     may not be loaded on demand. Quota windows the router reads itself."""
+    lanes, history, unavailable, _hinted = routing_inputs_full(cfg, store)
+    return lanes, history, unavailable
+
+
+def routing_inputs_full(cfg, store):
+    """routing_inputs plus the lanes the grid status alone reports down (lane -> reason): a lane a
+    task names is still tried against that report, which can be stale (2026-11-18: agy lanes stayed
+    "quota used up" for hours after the quota came back, and pinned tasks went to local_qwen)."""
     if not cfg.lanes:
-        return {}, [], []
+        return {}, [], [], {}
     from fleet.core.lane_health import dead_lanes, effective_lanes, fresh_since
     from fleet.core.quirks import non_resident_lanes
     from fleet.core.roster import grid_unavailable_lanes
@@ -91,11 +104,14 @@ def routing_inputs(cfg, store):
     since = fresh_since(cfg)
     history = [a for a in history if a.lane not in since or a.at >= since[a.lane]]
     from fleet.core.roster import RosterManager
-    unavailable = (missing_clis(lanes) | (set(grid_unavailable_lanes()) & set(lanes)) | dead_lanes(cfg)
-                   | (RosterManager(cfg=cfg).disabled & set(lanes)))       # switched off in the dashboard
+    grid = {k: str(v.get("reason") or "reported down by the grid") for k, v in grid_unavailable_lanes().items() if k in lanes}
+    local = (missing_clis(lanes) | dead_lanes(cfg)
+             | (RosterManager(cfg=cfg).disabled & set(lanes)))       # switched off in the dashboard
     if not cfg.routing.switch_local:
-        unavailable |= non_resident_lanes(lanes, ttl=5.0)
-    return lanes, history, sorted(unavailable)
+        local |= non_resident_lanes(lanes, ttl=5.0)
+    unavailable = local | set(grid)
+    hinted = {lane: why for lane, why in grid.items() if lane not in local}
+    return lanes, history, sorted(unavailable), hinted
 
 
 def router_command(args) -> int:
@@ -191,6 +207,9 @@ def lanes_command(args) -> int:
             line += f" [retires {notice['retires']}{', replacement ' + notice['replacement'] if notice.get('replacement') else ''}]"
         elif notice.get("deprecated"):
             line += f" [deprecated in {notice['deprecated']}]"
+        if rec.get("resting_until"):
+            until_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(rec["resting_until"]))
+            line += f" [resting until {until_str}: {rec.get('resting_reason') or 'resting'}]"
         probe = probes.get(name)
         if probe and probe["probe"] in ("transient", "skipped") and probe.get("detail"):
             line += f" [{probe['probe']}: {probe['detail']}]"
@@ -219,9 +238,11 @@ def parse_gate(spec: Optional[str]) -> Optional[dict]:
     return {kind: arg}
 
 
-def _engine(repo: str, store: TaskStore, project=None, timeout: Optional[int] = None) -> FleetEngine:
+def _engine(repo: str, store: TaskStore, project=None, timeout: Optional[int] = None) -> "FleetEngine":
+    from fleet.core.engine import FleetEngine
+    from fleet.plugins.registry import harness_registry
     cfg = fleet_config.load_config()
-    lanes, history, unavailable = routing_inputs(cfg, store)
+    lanes, history, unavailable, hinted = routing_inputs_full(cfg, store)
     effective_timeout = timeout if timeout is not None else load_settings().task_timeout_seconds
     out_plugins = []
     if cfg.matrix.enabled:
@@ -233,7 +254,7 @@ def _engine(repo: str, store: TaskStore, project=None, timeout: Optional[int] = 
         ))
     engine = FleetEngine(repo_path=repo, task_store=store, timeout=effective_timeout,
                          project=project, lanes=lanes, routing=cfg.routing, history=history,
-                         unavailable=unavailable,
+                         unavailable=unavailable, hinted_unavailable=hinted,
                          models=cfg.models or fleet_config.models_from_lanes(lanes),
                          output_plugins=out_plugins)
     for harness in harness_registry(cfg).values():
@@ -250,7 +271,7 @@ async def run_single_cli_task(prompt: str, repo: str, harness: str = "auto",
         timeout: Per-run agent timeout in seconds.  When None the
             setting ``task_timeout_seconds`` applies as usual.
     """
-    store = getattr(app_module, "task_store", None) or TaskStore()
+    store = getattr(_app_module(), "task_store", None) or TaskStore()
     engine = _engine(repo, store, project, timeout=timeout)
     task = FleetTask(
         id=f"cli-task-{int(time.time() * 1000)}-{uuid.uuid4().hex[:6]}",
@@ -289,7 +310,7 @@ async def run_stored_task(task_id: str) -> int:
     """Run one queued task of the local queue (from the dashboard, the API or the issue intake)
     in its project, then report it to its issue if it came from one."""
     cfg = fleet_config.load_config()
-    store = getattr(app_module, "task_store", None) or TaskStore()
+    store = getattr(_app_module(), "task_store", None) or TaskStore()
     task = store.get_task(task_id)
     if task is None:
         if cfg.backend.kind == "grid":
@@ -314,13 +335,13 @@ async def run_stored_task(task_id: str) -> int:
 def _task_backend():
     """Return the configured task backend backed by the active store."""
     from fleet.core.backends import make_backend
-    store = getattr(app_module, "task_store", None) or TaskStore()
+    store = getattr(_app_module(), "task_store", None) or TaskStore()
     return make_backend(store)
 
 
 def _task_summary(t: FleetTask) -> Dict[str, Any]:
     """Compact JSON-serializable summary of a task for `fleet task list --json`."""
-    resp = app_module._response(t)
+    resp = _app_module()._response(t)
     meta = resp.metadata or {}
     intent = meta.get("intent") if isinstance(meta.get("intent"), dict) else {}
     project = meta.get("project") or intent.get("project")
@@ -462,7 +483,7 @@ def task_submit(args) -> int:
         return 1
 
     if getattr(args, "json", False):
-        print(json.dumps(app_module._response(task).model_dump()))
+        print(json.dumps(_app_module()._response(task).model_dump()))
     else:
         print(task.id)
     return 0
@@ -498,7 +519,7 @@ def task_show(args) -> int:
         print(f"error: task {task_id} not found", file=sys.stderr)
         return 2
 
-    info = app_module._response(task).model_dump()
+    info = _app_module()._response(task).model_dump()
     if getattr(args, "json", False):
         print(json.dumps(info, indent=2))
         return 0
@@ -517,6 +538,10 @@ def task_show(args) -> int:
         print(f"exit:    {res['exit_code']}")
     if res.get("error"):
         print(f"error:   {str(res['error'])[:200]}")
+    drafts = (info.get("metadata") or {}).get("pending_drafts") or []
+    for d in drafts:
+        args_str = json.dumps(d.get("arguments") or {}, ensure_ascii=False)
+        print(f"draft #{d.get('seq')}: [{d.get('status', 'pending')}] {d.get('capability')}/{d.get('tool')} args={args_str}")
     return 0
 
 
@@ -553,6 +578,48 @@ def task_list(args) -> int:
     return 0
 
 
+def task_approve(args) -> int:
+    from fleet.core.backends import BackendError
+    task_id = args.task_id
+    try:
+        task = _task_backend().approve(task_id, by=getattr(args, "by", "operator"))
+    except BackendError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    if task is None:
+        print(f"error: task {task_id} not found", file=sys.stderr)
+        return 2
+    info = _app_module()._response(task).model_dump()
+    if getattr(args, "json", False):
+        print(json.dumps(info, indent=2))
+    else:
+        print(f"{task.id}: approved -> {task.status}")
+    return 0
+
+
+def task_reject(args) -> int:
+    from fleet.core.backends import BackendError
+    task_id = args.task_id
+    try:
+        task = _task_backend().reject(
+            task_id,
+            by=getattr(args, "by", "operator"),
+            reason=getattr(args, "reason", "") or "Rejected by user",
+        )
+    except BackendError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    if task is None:
+        print(f"error: task {task_id} not found", file=sys.stderr)
+        return 2
+    info = _app_module()._response(task).model_dump()
+    if getattr(args, "json", False):
+        print(json.dumps(info, indent=2))
+    else:
+        print(f"{task.id}: rejected -> {task.status}")
+    return 0
+
+
 def task_command(args) -> int:
     if args.task_cmd == "submit":
         return task_submit(args)
@@ -560,13 +627,560 @@ def task_command(args) -> int:
         return task_show(args)
     if args.task_cmd == "list":
         return task_list(args)
+    if args.task_cmd == "approve":
+        return task_approve(args)
+    if args.task_cmd == "reject":
+        return task_reject(args)
+    return 2
+
+
+def draft_command(args) -> int:
+    from fleet.core.backends import BackendError
+    from fleet.core.capability import find_task_draft, list_task_drafts
+    from fleet.core.toolgate import ToolGateError
+
+    if args.draft_cmd == "list":
+        drafts = list_task_drafts(
+            task_id=getattr(args, "task_id", None),
+            status=getattr(args, "status", None),
+        )
+        if getattr(args, "json", False):
+            print(json.dumps(drafts, indent=2))
+            return 0
+        if not drafts:
+            print("(no drafts)")
+            return 0
+        for d in drafts:
+            args_str = json.dumps(d.get("arguments") or {}, ensure_ascii=False)
+            print(f"{d.get('task_id') or '-':<32} #{d.get('seq')} [{d.get('status')}] "
+                  f"{d.get('capability')}/{d.get('tool')} {args_str}")
+        return 0
+
+    def _resolve_seq(task_id: str, seq: Optional[int], cap: Optional[str]) -> int:
+        if seq is not None:
+            return seq
+        matches = [
+            d for d in list_task_drafts(task_id, status="pending")
+            if cap is None or d.get("capability") == cap
+        ]
+        if len(matches) != 1:
+            raise ToolGateError(f"specify draft seq for task {task_id!r} ({len(matches)} pending drafts)")
+        return int(matches[0]["seq"])
+
+    task_id = args.task_id
+    cap = getattr(args, "capability", None)
+    try:
+        seq = _resolve_seq(task_id, getattr(args, "seq", None), cap)
+        if args.draft_cmd == "show":
+            draft = find_task_draft(task_id, seq, capability=cap)
+            if getattr(args, "json", False):
+                print(json.dumps(draft, indent=2))
+            else:
+                print(f"task:       {draft.get('task_id')}")
+                print(f"seq:        {draft.get('seq')}")
+                print(f"status:     {draft.get('status')}")
+                print(f"capability: {draft.get('capability')}")
+                print(f"tool:       {draft.get('tool')}")
+                print(f"arguments:  {json.dumps(draft.get('arguments') or {}, indent=2, ensure_ascii=False)}")
+            return 0
+        if args.draft_cmd == "approve":
+            import urllib.parse
+            from fleet.api.mcp_server import ApiError, _api_request
+
+            req_body = {"by": getattr(args, "by", "operator")}
+            if cap is not None:
+                req_body["capability"] = cap
+            out: Optional[Dict[str, Any]] = None
+            try:
+                out = _api_request(
+                    "POST",
+                    f"/api/fleet/tasks/{urllib.parse.quote(task_id, safe='')}/drafts/{seq}/approve",
+                    req_body,
+                )
+            except ApiError as e:
+                if "HTTP " in str(e):
+                    print(f"error: {e}", file=sys.stderr)
+                    return 1
+
+            if out is None:
+                res = _task_backend().request_draft_signature(
+                    task_id, seq, by=getattr(args, "by", "operator"), capability=cap
+                )
+                if res is None:
+                    print(f"error: task {task_id} not found", file=sys.stderr)
+                    return 2
+                sig_req, draft, task = res
+                out = {
+                    "status": "awaiting_signature",
+                    "signature_request": sig_req,
+                    "draft": draft,
+                    "task": _app_module()._response(task).model_dump(),
+                }
+
+            if getattr(args, "json", False):
+                print(json.dumps(out, indent=2))
+            else:
+                req_id = (out.get("signature_request") or {}).get("req_id", "?")
+                print(f"{task_id} draft #{seq}: waiting for phone signature (request {req_id})")
+            return 0
+        if args.draft_cmd == "reject":
+            res = _task_backend().reject_draft(
+                task_id, seq, by=getattr(args, "by", "operator"),
+                reason=getattr(args, "reason", "") or "", capability=cap,
+            )
+            if res is None:
+                print(f"error: task {task_id} not found", file=sys.stderr)
+                return 2
+            draft, task = res
+            if getattr(args, "json", False):
+                print(json.dumps({"draft": draft, "task": _app_module()._response(task).model_dump()}, indent=2))
+            else:
+                print(f"{task.id} draft #{seq}: {draft.get('status')} (task -> {task.status})")
+            return 0
+    except (ToolGateError, BackendError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    return 2
+
+
+def signer_command(args) -> int:
+    from fleet.core.nostr_identity import NostrIdentityError
+    from fleet.core.signer import AMBER_MANUAL_WARNING, SignerError, SignerManager, pin_signer, render_qr_terminal
+
+    def _print_status(st: Dict[str, Any]) -> None:
+        if getattr(args, "json", False):
+            print(json.dumps(st, indent=2))
+            return
+        print(f"paired:        {'yes' if st.get('paired') else 'no'}")
+        if st.get("operator_npub"):
+            print(f"operator_npub: {st['operator_npub']}")
+            print(f"fingerprint:   {st.get('operator_fingerprint')}")
+        print(f"relay:         {st.get('relay_url') or '-'}")
+        print(f"pinned:        {'yes' if st.get('pinned') else 'no'} ({st.get('anchor_path')})")
+        if st.get("pin_command") and not st.get("pinned"):
+            print(f"next step:     {st['pin_command']}")
+
+    try:
+        if args.signer_cmd == "pin":
+            res = pin_signer(
+                getattr(args, "fingerprint", "") or "",
+                npub=getattr(args, "npub", "") or "",
+            )
+            if getattr(args, "json", False):
+                print(json.dumps(res, indent=2))
+            else:
+                print(f"pinned:        yes ({res['anchor_path']})")
+                print(f"operator_npub: {res['operator_npub']}")
+                print(f"fingerprint:   {res['operator_fingerprint']}")
+            return 0
+
+        cfg = fleet_config.load_config()
+        mgr = SignerManager()
+
+        if args.signer_cmd == "status":
+            _print_status(mgr.status(cfg))
+            return 0
+
+        if args.signer_cmd == "pair":
+            bunker_uri = (getattr(args, "bunker", "") or "").strip()
+            if bunker_uri:
+                res = asyncio.run(mgr.pair_bunker(bunker_uri, cfg=cfg, request_host=getattr(args, "host", "") or ""))
+                _print_status(res)
+                return 0
+
+            from fleet.api.mcp_server import ApiError, _api_request
+            req_body = {
+                "relay_url": getattr(args, "relay", "") or "",
+                "host": getattr(args, "host", "") or "",
+            }
+            use_daemon = not getattr(args, "standalone", False)
+            if use_daemon:
+                try:
+                    pair = _api_request("POST", "/api/fleet/signer/pair", req_body)
+                except ApiError as e:
+                    if "HTTP " in str(e):
+                        print(f"error: {e}", file=sys.stderr)
+                        return 1
+                    use_daemon = False
+
+            if use_daemon:
+                if not getattr(args, "json", False):
+                    print(f"Relay: {pair['relay_url']}")
+                    print(AMBER_MANUAL_WARNING)
+                    print(render_qr_terminal(pair["uri"]))
+                    print("Waiting for Amber scan...")
+                deadline = time.monotonic() + max(5, int(getattr(args, "timeout", 120)))
+                while time.monotonic() < deadline:
+                    st = _api_request("GET", "/api/fleet/signer")
+                    if st.get("paired"):
+                        _print_status(st)
+                        return 0
+                    time.sleep(1.0)
+                print("error: timed out waiting for signer pairing", file=sys.stderr)
+                return 1
+
+            # Daemon not running or --standalone: run local /nip46 server until paired
+            async def _standalone_pair() -> Optional[Dict[str, Any]]:
+                from fleet.core.nip46_relay import Nip46Relay, build_tls_context, serve_ws
+
+                relay_ref: list[Nip46Relay] = []
+                local_mgr = SignerManager(relay_getter=lambda: relay_ref[0] if relay_ref else None)
+                relay = Nip46Relay(
+                    fleet_pubkeys=local_mgr.fleet_pubkeys,
+                    nak=cfg.nostr.nak,
+                    on_event=local_mgr.handle_nip46_event,
+                )
+                relay_ref.append(relay)
+                cert = fleet_config._expand(cfg.daemon.tls_cert)
+                key = fleet_config._expand(cfg.daemon.tls_key)
+                ssl_ctx = build_tls_context(cert, key) if (cert and key) else None
+                async with serve_ws(relay, host=cfg.daemon.host, port=cfg.daemon.port, ssl_context=ssl_ctx):
+                    pair_data = local_mgr.start_nostrconnect_pairing(
+                        cfg=cfg,
+                        relay_url=getattr(args, "relay", "") or "",
+                        request_host=getattr(args, "host", "") or "",
+                    )
+                    if not getattr(args, "json", False):
+                        print(f"Relay: {pair_data['relay_url']}")
+                        print(AMBER_MANUAL_WARNING)
+                        print(render_qr_terminal(pair_data["uri"]))
+                        print("Waiting for Amber scan...")
+                    deadline = time.monotonic() + max(5, int(getattr(args, "timeout", 120)))
+                    while time.monotonic() < deadline:
+                        st = local_mgr.status(cfg)
+                        if st.get("paired"):
+                            return st
+                        await asyncio.sleep(0.5)
+                return None
+
+            paired_st = asyncio.run(_standalone_pair())
+            if paired_st is None:
+                print("error: timed out waiting for signer pairing", file=sys.stderr)
+                return 1
+            _print_status(paired_st)
+            return 0
+    except (SignerError, NostrIdentityError, OSError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    return 2
+
+
+def token_command(args) -> int:
+    """fleet token create|list|revoke: scoped API tokens for clients (fleet.api.scopes)."""
+    from fleet.api.mcp_server import ApiError, _api_request
+    try:
+        if args.token_cmd == "create":
+            body = {"name": args.name, "scope": args.scope}
+            if args.expires_days:
+                body["expires_in_days"] = args.expires_days
+            out = _api_request("POST", "/api/fleet/tokens", body)
+            if args.json:
+                print(json.dumps(out, indent=2))
+            else:
+                print(f"{out['name']} ({out['scope']}), id {out['id']}"
+                      + (f", expires {time.strftime('%Y-%m-%d', time.localtime(out['expires_at']))}" if out.get("expires_at") else ""))
+                print("Token (shown once; give it to the client, e.g. as FLEET_API_TOKEN):")
+                print(out["token"])
+            return 0
+        if args.token_cmd == "list":
+            items = _api_request("GET", "/api/fleet/tokens")["tokens"]
+            if args.json:
+                print(json.dumps(items, indent=2))
+                return 0
+            if not items:
+                print("No scoped tokens. The daemon's own token is admin.")
+            for t in items:
+                state = "revoked" if t.get("revoked_at") else ("expired" if t.get("expires_at") and time.time() > t["expires_at"] else "live")
+                used = time.strftime("%Y-%m-%d %H:%M", time.localtime(t["last_used_at"])) if t.get("last_used_at") else "never"
+                print(f"{t['id']}  {t['name']:<20} {t['scope']:<8} {state:<8} last used {used}")
+            return 0
+        if args.token_cmd == "revoke":
+            out = _api_request("DELETE", f"/api/fleet/tokens/{args.id}")
+            print(f"revoked {out['name']} ({out['id']})")
+            return 0
+    except ApiError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    return 2
+
+
+def privateer_command(args) -> int:
+    import urllib.parse
+    from fleet.api.mcp_server import ApiError, _api_request
+    from fleet.core.privateer import (
+        PrivateerError,
+        create_privateer,
+        get_privateer,
+        list_privateers,
+        privateer_nsec_path,
+        privateer_record_path,
+        request_commission_prompt,
+        revoke_privateer,
+    )
+
+    try:
+        if args.priv_cmd == "list":
+            items = list_privateers()
+            if getattr(args, "json", False):
+                print(json.dumps({"privateers": items}, indent=2))
+            elif not items:
+                print("no privateers configured")
+            else:
+                for p in items:
+                    caps = ",".join(p.get("capabilities") or [])
+                    print(f"{p['name']:18s} status={p['commission_status']:18s} budget={p['budget']} caps={caps} fp={p['fingerprint']}")
+            return 0
+
+        if args.priv_cmd == "show":
+            item = get_privateer(args.name)
+            if getattr(args, "json", False):
+                print(json.dumps(item, indent=2))
+            else:
+                print(f"name:       {item['name']}")
+                print(f"npub:       {item['npub']}")
+                print(f"status:     {item['commission_status']} (commissioned={item['commissioned']})")
+                print(f"caps:       {', '.join(item.get('capabilities') or [])}")
+                print(f"budget:     {item.get('budget')}")
+                print(f"domains:    {', '.join(item.get('allowed_domains') or []) or '-'}")
+            return 0
+
+        if args.priv_cmd == "revoke":
+            item = revoke_privateer(args.name)
+            if getattr(args, "json", False):
+                print(json.dumps(item, indent=2))
+            else:
+                print(f"privateer '{item['name']}': revoked")
+            return 0
+
+        if args.priv_cmd == "new":
+            ttl_sec = int(getattr(args, "ttl_days", 7)) * 86400
+            payload = {
+                "name": args.name,
+                "capabilities": list(args.cap or []),
+                "budget": int(args.budget),
+                "allowed_domains": list(args.domain or []),
+                "ttl_seconds": ttl_sec,
+            }
+            out: Optional[Dict[str, Any]] = None
+            try:
+                out = _api_request("POST", "/api/fleet/privateers", payload)
+            except ApiError as e:
+                if "HTTP " in str(e):
+                    print(f"error: {e}", file=sys.stderr)
+                    return 1
+            if out is None:
+                create_privateer(
+                    args.name,
+                    capabilities=payload["capabilities"],
+                    budget=payload["budget"],
+                    allowed_domains=payload["allowed_domains"],
+                    ttl_seconds=ttl_sec,
+                )
+                try:
+                    out = asyncio.run(request_commission_prompt(args.name, ttl_seconds=ttl_sec))
+                except Exception:
+                    privateer_record_path(args.name).unlink(missing_ok=True)
+                    privateer_nsec_path(args.name).unlink(missing_ok=True)
+                    raise
+            if getattr(args, "wait", False):
+                deadline = time.monotonic() + max(5, int(getattr(args, "timeout", 120)))
+                while time.monotonic() < deadline:
+                    try:
+                        cur = _api_request("GET", f"/api/fleet/privateers/{urllib.parse.quote(args.name, safe='')}")
+                    except ApiError:
+                        cur = get_privateer(args.name)
+                    if cur.get("commissioned") or cur.get("commission_status") in ("active", "declined", "revoked"):
+                        out = {"privateer": cur, "commission_status": cur.get("commission_status")}
+                        break
+                    time.sleep(0.5)
+            if getattr(args, "json", False):
+                print(json.dumps(out, indent=2))
+            else:
+                req_id = (out.get("signature_request") or {}).get("req_id", "-")
+                st = out.get("commission_status") or (out.get("privateer") or {}).get("commission_status")
+                print(f"privateer '{args.name}': {st} (request {req_id})")
+            return 0
+    except PrivateerError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    return 2
+
+
+def routine_command(args) -> int:
+    import urllib.parse
+
+    from fleet.api.mcp_server import ApiError, _api_request
+    from fleet.core.backends import make_backend
+    from fleet.core.routines import (
+        RoutineError,
+        approve_routine,
+        create_routine,
+        delete_routine,
+        get_routine,
+        list_routines,
+        pause_routine,
+        propose_routine_change,
+        reject_routine,
+        resume_routine,
+        trigger_routine_now,
+    )
+
+    def _call_or_local(method: str, path: str, payload=None, local_fn=None):
+        try:
+            return _api_request(method, path, payload)
+        except ApiError as e:
+            if "HTTP " in str(e):
+                raise RoutineError(str(e)) from e
+            if local_fn is not None:
+                return local_fn()
+            raise RoutineError(str(e)) from e
+
+    def _parse_schedule_arg() -> Dict[str, Any]:
+        if getattr(args, "cron", None):
+            return {"kind": "cron", "expr": args.cron}
+        if getattr(args, "every", None) is not None:
+            return {"kind": "interval", "every_seconds": int(args.every)}
+        raise RoutineError("pass --cron <expr> or --every <seconds>")
+
+    try:
+        if args.routine_cmd == "list":
+            res = _call_or_local("GET", "/api/fleet/routines", local_fn=lambda: {"routines": list_routines()})
+            items = res.get("routines") or []
+            if getattr(args, "json", False):
+                print(json.dumps({"routines": items}, indent=2))
+            elif not items:
+                print("no routines configured")
+            else:
+                for r in items:
+                    sched = r.get("schedule") or {}
+                    s_txt = sched.get("expr") if sched.get("kind") == "cron" else f"every {sched.get('every_seconds')}s"
+                    missed = sum(1 for h in (r.get("history") or []) if h.get("status") == "missed")
+                    pend = " [pending_change]" if r.get("pending_change") else ""
+                    print(f"{r['id']:20s} status={r['status']:17s} sched={s_txt:16s} missed={missed}{pend}")
+            return 0
+
+        if args.routine_cmd == "show":
+            item = _call_or_local(
+                "GET",
+                f"/api/fleet/routines/{urllib.parse.quote(args.id, safe='')}",
+                local_fn=lambda: get_routine(args.id),
+            )
+            print(json.dumps(item, indent=2))
+            return 0
+
+        if args.routine_cmd == "new":
+            sched = _parse_schedule_arg()
+            intent = {}
+            if getattr(args, "project", None):
+                intent["project"] = args.project
+            if getattr(args, "no_escalate", False):
+                intent["escalate_to"] = []
+            payload = {
+                "id": args.id,
+                "title": args.title,
+                "prompt": args.prompt,
+                "schedule": sched,
+                "max_lateness_seconds": int(args.max_lateness),
+                "intent": intent,
+                "harness": getattr(args, "harness", "auto") or "auto",
+            }
+            item = _call_or_local(
+                "POST",
+                "/api/fleet/routines",
+                payload=payload,
+                local_fn=lambda: create_routine(
+                    args.id,
+                    title=args.title,
+                    prompt=args.prompt,
+                    schedule=sched,
+                    max_lateness_seconds=int(args.max_lateness),
+                    intent=intent,
+                    harness=payload["harness"],
+                ),
+            )
+            if getattr(args, "json", False):
+                print(json.dumps(item, indent=2))
+            else:
+                print(f"routine '{item['id']}': {item['status']} (next_runs={len(item.get('replay_next_runs') or [])})")
+            return 0
+
+        if args.routine_cmd == "update":
+            updates: Dict[str, Any] = {}
+            if getattr(args, "cron", None) or getattr(args, "every", None) is not None:
+                updates["schedule"] = _parse_schedule_arg()
+            if getattr(args, "prompt", None):
+                updates["prompt"] = args.prompt
+            if getattr(args, "title", None):
+                updates["title"] = args.title
+            if getattr(args, "max_lateness", None) is not None:
+                updates["max_lateness_seconds"] = int(args.max_lateness)
+            item = _call_or_local(
+                "PUT",
+                f"/api/fleet/routines/{urllib.parse.quote(args.id, safe='')}",
+                payload=updates,
+                local_fn=lambda: propose_routine_change(args.id, updates),
+            )
+            print(json.dumps(item, indent=2) if getattr(args, "json", False) else f"routine '{item['id']}': pending_change proposed")
+            return 0
+
+        if args.routine_cmd in ("approve", "reject") and not getattr(args, "review_id", None):
+            # Show what the decision would apply; the operator decides on that exact version.
+            item = _call_or_local(
+                "GET",
+                f"/api/fleet/routines/{urllib.parse.quote(args.id, safe='')}",
+                local_fn=lambda: get_routine(args.id),
+            )
+            pend = item.get("pending_change") or {}
+            view = {k: item.get(k) for k in ("id", "status", "title", "prompt", "schedule",
+                                             "max_lateness_seconds", "intent", "lane", "harness")}
+            print(json.dumps({"routine": view, "pending_diff": pend.get("diff"),
+                              "next_runs": (pend.get("replay_after") or item.get("replay_next_runs"))},
+                             indent=2))
+            print(f"\nreview_id: {item.get('review_id')}")
+            print(f"to {args.routine_cmd} exactly this version: fleet routine {args.routine_cmd} {args.id} "
+                  f"--review-id {item.get('review_id')}")
+            return 1
+
+        if args.routine_cmd in ("approve", "reject", "pause", "resume", "run"):
+            act = args.routine_cmd
+            rev = getattr(args, "review_id", None)
+            local_map = {
+                "approve": lambda: approve_routine(args.id, review_id=rev),
+                "reject": lambda: reject_routine(args.id, review_id=rev),
+                "pause": lambda: pause_routine(args.id),
+                "resume": lambda: resume_routine(args.id),
+                "run": lambda: {"status": "dispatched", "task": trigger_routine_now(args.id, backend_obj=make_backend(TaskStore()))},
+            }
+            item = _call_or_local(
+                "POST",
+                f"/api/fleet/routines/{urllib.parse.quote(args.id, safe='')}/{act}",
+                payload={"review_id": rev} if act in ("approve", "reject") else None,
+                local_fn=local_map[act],
+            )
+            if getattr(args, "json", False):
+                print(json.dumps(item, indent=2))
+            else:
+                print(f"routine '{args.id}': {act} -> {item.get('status')}")
+            return 0
+
+        if args.routine_cmd == "delete":
+            item = _call_or_local(
+                "DELETE",
+                f"/api/fleet/routines/{urllib.parse.quote(args.id, safe='')}",
+                local_fn=lambda: (delete_routine(args.id), {"status": "deleted", "id": args.id})[1],
+            )
+            print(json.dumps(item, indent=2) if getattr(args, "json", False) else f"routine '{args.id}': deleted")
+            return 0
+    except RoutineError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
     return 2
 
 
 def intake_command(args) -> int:
     from fleet.core.backends import make_backend
     from fleet.plugins.intake import IntakeError, IntakeService
-    store = getattr(app_module, "task_store", None) or TaskStore()
+    store = getattr(_app_module(), "task_store", None) or TaskStore()
     service = IntakeService(backend=lambda: make_backend(store))
     if args.intake_cmd == "sync":
         names = [args.project] if args.project else [p["project"] for p in service.status() if p["enabled"]]
@@ -726,10 +1340,166 @@ def main(argv: Optional[list] = None) -> None:
     task_list_p.add_argument("--limit", type=int, default=None, help="Maximum number of tasks to return")
     task_list_p.add_argument("--json", action="store_true", help="Output raw JSON")
 
+    task_approve_p = task_sub.add_parser("approve", help="Approve an awaiting_approval task (without pending drafts)")
+    task_approve_p.add_argument("task_id", help="Task id")
+    task_approve_p.add_argument("--by", default="operator", help="Approver identity")
+    task_approve_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    task_reject_p = task_sub.add_parser("reject", help="Reject an awaiting_approval task and any pending drafts")
+    task_reject_p.add_argument("task_id", help="Task id")
+    task_reject_p.add_argument("--by", default="operator", help="Rejector identity")
+    task_reject_p.add_argument("--reason", default="", help="Reason for rejection")
+    task_reject_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    # draft
+    draft_parser = subparsers.add_parser("draft", help="Inspect, approve, or reject pending 'ask' capability drafts")
+    draft_sub = draft_parser.add_subparsers(dest="draft_cmd", required=True)
+    draft_list_p = draft_sub.add_parser("list", help="List drafts")
+    draft_list_p.add_argument("--task-id", default=None, help="Filter by task id")
+    draft_list_p.add_argument("--status", default=None, help="Filter by draft status")
+    draft_list_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    draft_show_p = draft_sub.add_parser("show", help="Show one draft with full arguments")
+    draft_show_p.add_argument("task_id", help="Task id")
+    draft_show_p.add_argument("seq", nargs="?", type=int, default=None, help="Draft sequence number")
+    draft_show_p.add_argument("--capability", default=None, help="Capability name")
+    draft_show_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    draft_approve_p = draft_sub.add_parser("approve", help="Approve and execute a pending draft in a fresh capability")
+    draft_approve_p.add_argument("task_id", help="Task id")
+    draft_approve_p.add_argument("seq", nargs="?", type=int, default=None, help="Draft sequence number")
+    draft_approve_p.add_argument("--capability", default=None, help="Capability name")
+    draft_approve_p.add_argument("--by", default="operator", help="Approver identity")
+    draft_approve_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    draft_reject_p = draft_sub.add_parser("reject", help="Reject a pending draft")
+    draft_reject_p.add_argument("task_id", help="Task id")
+    draft_reject_p.add_argument("seq", nargs="?", type=int, default=None, help="Draft sequence number")
+    draft_reject_p.add_argument("--capability", default=None, help="Capability name")
+    draft_reject_p.add_argument("--by", default="operator", help="Rejector identity")
+    draft_reject_p.add_argument("--reason", default="", help="Reason for rejection")
+    draft_reject_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    # capability
+    cap_parser = subparsers.add_parser("capability", help="Inspect and pin confined capabilities")
+    cap_sub = cap_parser.add_subparsers(dest="cap_cmd", required=True)
+    cap_pin_p = cap_sub.add_parser("pin", help="Start a capability in sandbox and print its tool pin and manifest hash")
+    cap_pin_p.add_argument("name", help="Capability section name in fleet.toml")
+    cap_pin_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    # signer
+    signer_parser = subparsers.add_parser("signer", help="Pair and manage the NIP-46 remote operator signer")
+    signer_sub = signer_parser.add_subparsers(dest="signer_cmd", required=True)
+    signer_pair_p = signer_sub.add_parser("pair", help="Pair phone signer via nostrconnect:// QR or remote bunker:// URI")
+    signer_pair_p.add_argument("--bunker", default="", help="Remote bunker:// URI from another device")
+    signer_pair_p.add_argument("--relay", default="", help="Override NIP-46 relay WebSocket URL")
+    signer_pair_p.add_argument("--host", default="", help="Override public host in nostrconnect:// URI")
+    signer_pair_p.add_argument("--timeout", type=int, default=120, help="Pairing timeout in seconds (default: 120)")
+    signer_pair_p.add_argument("--standalone", action="store_true", help="Run a temporary /nip46 server without connecting to the daemon")
+    signer_pair_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    signer_status_p = signer_sub.add_parser("status", help="Show current signer pairing and pin anchor status")
+    signer_status_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    signer_pin_p = signer_sub.add_parser("pin", help="Pin the paired operator npub into the root-owned anchor file (requires sudo)")
+    signer_pin_p.add_argument("fingerprint", nargs="?", default="", help="Expected operator fingerprint (or full npub) to pin")
+    signer_pin_p.add_argument("--npub", default="", help="Explicit operator npub to pin")
+    signer_pin_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    # privateer
+    tok_parser = subparsers.add_parser("token", help="Scoped API tokens for clients (read, propose, operate)")
+    tok_sub = tok_parser.add_subparsers(dest="token_cmd", required=True)
+    tok_new = tok_sub.add_parser("create", help="Create a token; it is shown once")
+    tok_new.add_argument("name", help="Who holds it, e.g. openclaw")
+    tok_new.add_argument("--scope", required=True, choices=["read", "propose", "operate"])
+    tok_new.add_argument("--expires-days", type=float, default=None, help="Optional lifetime in days")
+    tok_new.add_argument("--json", action="store_true")
+    tok_list = tok_sub.add_parser("list", help="List tokens (never their secrets)")
+    tok_list.add_argument("--json", action="store_true")
+    tok_rev = tok_sub.add_parser("revoke", help="Revoke a token by id")
+    tok_rev.add_argument("id")
+
+    priv_parser = subparsers.add_parser("privateer", help="Manage commissioned Privateer identities (kind 4911)")
+    priv_sub = priv_parser.add_subparsers(dest="priv_cmd", required=True)
+    priv_new_p = priv_sub.add_parser("new", help="Create a Privateer keypair and request a signed kind 4911 commission")
+    priv_new_p.add_argument("name", help="Short lowercase privateer name")
+    priv_new_p.add_argument("--cap", action="append", required=True, help="Capability name in fleet.toml (repeatable)")
+    priv_new_p.add_argument("--budget", type=int, default=50, help="Maximum cumulative capability calls per task under this commission (default: 50)")
+    priv_new_p.add_argument("--domain", action="append", default=[], help="Allowed domain restriction (repeatable)")
+    priv_new_p.add_argument("--ttl-days", type=int, default=7, help="Commission expiry in days (default: 7)")
+    priv_new_p.add_argument("--wait", action="store_true", help="Wait for phone signature completion")
+    priv_new_p.add_argument("--timeout", type=int, default=120, help="Wait timeout in seconds")
+    priv_new_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    priv_list_p = priv_sub.add_parser("list", help="List configured Privateers and commission status")
+    priv_list_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    priv_show_p = priv_sub.add_parser("show", help="Show one Privateer's identity and commission details")
+    priv_show_p.add_argument("name", help="Privateer name")
+    priv_show_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    priv_rev_p = priv_sub.add_parser("revoke", help="Revoke a Privateer's active commission")
+    priv_rev_p.add_argument("name", help="Privateer name")
+    priv_rev_p.add_argument("--json", action="store_true", help="Output raw JSON")
+
+    # routine
+    rout_parser = subparsers.add_parser("routine", help="Manage operator-approved scheduled routines")
+    rout_sub = rout_parser.add_subparsers(dest="routine_cmd", required=True)
+    r_list = rout_sub.add_parser("list", help="List routines and missed run counts")
+    r_list.add_argument("--json", action="store_true")
+
+    r_show = rout_sub.add_parser("show", help="Show one routine with replay and run history")
+    r_show.add_argument("id", help="Routine id")
+
+    r_new = rout_sub.add_parser("new", help="Create a routine (stays awaiting_approval until approved)")
+    r_new.add_argument("id", help="Short lowercase routine id")
+    r_new.add_argument("--title", required=True, help="Display title")
+    r_new.add_argument("--prompt", required=True, help="Task prompt")
+    r_new_sched = r_new.add_mutually_exclusive_group(required=True)
+    r_new_sched.add_argument("--cron", help="5-field cron expression, e.g. '0 7,18 * * 5'")
+    r_new_sched.add_argument("--every", type=int, help="Interval in seconds (>= 60)")
+    r_new.add_argument("--max-lateness", type=int, default=3600, help="Catch-up window in seconds")
+    r_new.add_argument("--project", default="", help="Optional project key in fleet.toml")
+    r_new.add_argument("--no-escalate", action="store_true", help="Pin intent.escalate_to = [] (local only)")
+    r_new.add_argument("--harness", default="auto", help="Harness name or auto")
+    r_new.add_argument("--json", action="store_true")
+
+    r_upd = rout_sub.add_parser("update", help="Propose a schedule/prompt/rule change for operator approval")
+    r_upd.add_argument("id", help="Routine id")
+    r_upd.add_argument("--title", default=None)
+    r_upd.add_argument("--prompt", default=None)
+    r_upd.add_argument("--cron", default=None)
+    r_upd.add_argument("--every", type=int, default=None)
+    r_upd.add_argument("--max-lateness", type=int, default=None)
+    r_upd.add_argument("--json", action="store_true")
+
+    for r_act in ("approve", "reject", "pause", "resume", "run", "delete"):
+        p_act = rout_sub.add_parser(r_act, help=f"{r_act.capitalize()} a routine")
+        p_act.add_argument("id", help="Routine id")
+        p_act.add_argument("--json", action="store_true")
+        if r_act in ("approve", "reject"):
+            p_act.add_argument("--review-id", default=None,
+                               help="review_id of the version you reviewed; without it the routine is "
+                                    "shown with its review_id and nothing is decided")
+
     args = parser.parse_args(argv)
 
     if args.subcommand == "config":
         sys.exit(config_command(args))
+    if args.subcommand == "capability":
+        from fleet.core.capability import pin_capability
+        from fleet.core.toolgate import ToolGateError
+        try:
+            res = asyncio.run(pin_capability(args.name))
+        except ToolGateError as e:
+            print(f"capability error: {e}", file=sys.stderr)
+            sys.exit(1)
+        if getattr(args, "json", False):
+            print(json.dumps(res, indent=2))
+        else:
+            print(f"pin = \"{res['pin']}\"")
+            print(f"manifest_sha256 = \"{res['manifest_sha256']}\"")
+        sys.exit(0)
     if args.subcommand == "router":
         sys.exit(router_command(args))
     if args.subcommand == "lanes":
@@ -738,6 +1508,16 @@ def main(argv: Optional[list] = None) -> None:
         sys.exit(intake_command(args))
     if args.subcommand == "task":
         sys.exit(task_command(args))
+    if args.subcommand == "draft":
+        sys.exit(draft_command(args))
+    if args.subcommand == "signer":
+        sys.exit(signer_command(args))
+    if args.subcommand == "privateer":
+        sys.exit(privateer_command(args))
+    if args.subcommand == "token":
+        sys.exit(token_command(args))
+    if args.subcommand == "routine":
+        sys.exit(routine_command(args))
     if args.subcommand == "ledger":
         from fleet.core import ledger as _ledger
         from fleet.api.app import _ledger_view
@@ -794,6 +1574,7 @@ def main(argv: Optional[list] = None) -> None:
                 run_harness_conformance(args.name, as_json=getattr(args, "json", False))
             )
 
+        from fleet.plugins.registry import list_harnesses
         harnesses_list = list_harnesses()
         if getattr(args, "json", False):
             print(json.dumps(harnesses_list, indent=2))

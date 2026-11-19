@@ -68,6 +68,11 @@ class EgressProxy:
         self._thread: Optional[threading.Thread] = None
 
     async def start(self) -> None:
+        if self.audit_path is not None:
+            # No log, no proxy: a run whose requests cannot be recorded must not start.
+            self.audit_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.audit_path, "a", encoding="utf-8"):
+                pass
         self._server = await asyncio.start_server(self._handle, self.host, self.port)
         self.port = self._server.sockets[0].getsockname()[1]
         logger.info("egress proxy on %s:%d, %d allowed names", self.host, self.port, len(self.allowlist))
@@ -152,7 +157,9 @@ class EgressProxy:
         except (OSError, asyncio.TimeoutError):
             self._audit(method, host, port, True, 502)
             return await self._answer(writer, 502)
-        self._audit(method, host, port, True, 200)
+        if not self._audit(method, host, port, True, 200):
+            up_writer.close()               # a request that cannot be recorded does not pass
+            return await self._answer(writer, 502)
 
         if method == "CONNECT":
             await self._answer(writer, 200, close=False)
@@ -183,13 +190,20 @@ class EgressProxy:
         if close:
             writer.close()
 
-    def _audit(self, method: str, host: str, port: int, allowed: bool, status: int) -> None:
+    def _audit(self, method: str, host: str, port: int, allowed: bool, status: int) -> bool:
+        """Write the record; False when it could not be written (the caller then refuses)."""
         if self.audit_path is None:
-            return
+            return True
         line = json.dumps({"ts": time.time(), "method": method, "host": host, "port": port,
                            "allowed": allowed, "status": status})
-        with open(self.audit_path, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
+        try:
+            self.audit_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.audit_path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except OSError as e:
+            logger.error("egress proxy audit %s: %s", self.audit_path, e)
+            return False
+        return True
 
 
 def _is_ip(host: str) -> bool:

@@ -18,6 +18,10 @@ cannot be undone:
 - seccomp: socket(AF_UNIX) and io_uring_setup fail with EACCES. Landlock does not cover
   connect() to pathname unix sockets, so without this an agent could reach the session D-Bus
   and start commands outside the sandbox via `systemd-run --user`.
+- With `--strict-sockets` (every run behind an egress proxy, every capability server): only TCP
+  sockets and netlink exist; UDP and all other socket families fail with EACCES. Without it
+  (sandbox.egress = "ports") UDP is NOT filtered: a process can send UDP to any host, because
+  the resolver needs it there.
 
 Stdlib only (ctypes), no root, no user namespaces. Fails closed: if the kernel cannot enforce
 all of the above, the command is not run. FLEET_SANDBOX=0 is the only way to run unconfined
@@ -68,8 +72,10 @@ TOOLS_RO = [_HOME / ".nvm", _HOME / ".bun", _HOME / ".local/bin", _HOME / ".loca
             # native installers link ~/.local/bin to these: an agent that could write here would
             # plant the binary the operator starts next, outside the sandbox
             _HOME / ".local/share/claude", _HOME / ".local/share/cursor-agent"]
-# Caches every CLI writes to.
-ALWAYS_RW = [_HOME / ".cache", _HOME / ".npm"]
+# Writable for every run besides its worktree. Empty since 2026-11-19 (review R6): the operator's
+# ~/.cache and ~/.npm hold code the operator's own tools load outside any sandbox (opencode's
+# provider packages, uv and pip wheels), so runs write the fleet's own cache instead (fleet_cache).
+ALWAYS_RW: List[Path] = []
 # https, http, dns. Local model servers are added per install: sandbox.ports in fleet.toml
 # (or FLEET_SANDBOX_PORTS).
 DEFAULT_PORTS = (443, 80, 53)
@@ -127,6 +133,11 @@ class SandboxPolicy:
     read_write_paths: List[str]
     read_paths: List[str] = field(default_factory=list)
     ports: List[int] = field(default_factory=lambda: list(DEFAULT_PORTS))
+    # Only TCP sockets (and netlink, which the resolver needs): no UDP, no other family. Set for
+    # every run whose way out is an egress proxy, where a UDP packet would pass it unseen.
+    strict_sockets: bool = False
+    # Omit /tmp from writable paths (uses per-run scratch TMPDIR instead of shared /tmp).
+    private_tmp: bool = False
 
 
 def _libc():
@@ -159,7 +170,7 @@ class _NetRule(ctypes.Structure):
     _fields_ = [("access", ctypes.c_uint64), ("port", ctypes.c_uint64)]
 
 
-def restrict(rw: Sequence[str], ro: Sequence[str], ports: Sequence[int]) -> None:
+def restrict(rw: Sequence[str], ro: Sequence[str], ports: Sequence[int], *, private_tmp: bool = False) -> None:
     """Restrict the calling process (and its future children) for good."""
     libc = _libc()
     abi = abi_version()
@@ -187,7 +198,8 @@ def restrict(rw: Sequence[str], ro: Sequence[str], ports: Sequence[int]) -> None
 
         for p in SYSTEM_RO + [str(p) for p in ro]:
             allow(p, FS_READ)
-        for p in SYSTEM_RW + [str(p) for p in rw]:
+        sys_rw = [p for p in SYSTEM_RW if not (private_tmp and p == "/tmp")]
+        for p in sys_rw + [str(p) for p in rw]:
             allow(p, FS_ALL)
         for port in ports:
             rule = _NetRule(NET_CONNECT_TCP, int(port))
@@ -239,10 +251,49 @@ def block_unix_sockets() -> None:
         (RET, 0, 0, ERRNO_EACCES),  # 7
         (RET, 0, 0, ALLOW),         # 8
     ]
+    _install_filter(prog)
+
+
+def _install_filter(prog: Sequence[tuple]) -> None:
     arr = (_SockFilter * len(prog))(*[_SockFilter(*i) for i in prog])
     fprog = _SockFprog(len(prog), arr)
     if _libc().prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, ctypes.byref(fprog), 0, 0) != 0:
         raise OSError(ctypes.get_errno(), "seccomp filter")
+
+
+def allow_tcp_sockets_only() -> None:
+    """seccomp for runs behind an egress proxy: socket() succeeds only for AF_INET or AF_INET6
+    with type SOCK_STREAM, and for AF_NETLINK (glibc's resolver and interface lists). UDP, raw
+    sockets and every other family (AF_UNIX, AF_PACKET, AF_ALG, AF_VSOCK, ...) fail with EACCES,
+    as does io_uring_setup. socketpair() stays allowed.
+
+    Why: Landlock restricts TCP connect only. Without this a confined process sends UDP to any
+    host (DNS tunnelling, QUIC, plain exfiltration) past the proxy and its log (measured
+    2026-11-15). The type is masked with 0xF, so SOCK_NONBLOCK and SOCK_CLOEXEC change nothing.
+    """
+    machine = os.uname().machine
+    if machine not in _ARCH:
+        raise SandboxUnavailable(f"no seccomp filter for {machine}")
+    arch, nr_socket = _ARCH[machine]
+    LD, JEQ, AND, RET = 0x20, 0x15, 0x54, 0x06
+    ERRNO_EACCES, ALLOW = 0x00050000 | 13, 0x7FFF0000
+    AF_INET, AF_INET6, AF_NETLINK, SOCK_STREAM = 2, 10, 16, 1
+    _install_filter([
+        (LD, 0, 0, 4),               # 0  A = arch
+        (JEQ, 0, 11, arch),          # 1  other arch -> 13 allow (as the filter above)
+        (LD, 0, 0, 0),               # 2  A = syscall nr
+        (JEQ, 8, 0, 425),            # 3  io_uring_setup -> 12 deny
+        (JEQ, 0, 8, nr_socket),      # 4  not socket() -> 13 allow
+        (LD, 0, 0, 16),              # 5  A = args[0] (family)
+        (JEQ, 6, 0, AF_NETLINK),     # 6  netlink -> 13 allow
+        (JEQ, 1, 0, AF_INET),        # 7  inet -> 9
+        (JEQ, 0, 3, AF_INET6),       # 8  inet6 -> 9, anything else -> 12 deny
+        (LD, 0, 0, 24),              # 9  A = args[1] (type and flags)
+        (AND, 0, 0, 0xF),            # 10 A = type
+        (JEQ, 1, 0, SOCK_STREAM),    # 11 stream -> 13 allow, else 12 deny
+        (RET, 0, 0, ERRNO_EACCES),   # 12
+        (RET, 0, 0, ALLOW),          # 13
+    ])
 
 
 def worktree_gitdir(worktree: Path) -> Path | None:
@@ -255,9 +306,97 @@ def worktree_gitdir(worktree: Path) -> Path | None:
     return None
 
 
+# ── Homes of the fleet's own ──────────────────────────────────────────────────
+#
+# Review R1-R6 (2026-11-19): a CLI that writes its state where the operator's own copy of it reads
+# (agy's brain, goose's extensions, opencode's MCP servers and plugins, Claude Code's hooks,
+# Cursor's scripts) lets a task plant code the operator runs later, unconfined. So every run gets a
+# fresh home under <fleet root>/homes/run/, seeded with what the CLI needs and removed afterwards,
+# and one cache of the fleet's own (<fleet root>/homes/cache). Nothing under the operator's home is
+# writable by a run.
+
+_HOME_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]{0,40}$")
+
+
+def _homes_root() -> Path:
+    return load_config().root / "homes"
+
+
+def _real_dir(path: Path) -> Path:
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if path.is_symlink() or not path.is_dir():
+        raise OSError(f"{path} must be a real directory, not a symlink")
+    return path
+
+
+def fleet_cache() -> Path:
+    """The cache every fleet run and gate shares (package downloads), never the operator's."""
+    return _real_dir(_homes_root() / "cache")
+
+
+def make_run_home(name: str) -> Path:
+    """A fresh, empty home (mode 0700) for one run of `name`; remove_run_home deletes it."""
+    if not _HOME_NAME.match(name):
+        raise ValueError(f"bad home name {name!r}")
+    import tempfile
+    base = _real_dir(_homes_root() / "run")
+    return Path(tempfile.mkdtemp(prefix=f"{name}-", dir=base))
+
+
+def remove_run_home(home: Path) -> None:
+    """Delete a home make_run_home created; anything else is left alone."""
+    home = Path(home)
+    if home.parent == _homes_root() / "run" and not home.is_symlink():
+        import shutil
+        shutil.rmtree(home, ignore_errors=True)
+
+
+def home_env(home: Path, cache: Path) -> Dict[str, str]:
+    """Environment that puts a run's config, data, state and caches in its own home and cache, while
+    the operator's tools stay usable read-only: git's global config, user-installed Python packages
+    and uv's managed Pythons."""
+    env = {
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "XDG_DATA_HOME": str(home / ".local/share"),
+        "XDG_STATE_HOME": str(home / ".local/state"),
+        "XDG_CACHE_HOME": str(cache),
+        "npm_config_cache": str(cache / "npm"),
+        "UV_CACHE_DIR": str(cache / "uv"),
+        "PIP_CACHE_DIR": str(cache / "pip"),
+        "PYTHONUSERBASE": str(_HOME / ".local"),
+        "UV_PYTHON_INSTALL_DIR": str(_HOME / ".local/share/uv/python"),
+    }
+    if (_HOME / ".gitconfig").is_file():
+        env["GIT_CONFIG_GLOBAL"] = str(_HOME / ".gitconfig")
+    return env
+
+
+def seed_file(home: Path, rel: str, data: bytes, *, mtime: Optional[float] = None) -> None:
+    """Write `data` to <home>/<rel> (mode 0600), never through a symlink: the run's home is writable
+    by the run, so a planted link is refused (a directory) or replaced (the file), never followed."""
+    cur = home
+    for part in Path(rel).parent.parts:
+        cur = cur / part
+        if cur.is_symlink():
+            raise OSError(f"{cur} is a symlink; refusing to seed through it")
+        cur.mkdir(mode=0o700, exist_ok=True)
+    dst = home / rel
+    tmp = dst.with_name(dst.name + ".fleet-tmp")
+    tmp.unlink(missing_ok=True)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "wb") as out:
+        out.write(data)
+    if mtime is not None:
+        os.utime(tmp, (mtime, mtime))
+    os.replace(tmp, dst)
+
+
 def policy_for_worktree(worktree_dir: str, state_paths: Sequence[Path] = (),
-                        egress_port: Optional[int] = None) -> SandboxPolicy:
-    """Writes: the worktree, the CLI's state, caches. Reads: tools and the repo's git data.
+                        egress_port: Optional[int] = None,
+                        ro_state_paths: Sequence[Path] = ()) -> SandboxPolicy:
+    """Writes: the worktree and the CLI's state (its run home and the fleet cache, which the caller
+    passes). Reads: tools, read-only state and git data.
     With `egress_port` (egress = "allowlist") the only ports are that proxy and the local models.
 
     The git dirs stay read-only, the worktree's own one included: the engine runs git outside
@@ -268,23 +407,62 @@ def policy_for_worktree(worktree_dir: str, state_paths: Sequence[Path] = (),
     rw = [wt, *ALWAYS_RW, *state_paths]
     cfg = load_config()
     rw += [Path(_expand(p)) for p in cfg.sandbox.writable]
-    ro = list(TOOLS_RO) + [Path(_expand(p)) for p in cfg.sandbox.read_only]
+    ro = list(TOOLS_RO) + [Path(_expand(p)) for p in cfg.sandbox.read_only] + list(ro_state_paths)
     gitdir = worktree_gitdir(wt)
     if gitdir and len(gitdir.parents) >= 3:
         ro.append(gitdir.parents[1])  # <repo>/.git: objects, refs, this worktree's index
     ports = [egress_port] if egress_port else list(DEFAULT_PORTS)
     return SandboxPolicy(read_write_paths=[str(p) for p in rw], read_paths=[str(p) for p in ro],
-                         ports=ports + extra_ports())
+                         ports=ports + extra_ports(), strict_sockets=bool(egress_port),
+                         private_tmp=cfg.sandbox.private_tmp)
 
 
 # ── egress = "allowlist" ──────────────────────────────────────────────────────
 
-def egress_allowlist(model: str = "", urls: Sequence[str] = ()) -> List[str]:
-    """The names one run may reach: the defaults, sandbox.allowed_domains, and its own model
-    provider, from the model id's prefix and from URLs the run is given (the endpoint's base URL,
-    an `--openai-api-base` in the lane's args). Local hosts are not on it: the agent reaches them
-    directly (NO_PROXY), on the ports in sandbox.ports."""
-    names = [*DEFAULT_EGRESS_DOMAINS, *load_config().sandbox.allowed_domains]
+MAX_TASK_DOMAINS = 32
+_LABEL = re.compile(r"(?!-)[a-z0-9-]{1,63}(?<!-)$")
+
+
+def validate_task_domains(value: object) -> List[str]:
+    """A task's own egress names, checked: at most MAX_TASK_DOMAINS entries, each a host name
+    (`api.example.com`) or `*.example.com`. No scheme, path, port, IP literal, bare `*`, local
+    name or single label. ValueError names the bad entry; nothing is dropped silently, because
+    a list that silently shrinks or widens is worse than a task that does not start."""
+    if value is None:
+        return []
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("allowed_domains must be a list of host names")
+    if len(value) > MAX_TASK_DOMAINS:
+        raise ValueError(f"allowed_domains has {len(value)} entries, at most {MAX_TASK_DOMAINS}")
+    names: List[str] = []
+    for entry in value:
+        if not isinstance(entry, str):
+            raise ValueError(f"allowed_domains entry {entry!r} is not a string")
+        name = entry.strip().lower().rstrip(".")
+        host = name[2:] if name.startswith("*.") else name
+        labels = host.split(".")
+        if (len(host) > 253 or len(labels) < 2 or not all(_LABEL.match(label) for label in labels)
+                or labels[-1].isdigit() or host in _LOCAL_HOSTS or labels[-1] in ("localhost", "local",
+                                                                                 "internal")):
+            raise ValueError(f"allowed_domains entry {entry!r} is not a public host name "
+                             "(use `host.example.com` or `*.example.com`)")
+        if name not in names:
+            names.append(name)
+    return names
+
+
+def egress_allowlist(model: str = "", urls: Sequence[str] = (),
+                     task_allowed_domains: Sequence[str] | None = ()) -> List[str]:
+    """The names one run may reach: the defaults, sandbox.allowed_domains, task-specific domains,
+    and its own model provider, from the model id's prefix and from URLs the run is given (the
+    endpoint's base URL, an `--openai-api-base` in the lane's args). Local hosts are not on it:
+    the agent reaches them directly (NO_PROXY), on the ports in sandbox.ports.
+
+    `task_allowed_domains` is the task's own allowlist (e.g. from the task dict or metadata):
+    it lets a single errand reach specific hosts without widening the global list for every task.
+    """
+    _task_doms: List[str] = list(task_allowed_domains) if task_allowed_domains else []
+    names = [*DEFAULT_EGRESS_DOMAINS, *load_config().sandbox.allowed_domains, *_task_doms]
     hosts = []
     for url in urls:
         value = url.split("=", 1)[-1]          # --api-base=https://... as well as the bare URL
@@ -387,6 +565,10 @@ class LandlockSandbox:
             args += ["--ro", str(p)]
         for port in self.policy.ports:
             args += ["--port", str(port)]
+        if self.policy.strict_sockets:
+            args += ["--strict-sockets"]
+        if self.policy.private_tmp:
+            args += ["--private-tmp"]
         return args + ["--", *cmd]
 
     @staticmethod
@@ -462,23 +644,34 @@ def main(argv: Sequence[str]) -> int:
     rw: List[str] = []
     ro: List[str] = []
     ports: List[str] = []
+    strict = False
+    private_tmp = False
     i = 0
     try:
         while i < len(argv) and argv[i] != "--":
+            if argv[i] == "--strict-sockets":
+                strict, i = True, i + 1
+                continue
+            if argv[i] == "--private-tmp":
+                private_tmp, i = True, i + 1
+                continue
             {"--rw": rw, "--ro": ro, "--port": ports}[argv[i]].append(argv[i + 1])
             i += 2
     except (KeyError, IndexError):
-        print("usage: python -m fleet.core.sandbox [--rw P] [--ro P] [--port N] -- CMD",
+        print("usage: python -m fleet.core.sandbox [--rw P] [--ro P] [--port N] [--strict-sockets] [--private-tmp] -- CMD",
               file=sys.stderr)
         return 2
     cmd = list(argv[i + 1:])
     if not cmd:
-        print("usage: python -m fleet.core.sandbox [--rw P] [--ro P] [--port N] -- CMD",
+        print("usage: python -m fleet.core.sandbox [--rw P] [--ro P] [--port N] [--strict-sockets] [--private-tmp] -- CMD",
               file=sys.stderr)
         return 2
     try:
-        restrict(rw, ro, [int(p) for p in ports])
-        block_unix_sockets()
+        restrict(rw, ro, [int(p) for p in ports], private_tmp=private_tmp)
+        if strict:
+            allow_tcp_sockets_only()
+        else:
+            block_unix_sockets()
     except Exception as e:  # noqa: BLE001 - never fall back to running unconfined
         print(f"sandbox: refusing to run unsandboxed: {e}", file=sys.stderr)
         return 126

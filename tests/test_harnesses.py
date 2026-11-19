@@ -9,6 +9,7 @@ from conftest import fake_process
 
 from fleet.plugins.base import PluginKind
 from fleet.plugins.harness_base import (
+    AgyHarness,
     AiderHarness,
     ClaudeCodeHarness,
     GooseHarness,
@@ -47,39 +48,43 @@ async def test_claude_harness_execution_mocked():
     mock_proc = fake_process(b"Task completed successfully", b"", returncode=0)
 
     with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
-        result = await harness.execute_task({"text": "Fix bug in auth"}, "/tmp/test-wt")
+        result = await harness.execute_task({"text": "Fix bug in auth"}, "/tmp/test-wt",
+                                            env={"CLAUDE_CODE_OAUTH_TOKEN": "sk-test"})
         assert result["exit_code"] == 0
         assert "Task completed" in result["stdout"]
         assert mock_exec.called
 
 
-def test_claude_share_claude_is_writable_state():
-    """The native-installer symlink ~/.local/bin/claude targets ~/.local/share/claude, which must
-    be writable (like ~/.claude) for the claude-code harness to exec inside the sandbox."""
-    from fleet.core.sandbox import policy_for_worktree
+def test_claude_share_claude_is_readable_never_writable():
+    """The native-installer symlink ~/.local/bin/claude targets ~/.local/share/claude: readable (and
+    so runnable) in the sandbox, never writable, or a run could plant the binary the operator starts."""
+    from fleet.core.sandbox import TOOLS_RO, policy_for_worktree
 
     harness = ClaudeCodeHarness()
-    assert Path.home() / ".local/share/claude" in harness.state_paths
-    policy = policy_for_worktree("/tmp/wt", harness.state_paths)
-    assert str(Path.home() / ".local/share/claude") in policy.read_write_paths
+    paths, _ = harness.run_state({"CLAUDE_CODE_OAUTH_TOKEN": "sk-test"})
+    policy = policy_for_worktree("/tmp/wt", paths)
+    assert str(Path.home() / ".local/share/claude") not in policy.read_write_paths
+    assert Path.home() / ".local/share/claude" in TOOLS_RO
 
 
 @pytest.mark.asyncio
 async def test_claude_with_a_lane_token_never_sees_the_operators_claude_dir():
-    """A lane token (claude setup-token) runs the CLI in its own config dir under the fleet root:
-    the agent cannot read the operator's ~/.claude (transcripts, memory, settings)."""
-    from fleet.core.config import load_config
+    """A lane token (claude setup-token) runs the CLI in its own config dir inside a run home of the
+    fleet's own: the agent cannot read the operator's ~/.claude (transcripts, memory, settings).
+    Without a token the run is refused (review R5)."""
+    from fleet.plugins.harness_base import HarnessRefused
     harness = ClaudeCodeHarness()
     paths, env = harness.run_state({"CLAUDE_CODE_OAUTH_TOKEN": "sk-test"})
-    home = load_config().root / "claude-config"
-    assert env["CLAUDE_CONFIG_DIR"] == str(home) and home.is_dir()
-    assert Path.home() / ".claude" not in paths and home in paths
-    assert harness.run_state({}) == (harness.state_paths, {})      # no token: the login as before
+    assert Path(env["CLAUDE_CONFIG_DIR"]) == paths[0] / ".claude" and env["HOME"] == str(paths[0])
+    assert Path.home() / ".claude" not in paths
+    with pytest.raises(HarnessRefused):
+        harness.run_state({})
     mock_proc = fake_process(b"done", b"", returncode=0)
     with patch("asyncio.create_subprocess_exec", return_value=mock_proc) as mock_exec:
         await harness.execute_task({"text": "x"}, "/tmp/test-wt", env={"CLAUDE_CODE_OAUTH_TOKEN": "sk-test"})
     run_env = mock_exec.call_args.kwargs["env"]
-    assert run_env["CLAUDE_CONFIG_DIR"] == str(home) and run_env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-test"
+    assert "/homes/run/claude-code-" in run_env["CLAUDE_CONFIG_DIR"] and run_env["CLAUDE_CODE_OAUTH_TOKEN"] == "sk-test"
+    assert not Path(run_env["HOME"]).exists()                       # the run home is gone afterwards
 
 
 @pytest.mark.asyncio
@@ -498,3 +503,15 @@ class TestConfigOverrides:
         h = OpenCodeHarness()
         cmd = h.build_command("x")
         assert "--auto" in cmd
+
+    def test_agy_forces_file_token_storage_in_sandbox(self, tmp_path, monkeypatch):
+        """agy 1.5.11 keeps its token in a file under $HOME when SSH_TTY=1 is set; the run's HOME
+        is a run home of the fleet's own, never the operator's (review R1)."""
+        monkeypatch.setenv("FLEET_ROOT", str(tmp_path / "fleet"))
+        h = AgyHarness()
+        monkeypatch.setattr(h, "operator_home", tmp_path / "op")
+        paths, env = h.run_state({})
+        assert env["SSH_TTY"] == "1" and env["HOME"].startswith(str(tmp_path / "fleet" / "homes" / "run" / "agy-"))
+        assert Path("/dev/ptmx") in paths and Path(env["HOME"]) in paths
+        assert not any(str(p).startswith(str(Path.home() / ".gemini")) for p in paths)
+

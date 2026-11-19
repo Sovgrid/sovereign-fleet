@@ -23,7 +23,16 @@ class _ShowsItsConfigDir(ClaudeCodeHarness):
 def test_the_claude_binary_is_not_writable_with_a_lane_token():
     paths, env = ClaudeCodeHarness().run_state({TOKEN: "x"})
     assert HOME / ".local/share/claude" not in paths
-    assert Path(env["CLAUDE_CONFIG_DIR"]) in paths
+    assert Path(env["CLAUDE_CONFIG_DIR"]).parent == paths[0]          # inside its own run home
+    assert not any(str(p).startswith(str(HOME / ".claude")) for p in paths)
+
+
+def test_without_a_lane_token_claude_code_is_refused_not_given_the_operators_claude():
+    """Review R5 (2026-11-19): the old fallback gave the run the operator's ~/.claude (hooks run
+    outside the sandbox, session transcripts), e.g. when the lane's key file was missing."""
+    from fleet.plugins.harness_base import HarnessRefused
+    with pytest.raises(HarnessRefused, match="lane token"):
+        ClaudeCodeHarness().run_state({})
 
 
 def test_the_cursor_binary_is_not_writable():
@@ -47,14 +56,14 @@ async def test_a_lane_token_gets_its_own_config_dir_however_it_arrives(tmp_path,
     if how == "pass_env":
         monkeypatch.setenv(TOKEN, "x")
     res = await _ShowsItsConfigDir().execute_task({"id": "t", "text": "x"}, str(tmp_path), timeout=30, **kwargs)
-    assert res["stdout"].strip().endswith("claude-config")
+    assert res["stdout"].strip().endswith("/.claude") and "/homes/run/claude-code-" in res["stdout"]
     assert str(HOME / ".claude") not in policies[0].read_write_paths
 
 
 @pytest.mark.asyncio
-async def test_without_a_token_the_operators_login_stays(tmp_path, monkeypatch):
+async def test_without_a_token_the_run_is_refused(tmp_path, monkeypatch):
     monkeypatch.setenv("FLEET_SANDBOX", "0")
     monkeypatch.delenv(TOKEN, raising=False)
     res = await _ShowsItsConfigDir().execute_task({"id": "t", "text": "x"}, str(tmp_path), timeout=30,
                                                   pass_env=[TOKEN])
-    assert res["stdout"].strip() == "operator"
+    assert res["exit_code"] == 126 and "lane token" in res["stderr"] and res["stdout"] == ""

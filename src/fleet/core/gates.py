@@ -17,30 +17,38 @@ Ported from the grid runner, with its lessons:
 from __future__ import annotations
 
 import asyncio
+import logging
+import contextlib
 import fnmatch
 import json
 import os
 import re
 import shutil
+import stat
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from fleet.core.config import _expand, load_config
 from fleet.core.egress_proxy import EgressProxy
 from fleet.core.memlimit import GroupWatch, kill_process_group, scope_prefix
 from fleet.core.sandbox import egress_allowlist, egress_audit_path, egress_env, sandbox_disabled
-from fleet.core.sandbox import LandlockSandbox, SandboxUnavailable, policy_for_worktree
+from fleet.core.sandbox import (LandlockSandbox, SandboxUnavailable, fleet_cache, home_env, make_run_home,
+                                policy_for_worktree, remove_run_home, worktree_gitdir)
+
+logger = logging.getLogger("fleet.core.gates")
 
 GLOB_CHARS = "*?["
 TEST_REQUIRED_CATEGORIES = ("bugfix", "feature")
 _NPM_SCRIPT = re.compile(r"^[A-Za-z0-9:_-]{1,64}$")
 _FAILURE_LINE = re.compile(r"(FAILED|FAIL:|ERROR|Error|error[:\[ ]|Traceback|AssertionError|assert |failed|not ok)")
+_SUMMARY_LINE = re.compile(r"^(FAILED |ERROR |E   \S|\S+\.py:\d+:)")
 # Tool caches inside shared node_modules (worktrees link the main checkout's) that builds write.
 NODE_CACHE_DIRS = (".vite-temp", ".vite", ".astro", ".cache")
 _HOME = Path.home()
-# Headless Chrome's scratch profiles and Astro's config file: written by common builds and tests.
-GATE_RW_DEFAULT = (_HOME / ".config/google-chrome-headless", _HOME / ".config/astro")
+# Nothing under the operator's home: headless Chrome's profiles and Astro's config now land in the
+# gate's own home (XDG_CONFIG_HOME, review R6, 2026-11-19).
+GATE_RW_DEFAULT: tuple = ()
 
 
 # ── scope ─────────────────────────────────────────────────────────────────────
@@ -150,32 +158,146 @@ def repo_gate_argv(worktree: Path, configured: Sequence[str] = ()) -> Optional[L
 
 def failure_excerpt(output: str, limit: int = 400) -> str:
     """The lines that say what failed, not the passing preamble."""
-    lines = [ln for ln in output.splitlines() if ln.strip()]
-    hits = [ln.strip() for ln in lines if _FAILURE_LINE.search(ln)]
-    text = " | ".join(hits[-8:]) if hits else " | ".join(lines[-6:])
+    lines = [ln.strip()[:160] for ln in output.splitlines() if ln.strip()]
+    summary = [ln for ln in lines if _SUMMARY_LINE.search(ln)]
+    if summary:
+        hits = summary[-8:]
+        tail = lines[-1]
+        if tail not in hits and _FAILURE_LINE.search(tail):
+            hits.append(tail)
+    else:
+        hits = [ln for ln in lines if _FAILURE_LINE.search(ln)][-8:]
+    text = " | ".join(hits) if hits else " | ".join(lines[-6:])
     return text[-limit:]
 
 
 # ── running a gate ────────────────────────────────────────────────────────────
 
 def gate_writable(worktree: Path) -> List[Path]:
-    """Writable for a gate besides the worktree: tool caches inside linked node_modules, the
-    defaults above and sandbox.gate_writable. Created up front: Landlock grants existing paths."""
+    """Writable for a gate besides the worktree: explicit defaults and sandbox.gate_writable.
+    Created up front: Landlock grants existing paths. Linked node_modules caches live in the
+    gate's ephemeral run home instead of the main checkout (review R7)."""
+    del worktree
     extra = list(GATE_RW_DEFAULT) + [Path(_expand(p)) for p in load_config().sandbox.gate_writable]
-    for link in _linked_node_modules(worktree):
-        extra += [link.resolve() / sub for sub in NODE_CACHE_DIRS]
     for p in extra:
         p.mkdir(parents=True, exist_ok=True)
     return extra
 
 
+def _trusted_nm_roots(worktree: Path) -> List[Path]:
+    roots = [Path(_expand(p)).resolve() for p in load_config().sandbox.read_only]
+    gitdir = worktree_gitdir(worktree)
+    if gitdir is not None:
+        resolved = (gitdir if gitdir.is_absolute() else worktree / gitdir).resolve()
+        if len(resolved.parents) >= 3:
+            roots.append(resolved.parents[2])
+    return roots
+
+
 def _linked_node_modules(worktree: Path) -> List[Path]:
-    out = []
-    for rel in ("node_modules", *(str(p.relative_to(worktree)) for p in worktree.glob("*/*/node_modules"))):
-        link = worktree / rel
-        if link.is_symlink() and link.resolve().is_dir():
+    wt_resolved = worktree.resolve()
+    roots = _trusted_nm_roots(worktree)
+    candidates = dict.fromkeys(
+        p for pat in ("node_modules", "*/node_modules", "*/*/node_modules") for p in worktree.glob(pat)
+    )
+    out: List[Path] = []
+    for link in candidates:
+        if not link.is_symlink():
+            continue
+        rel = link.relative_to(worktree)
+        if any((worktree / p).is_symlink() for p in rel.parents if p != Path(".")):
+            continue
+        try:
+            target = link.resolve()
+        except OSError:
+            continue
+        if not target.is_dir() or target.is_relative_to(wt_resolved):
+            continue
+        if any(target.is_relative_to(root) for root in roots):
             out.append(link)
     return out
+
+
+def _open_parent(worktree: Path, rel: Path) -> int:
+    """An fd of the directory holding `rel`, opened one component at a time without following a
+    symlink (O_NOFOLLOW): the gate runs agent-written code that may have swapped a parent for a link
+    to somewhere else, and the daemon, outside the sandbox, must never act there. Raises OSError."""
+    fd = os.open(worktree, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in rel.parent.parts:
+            nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+    except OSError:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _swap_link(worktree: Path, rel: Path, target: str, *, expect_link: bool) -> bool:
+    """Point the symlink `rel` (inside the worktree) at `target`, through directory fds only. A real
+    directory or file in its place is left alone (the gate made it; it is the worktree's), never
+    deleted. Returns whether the link now points at `target`."""
+    try:
+        pfd = _open_parent(worktree, rel)
+    except OSError as e:
+        logger.warning("gate: not touching %s: a parent is not a real directory (%s)", rel, e)
+        return False
+    try:
+        name = rel.name
+        try:
+            st = os.lstat(name, dir_fd=pfd)
+        except FileNotFoundError:
+            st = None
+        if st is not None:
+            if not stat.S_ISLNK(st.st_mode):
+                logger.warning("gate: %s is no longer a symlink; left as the gate made it", rel)
+                return False
+            os.unlink(name, dir_fd=pfd)
+        elif expect_link:
+            return False
+        os.symlink(target, name, dir_fd=pfd)
+        return True
+    except OSError as e:
+        logger.warning("gate: could not relink %s: %s", rel, e)
+        return False
+    finally:
+        os.close(pfd)
+
+
+@contextlib.contextmanager
+def _shadow_linked_node_modules(worktree: Path, home: Path) -> Iterator[List[Path]]:
+    """Isolate linked node_modules caches inside the gate's ephemeral run home (review R7): during the
+    gate the worktree's link points at a shadow dir whose entries link to the source node_modules
+    (read-only) and whose cache dirs are the gate's own. Every change to the worktree goes through
+    directory fds that never follow a symlink, because the gate may rewrite the worktree."""
+    saved: List[Tuple[Path, str]] = []
+    ro_paths: List[Path] = []
+    shadow_root = home / "_node_modules"
+    try:
+        for idx, link in enumerate(_linked_node_modules(worktree)):
+            rel = link.relative_to(worktree)
+            try:
+                orig = os.readlink(link)
+                src_nm = link.resolve()
+                entries = list(src_nm.iterdir())
+            except OSError:
+                continue
+            shadow = shadow_root / str(idx)
+            shadow.mkdir(parents=True, exist_ok=True)
+            for entry in entries:
+                if entry.name in NODE_CACHE_DIRS:
+                    continue
+                (shadow / entry.name).symlink_to(entry)
+            for sub in NODE_CACHE_DIRS:
+                (shadow / sub).mkdir(exist_ok=True)
+            if _swap_link(worktree, rel, str(shadow), expect_link=True):
+                saved.append((rel, orig))
+                ro_paths.append(src_nm)
+        yield ro_paths
+    finally:
+        for rel, orig in reversed(saved):
+            _swap_link(worktree, rel, orig, expect_link=False)
 
 
 @dataclass
@@ -203,8 +325,12 @@ async def run_gate(name: str, argv: List[str], worktree: Path, timeout: int) -> 
     whatever the sandbox can read."""
     proxy = None
     if load_config().sandbox.egress == "allowlist" and not sandbox_disabled():
-        proxy = EgressProxy(egress_allowlist(), audit_path=egress_audit_path(worktree.name))
-        await proxy.start()
+        try:
+            proxy = EgressProxy(egress_allowlist(), audit_path=egress_audit_path(worktree.name))
+            await proxy.start()
+        except OSError as e:
+            return GateResult(name, argv, 125, f"egress proxy did not start: {e}",
+                              f"egress proxy did not start: {e}")
     try:
         return await _run_gate(name, argv, worktree, timeout, proxy)
     finally:
@@ -213,7 +339,29 @@ async def run_gate(name: str, argv: List[str], worktree: Path, timeout: int) -> 
 
 
 async def _run_gate(name: str, argv: List[str], worktree: Path, timeout: int, proxy: Any) -> GateResult:
-    policy = policy_for_worktree(str(worktree), egress_port=proxy.port if proxy is not None else None)
+    """A gate runs the worktree's code, which an agent wrote: like an agent it gets a fresh home of the
+    fleet's own and the fleet cache, never the operator's ~/.cache (review R6, 2026-11-19)."""
+    try:
+        home, cache = make_run_home("gate"), fleet_cache()
+    except (OSError, ValueError) as e:
+        return GateResult(name, argv, 126, f"refused to run: {e}", "refused to run: no gate home")
+    try:
+        return await _run_gate_in(name, argv, worktree, timeout, proxy, home, cache)
+    finally:
+        remove_run_home(home)
+
+
+async def _run_gate_in(name: str, argv: List[str], worktree: Path, timeout: int, proxy: Any,
+                       home: Path, cache: Path) -> GateResult:
+    with _shadow_linked_node_modules(worktree, home) as nm_ro:
+        return await _exec_gate_in(name, argv, worktree, timeout, proxy, home, cache, nm_ro)
+
+
+async def _exec_gate_in(name: str, argv: List[str], worktree: Path, timeout: int, proxy: Any,
+                        home: Path, cache: Path, ro_state_paths: Sequence[Path]) -> GateResult:
+    policy = policy_for_worktree(str(worktree), (home, cache),
+                                 egress_port=proxy.port if proxy is not None else None,
+                                 ro_state_paths=ro_state_paths)
     policy.read_write_paths += [str(p) for p in gate_writable(worktree)]
     box = LandlockSandbox(policy)
     try:
@@ -221,8 +369,8 @@ async def _run_gate(name: str, argv: List[str], worktree: Path, timeout: int, pr
     except SandboxUnavailable as e:
         return GateResult(name, argv, 126, f"refused to run unsandboxed: {e}", "refused to run unsandboxed")
     memory_max = load_config().sandbox.memory_max
-    wrapped = [*scope_prefix(memory_max), *wrapped]
-    env = {**box.build_safe_env(), "ASTRO_TELEMETRY_DISABLED": "1", "CI": "1"}
+    wrapped = [*scope_prefix(memory_max, kind="gate"), *wrapped]
+    env = {**box.build_safe_env(), **home_env(home, cache), "ASTRO_TELEMETRY_DISABLED": "1", "CI": "1"}
     if proxy is not None:
         env.update(egress_env(proxy.port))
     try:

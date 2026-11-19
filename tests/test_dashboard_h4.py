@@ -53,7 +53,7 @@ def test_dashboard_contains_h4_elements():
 async def test_dashboard_serves_html():
     """GET / or /dashboard serves 200 with the upgraded dashboard HTML."""
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        res = await client.get("/")
+        res = await client.get("/classic")
         assert res.status_code == 200
         assert "SOVEREIGN FLEET" in res.text
         assert "btn-auto-pair" in res.text

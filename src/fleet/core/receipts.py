@@ -182,10 +182,76 @@ def build_receipt(
     if "error" in result and result["error"]:
         receipt["error"] = result["error"]
 
+    executed_drafts = result.get("executed_drafts")
+    if not isinstance(executed_drafts, list):
+        executed_drafts = (task.metadata or {}).get("executed_drafts")
+    if isinstance(executed_drafts, list):
+        approvals = [
+            {
+                "seq": d.get("seq"),
+                "capability": d.get("capability"),
+                "tool": d.get("tool"),
+                "args_sha256": d.get("args_sha256"),
+                "event_id": d.get("approval_event_id"),
+                "pubkey": d.get("approved_by"),
+                "kind": d.get("approval_kind", 4910),
+                "sig": d.get("approval_sig"),
+            }
+            for d in executed_drafts
+            if isinstance(d, dict) and d.get("approval_event_id")
+        ]
+        if approvals:
+            receipt["approvals"] = approvals
+
+    if "facts" in result and isinstance(result["facts"], dict):
+        receipt["facts"] = result["facts"]
+    if result.get("could_not"):
+        receipt["could_not"] = True
+        receipt["outcome"] = "could_not"
+    if "external_fault" in result:
+        receipt["external_fault"] = bool(result["external_fault"])
+    if result.get("chain_broken") or task.metadata.get("chain_broken"):
+        receipt["chain_broken"] = True
+
     if getattr(task, "autopsy", None):
         receipt["autopsy"] = task.autopsy
     elif "autopsy" in result:
         receipt["autopsy"] = result["autopsy"]
+
+    meta = task.metadata or {}
+    intent = meta.get("intent") if isinstance(meta.get("intent"), dict) else {}
+    priv_name = str(meta.get("privateer") or intent.get("privateer") or "").strip()
+    if priv_name and not result.get("commission_refused"):
+        from fleet.core.privateer import (
+            PrivateerError,
+            get_privateer,
+            privateer_nsec_path,
+            sign_privateer_receipt,
+        )
+
+        try:
+            if privateer_nsec_path(priv_name, cfg).is_file():
+                priv_info = get_privateer(priv_name, cfg=cfg)
+                if not priv_info.get("commissioned"):
+                    logger.debug("Skipping privateer receipt signature for %s: commission inactive", task.id)
+                else:
+                    comm_id = str(
+                        meta.get("commission_event_id") or priv_info.get("commission_event_id") or ""
+                    )
+                    receipt["privateer"] = {
+                        "name": priv_info["name"],
+                        "pubkey": priv_info["pubkey"],
+                        "npub": priv_info["npub"],
+                        "commission_event_id": comm_id,
+                    }
+                    receipt["privateer_signature"] = sign_privateer_receipt(
+                        receipt,
+                        privateer_name=priv_name,
+                        commission_event_id=comm_id,
+                        cfg=cfg,
+                    )
+        except PrivateerError as e:
+            logger.debug("Skipping privateer receipt signature for %s: %s", task.id, e)
 
     save_receipt(receipt, spool_dir=spool)
     return receipt

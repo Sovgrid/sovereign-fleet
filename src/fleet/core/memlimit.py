@@ -22,6 +22,7 @@ import functools
 import logging
 import os
 import re
+import secrets
 import shutil
 import signal
 import subprocess
@@ -31,6 +32,9 @@ logger = logging.getLogger("fleet.core.memlimit")
 
 _SIZE_RE = re.compile(r"\d+[kKmMgGtT]?$")
 _PROBE_TIMEOUT = 5  # seconds for `systemctl --user show-environment`
+_PROC = "/proc"
+# fleet-o<owner pid>s<owner start time>-<kind>-<random>.scope: who started the scope is in its name.
+_SCOPE_RE = re.compile(r"^fleet-o(\d+)s(\d+)-[a-z]+-[0-9a-f]+\.scope$")
 
 _warned: set = set()
 
@@ -88,7 +92,58 @@ def parse_size(value: str) -> int:
     return base
 
 
-def scope_prefix(memory_max: str) -> List[str]:
+def _starttime(pid: int, proc: str = _PROC) -> Optional[str]:
+    """Start time of *pid* in clock ticks since boot (field 22 of /proc/<pid>/stat), or None.
+
+    pid plus start time names one process for the whole boot: a recycled pid has another
+    start time. The command name (field 2) may hold spaces and ')', so count after the last ')'."""
+    try:
+        with open(f"{proc}/{pid}/stat", encoding="utf-8", errors="replace") as f:
+            rest = f.read().rsplit(")", 1)[1].split()
+        return rest[19]   # rest[0] is field 3 (state), so field 22 is rest[19]
+    except (OSError, IndexError):
+        return None
+
+
+@functools.lru_cache(maxsize=None)
+def _owner_tag() -> str:
+    return f"o{os.getpid()}s{_starttime(os.getpid(), _PROC) or 0}"
+
+
+def reap_orphan_scopes(run=subprocess.run, proc: str = _PROC) -> List[str]:
+    """SIGKILL every fleet scope whose owner (the daemon or CLI that started it) is verifiably gone.
+
+    A scope is its own unit, outside the daemon's cgroup: after a hard daemon crash (OOM, SIGKILL)
+    the agent in it keeps running, and recover() would requeue its task into the same worktree, so
+    two agents would work one branch. Call once at daemon start, before recover(). An owner whose
+    pid still runs with the same start time is alive (a `fleet run` in a terminal) and is left alone;
+    a name that does not parse is never touched. Returns the units killed."""
+    try:
+        listed = run(["systemctl", "--user", "list-units", "--type=scope", "--all", "--plain",
+                      "--no-legend", "--no-pager", "fleet-o*.scope"],
+                     capture_output=True, text=True, timeout=_PROBE_TIMEOUT, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    reaped: List[str] = []
+    for line in (listed.stdout or "").splitlines():
+        unit = line.split()[0] if line.split() else ""
+        m = _SCOPE_RE.match(unit)
+        if not m:
+            continue
+        pid, start = int(m.group(1)), m.group(2)
+        if _starttime(pid, proc) == start:
+            continue                                   # owner alive: not an orphan
+        logger.warning("ending orphaned scope %s (owner pid %s is gone)", unit, pid)
+        try:
+            run(["systemctl", "--user", "kill", "--signal=SIGKILL", unit],
+                capture_output=True, text=True, timeout=_PROBE_TIMEOUT, check=False)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        reaped.append(unit)
+    return reaped
+
+
+def scope_prefix(memory_max: str, kind: str = "run") -> List[str]:
     """``systemd-run --scope ... --`` prefix with a MemoryMax ceiling, or [] when the limit is off.
 
     The limit is off for FLEET_MEMORY_LIMIT=0 in the environment, ``""`` or ``"0"``, an invalid
@@ -110,7 +165,9 @@ def scope_prefix(memory_max: str) -> List[str]:
     if not _manager_reachable():
         _warn_once("user systemd manager unreachable (systemctl --user show-environment failed)")
         return []
-    return ["systemd-run", "--user", "--scope", "--quiet", "--collect",
+    # named after its owner, so a daemon that restarts after a crash can tell orphans from live runs
+    unit = f"fleet-{_owner_tag()}-{kind}-{secrets.token_hex(4)}"
+    return ["systemd-run", "--user", "--scope", "--quiet", "--collect", f"--unit={unit}",
             "-p", f"MemoryMax={memory_max}",
             "-p", "MemorySwapMax=0", "--"]
 

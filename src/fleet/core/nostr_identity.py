@@ -192,6 +192,28 @@ def npub_hex(npub: str) -> str:
     return raw.hex()
 
 
+def encode_npub(pubkey_hex: str) -> str:
+    """Encode a 64-hex public key as a BIP-173 npub without spawning nak."""
+    s = (pubkey_hex or "").strip().lower()
+    if not _HEX64.fullmatch(s):
+        raise ValueError("expected a 64-hex public key")
+    data_bytes = bytes.fromhex(s)
+    acc, bits, five = 0, 0, []
+    for b in data_bytes:
+        acc = (acc << 8) | b
+        bits += 8
+        while bits >= 5:
+            bits -= 5
+            five.append((acc >> bits) & 31)
+    if bits:
+        five.append((acc << (5 - bits)) & 31)
+    hrp = "npub"
+    values = [ord(c) >> 5 for c in hrp] + [0] + [ord(c) & 31 for c in hrp] + five
+    pm = _polymod(values + [0, 0, 0, 0, 0, 0]) ^ 1
+    checksum = [(pm >> 5 * (5 - i)) & 31 for i in range(6)]
+    return f"{hrp}1" + "".join(_CHARSET[d] for d in (five + checksum))
+
+
 def nevent_id(nevent: str) -> str:
     """64-hex event id of an nevent (TLV type 0); ValueError otherwise."""
     raw, i = _bech32(nevent, "nevent"), 0

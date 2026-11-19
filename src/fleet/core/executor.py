@@ -14,19 +14,21 @@ import contextlib
 import logging
 import subprocess
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Dict, List, Set, Tuple
+from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
 
-from fleet.core.taskstore import FleetTask, TaskStore, TransitionError
+from fleet.core.taskstore import FleetTask, TaskStore, TransitionError, is_deferred
 
 logger = logging.getLogger("fleet.core.executor")
 
 FINAL = ("completed", "failed", "skipped", "cancelled", "blocked", "archived")
 
 
-def runnable(tasks: List[FleetTask], running: Set[str], slots: int) -> List[FleetTask]:
+def runnable(tasks: List[FleetTask], running: Set[str], slots: int,
+             now: Optional[float] = None) -> List[FleetTask]:
     """Return the subset of *tasks* that should be started now.
 
-    Only status ``"queued"`` and not already in *running* are eligible.  A task whose
+    Only status ``"queued"`` and not already in *running* (and not deferred via
+    ``metadata["not_before"]``) are eligible.  A task whose
     ``depends_on`` contains an id that refers to a task still ``"queued"`` or
     ``"in_progress"`` is held back.  A dependency that is in *FINAL* or does not exist
     does *not* hold the task back.  Results are ordered oldest-first by
@@ -42,6 +44,8 @@ def runnable(tasks: List[FleetTask], running: Set[str], slots: int) -> List[Flee
         if t.status != "queued":
             continue
         if t.id in running:
+            continue
+        if is_deferred(t, now=now):
             continue
 
         # Check dependencies
@@ -100,6 +104,11 @@ class Executor:
         }
 
         tasks = await asyncio.to_thread(self.store.load_tasks)
+        task_map = {t.id: t for t in tasks}
+        for tid in list(self.running):
+            stored = task_map.get(tid)
+            if stored is not None and stored.status == "cancelled":
+                self.cancel(tid)
         new_ids: List[str] = []
 
         for task in runnable(tasks, set(self.running), self.max_concurrent - len(self.running)):

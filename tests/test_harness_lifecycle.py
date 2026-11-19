@@ -54,16 +54,17 @@ async def test_stall_detect_kills_the_process(tmp_path, monkeypatch):
     """When stall_seconds fires, the harness kills the process and returns exit 124.
     The killed process must not survive the harness call (audit 2026-11-04)."""
     harness = _NoOutputHarness()
-    monkeypatch.setattr(harness, "default_stall_seconds", 2)
+    monkeypatch.setattr("fleet.plugins.harness_base.STALL_CHECK_SECONDS", 0.05)
+    monkeypatch.setattr(harness, "default_stall_seconds", 0.25)
     started = time.monotonic()
-    res = await harness.execute_task({"text": "x"}, str(tmp_path), timeout=60)
+    res = await harness.execute_task({"text": "x"}, str(tmp_path), timeout=15)
     elapsed = time.monotonic() - started
     # The process was killed by the stall handler.
     assert res["exit_code"] == 124
     assert "stalled" in res.get("stderr", "").lower()
     # The stall detector checked every STALL_CHECK_SECONDS seconds, so the total
-    # time should be roughly stall_seconds + one check interval, not 60.
-    assert elapsed < 30
+    # time should be roughly stall_seconds + one check interval, not 15.
+    assert elapsed < 5
 
 
 # ── timeout: the process is killed (existing test proves the pattern) ──────
@@ -85,11 +86,11 @@ async def test_timeout_kills_the_process_tree(tmp_path):
         default_stall_seconds: int = 0  # turn off stall detection so timeout fires
 
     res = await TimeoutHarness().execute_task(
-        {"text": "x"}, str(tmp_path), timeout=2)
+        {"text": "x"}, str(tmp_path), timeout=0.25)
     elapsed = time.monotonic() - started
     assert res["exit_code"] == 124
     assert "timed out" in res.get("stderr", "").lower()
-    assert elapsed < 15  # must not wait for the full sleep
+    assert elapsed < 5  # must not wait for the full sleep
 
 
 # ── loop detection: the process is killed before the run returns ────────────

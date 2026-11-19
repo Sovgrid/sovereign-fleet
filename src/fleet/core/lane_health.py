@@ -53,6 +53,7 @@ from typing import Any, Dict, Iterator, List, Optional, Sequence, Set, Tuple
 
 from fleet.core import catalog, quirks
 from fleet.core.config import FleetConfig, LaneSpec, LaneStep, active_credential_plugin, lane_key, load_config
+from fleet.core.quota import lane_block_info
 
 logger = logging.getLogger("fleet.core.lane_health")
 
@@ -387,14 +388,22 @@ def fresh_since(cfg: Optional[FleetConfig] = None) -> Dict[str, float]:
             and _applies(cfg.lanes[name], rec["successor"])}
 
 
-def lane_records(cfg: Optional[FleetConfig] = None) -> Dict[str, Dict[str, Any]]:
+def lane_records(cfg: Optional[FleetConfig] = None, spool_dir: Optional[Path] = None) -> Dict[str, Dict[str, Any]]:
     """Per lane the fleet runs: status (ok | dead | retired | untested), reason, since, checked_at;
-    `successor` when a retired model was replaced, `notice` when its end is announced."""
+    `successor` when a retired model was replaced, `notice` when its end is announced, and
+    `resting_until`/`resting_reason` when temporarily rested for a limit or auth failure."""
     cfg = cfg or load_config()
     state = load_state(state_path(cfg))
     stored = state["lanes"]
-    return {name: stored.get(name) or {"status": "untested", "reason": None, "since": None, "checked_at": None}
-            for name in effective_lanes(cfg, state)}
+    out: Dict[str, Dict[str, Any]] = {}
+    for name in effective_lanes(cfg, state):
+        rec = dict(stored.get(name) or {"status": "untested", "reason": None, "since": None, "checked_at": None})
+        until, why = lane_block_info(name, spool_dir=spool_dir)
+        if until:
+            rec["resting_until"] = until
+            rec["resting_reason"] = why
+        out[name] = rec
+    return out
 
 
 def dead_lanes(cfg: Optional[FleetConfig] = None) -> Set[str]:
@@ -404,14 +413,26 @@ def dead_lanes(cfg: Optional[FleetConfig] = None) -> Set[str]:
 
 def summary(records: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
     by = {s: sorted(n for n, r in records.items() if r.get("status") == s) for s in (OK, DEAD, RETIRED, "untested")}
+    resting = sorted(n for n, r in records.items() if r.get("resting_until"))
     text = f"{len(by[OK])} ok, {len(by[DEAD])} dead, {len(by['untested'])} untested"
     if by[RETIRED]:
         text += f", {len(by[RETIRED])} retired"
-    down = "; ".join(f"{label}: {', '.join(by[s])}" for label, s in (("dead", DEAD), ("retired", RETIRED)) if by[s])
+    if resting:
+        text += f", {len(resting)} resting"
+    down_parts = [(label, by[s]) for label, s in (("dead", DEAD), ("retired", RETIRED)) if by[s]]
+    if resting:
+        down_parts.append(("resting", resting))
+    down = "; ".join(f"{label}: {', '.join(names)}" for label, names in down_parts)
     replaced = sorted(n for n, r in records.items() if r.get("successor") and r.get("status") == OK)
-    return {"ok": len(by[OK]), "dead": len(by[DEAD]), "retired": len(by[RETIRED]), "untested": len(by["untested"]),
-            "dead_lanes": by[DEAD], "retired_lanes": by[RETIRED], "replaced_lanes": replaced,
-            "text": text + (f" ({down})" if down else "")}
+    res: Dict[str, Any] = {
+        "ok": len(by[OK]), "dead": len(by[DEAD]), "retired": len(by[RETIRED]), "untested": len(by["untested"]),
+        "dead_lanes": by[DEAD], "retired_lanes": by[RETIRED], "replaced_lanes": replaced,
+        "text": text + (f" ({down})" if down else ""),
+    }
+    if resting:
+        res["resting"] = len(resting)
+        res["resting_lanes"] = resting
+    return res
 
 
 def _next(old: Dict[str, Any], probe: Probe, now: int) -> Dict[str, Any]:

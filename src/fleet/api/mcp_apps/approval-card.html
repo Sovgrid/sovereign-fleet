@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Fleet approval</title>
+<style>
+:root { --bg:#fbfaf7; --fg:#1d1d1b; --muted:#6a6860; --line:#dcd9d0; --accent:#9a5b00; --ok:#1f7a3d; --warn:#9a5b00; --bad:#b3261e; }
+@media (prefers-color-scheme: dark) { :root { --bg:#1c1b19; --fg:#ecebe6; --muted:#a09d93; --line:#3a3833; --accent:#e0af68; --ok:#6cc58a; --warn:#e0af68; --bad:#f2928b; } }
+* { box-sizing: border-box; }
+body { margin:0; padding:14px; background:var(--bg); color:var(--fg); font:14px/1.45 system-ui, sans-serif; }
+h1 { font-size:16px; margin:0 0 8px; overflow-wrap:anywhere; }
+h2 { font-size:12px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); margin:14px 0 4px; }
+.muted { color:var(--muted); }
+.badge { display:inline-block; padding:1px 8px; border:1px solid var(--line); border-radius:10px; font-size:12px; }
+.badge.ok { color:var(--ok); } .badge.warn { color:var(--warn); } .badge.bad { color:var(--bad); }
+dl { display:grid; grid-template-columns:max-content 1fr; gap:4px 12px; margin:10px 0; }
+dt { color:var(--muted); } dd { margin:0; overflow-wrap:anywhere; }
+ul { margin:0; padding-left:18px; overflow-wrap:anywhere; }
+.links { margin-top:14px; display:flex; gap:10px; flex-wrap:wrap; }
+a.link { color:var(--accent); border:1px solid var(--accent); border-radius:6px; padding:5px 12px; text-decoration:none; }
+a.link:focus-visible, a.link:hover { background:var(--line); }
+</style>
+</head>
+<body>
+<main>
+  <h1 id="title">Waiting for the approval brief.</h1>
+  <p><span class="badge" id="risk"></span> <span class="badge" id="undo"></span></p>
+  <p id="reco"></p>
+  <dl id="facts"></dl>
+  <div id="lists"></div>
+  <p class="muted">This card only shows the question. The decision is made in the fleet dashboard or with a signature on the phone.</p>
+  <div class="links" id="links"></div>
+</main>
+<script>
+(function () {
+  "use strict";
+  var nextId = 1, pending = {}, lastHeight = 0;
+  function send(msg) { window.parent.postMessage(msg, "*"); }
+  function request(method, params) {
+    var id = nextId++;
+    return new Promise(function (resolve, fail) { pending[id] = { resolve: resolve, fail: fail }; send({ jsonrpc: "2.0", id: id, method: method, params: params }); });
+  }
+  function text(tag, value, cls) { var e = document.createElement(tag); e.textContent = String(value); if (cls) { e.className = cls; } return e; }
+  function allowed(url, protocols) { var m = /^([a-z][a-z0-9+.-]*:)/i.exec(url); return !!m && protocols.indexOf(m[1].toLowerCase()) >= 0; }
+  function link(label, url, protocols) {
+    if (typeof url !== "string" || !allowed(url, protocols)) { return null; }
+    var a = text("a", label, "link");
+    a.href = url; a.target = "_blank"; a.rel = "noopener noreferrer";
+    a.addEventListener("click", function (ev) { ev.preventDefault(); request("ui/open-link", { url: url }).catch(function () {}); });
+    return a;
+  }
+  function list(title, items) {
+    var box = document.getElementById("lists");
+    if (!Array.isArray(items) || !items.length) { return; }
+    box.appendChild(text("h2", title));
+    var ul = document.createElement("ul");
+    items.forEach(function (i) { ul.appendChild(text("li", i)); });
+    box.appendChild(ul);
+  }
+  function notifySize() {
+    var main = document.querySelector("main");
+    var raw = main ? (main.getBoundingClientRect().height + 32) : (document.body ? document.body.offsetHeight + 4 : 220);
+    var h = Math.max(120, Math.min(Math.ceil(raw), 1600));
+    if (h === lastHeight) { return; }
+    lastHeight = h;
+    send({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { height: h } });
+  }
+  function render(data) {
+    if (!data || typeof data !== "object") { return; }
+    var b = data.brief;
+    if (!b || typeof b !== "object") {
+      document.getElementById("title").textContent = String(data.title || data.task_id || "Task") + " is not waiting for an approval.";
+      notifySize();
+      return;
+    }
+    document.getElementById("title").textContent = String(b.question || data.title || data.task_id);
+    var risk = b.risk || {}, undo = b.undo || {}, reco = b.recommendation || {};
+    var r = document.getElementById("risk"); r.textContent = "Risk: " + String(risk.level || "unknown");
+    r.className = "badge " + (risk.level === "low" ? "ok" : (risk.level === "high" ? "bad" : "warn"));
+    document.getElementById("undo").textContent = undo.reversible ? "Can be undone" : "Cannot be undone";
+    document.getElementById("reco").textContent = "Recommendation: " + String(reco.action || "your call") + (reco.reason ? ". " + String(reco.reason) : "");
+    var dl = document.getElementById("facts"); dl.textContent = "";
+    [["Task", data.task_id], ["Undo", undo.label]].forEach(function (row) {
+      if (row[1]) { dl.appendChild(text("dt", row[0])); dl.appendChild(text("dd", row[1])); }
+    });
+    var lists = document.getElementById("lists"); lists.textContent = "";
+    list("Why you are asked", b.why);
+    list("Reasons for the risk", risk.reasons);
+    list("If you say yes", b.if_approve);
+    list("If you say no", b.if_reject);
+    var box = document.getElementById("links"); box.textContent = "";
+    var links = data.links || {};
+    var open = link("Open in fleet", links.fleet, ["http:", "https:"]);
+    if (open) { box.appendChild(open); }
+    var amber = link("Approve in Amber", links.amber, ["nostrsigner:"]);
+    if (amber) { box.appendChild(amber); }
+    notifySize();
+    if (window.requestAnimationFrame) { window.requestAnimationFrame(notifySize); }
+  }
+  window.addEventListener("resize", notifySize);
+  window.addEventListener("message", function (ev) {
+    if (ev.source !== window.parent) { return; }
+    var m = ev.data;
+    if (!m || m.jsonrpc !== "2.0") { return; }
+    if (m.id !== undefined && !m.method && pending[m.id]) {
+      var p = pending[m.id]; delete pending[m.id];
+      if (m.error) { p.fail(m.error); } else { p.resolve(m.result); }
+      return;
+    }
+    if (m.method === "ui/notifications/tool-result" && m.params) { render(m.params.structuredContent); }
+  });
+  request("ui/initialize", { protocolVersion: "2025-11-21", appInfo: { name: "fleet-approval-card", version: "1" }, appCapabilities: {} })
+    .then(function () { send({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} }); notifySize(); })
+    .catch(function () {});
+})();
+</script>
+</body>
+</html>

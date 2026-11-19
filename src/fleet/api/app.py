@@ -18,32 +18,60 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response, WebSocket
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from fleet import __version__
-from fleet.api import auth, background
+from fleet.api import auth, mcp_http, scopes, background
 from fleet.core import lane_health, memlimit, sandbox, risk as _risk
 from fleet.core import budget
 from fleet.core.backends import BackendError, LocalBackend, make_backend
+from fleet.core.capability import list_task_drafts
 from fleet.core.config import get_credential_plugin, load_config
 from fleet.core.models import compatible_harnesses_for_model
+from fleet.core.nip46_relay import Nip46Relay, handle_fastapi_websocket
 from fleet.core.quota import lane_block_info
 from fleet.core.roster import RosterManager
 from fleet.core.settings import FleetSettings, load_settings, save_settings
+from fleet.core.signer import SignerError, SignerManager, SignerUnreachable
 from fleet.core.taskstore import FleetTask, TaskStore
 from fleet.plugins.registry import harness_registry
 
 API_DIR = Path(__file__).parent
 
+async def _lane_events() -> None:
+    """Reports lane blocks and unblocks to the event log (the quota module itself stays unchanged)."""
+    from fleet.core.events import LaneWatcher
+    watcher = LaneWatcher()
+    while True:
+        await asyncio.to_thread(watcher.poll)
+        await asyncio.sleep(5)
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
-    async with background.running(task_store):
-        yield
+    from fleet.core.capability import sweep as _capability_sweep
+    from fleet.core.memlimit import reap_orphan_scopes
+    try:
+        # before recover() requeues in_progress tasks: an agent that outlived a crashed daemon in its
+        # own systemd scope would otherwise work the same worktree as the requeued run
+        await asyncio.to_thread(reap_orphan_scopes)
+    except Exception:
+        logging.getLogger("fleet.api.app").exception("orphan scope reap failed at startup")
+    try:
+        _capability_sweep()
+    except Exception:
+        logging.getLogger("fleet.api.app").exception("capability sweep failed at startup")
+    lanes = asyncio.create_task(_lane_events(), name="lane-events")
+    try:
+        async with background.running(task_store):
+            yield
+    finally:
+        lanes.cancel()
 
 
 app = FastAPI(
@@ -52,16 +80,18 @@ app = FastAPI(
     description="Task queue, model roster and dashboard for a multi-harness agent fleet.",
     lifespan=lifespan,
 )
-app.mount("/static", StaticFiles(directory=API_DIR / "static"), name="static")
+app.mount("/static", StaticFiles(directory=API_DIR / "static", html=True), name="static")
 
 task_store = TaskStore()
 _grid: Optional[Any] = None
 _roster: Optional[RosterManager] = None
+_nip46_relay: Optional[Nip46Relay] = None
+_signer_manager: Optional[SignerManager] = None
 _current_settings = load_settings()
 _api_token: Optional[str] = None
 
 # Reachable without the token: the dashboard shell (it holds no data), PWA files, liveness.
-PUBLIC_PATHS = {"/", "/health", "/manifest.json", "/sw.js", "/api/auth/session"}
+PUBLIC_PATHS = {"/", "/classic", "/health", "/manifest.json", "/sw.js", "/api/auth/session"}
 
 
 def api_token() -> str:
@@ -89,6 +119,324 @@ def roster_manager() -> RosterManager:
     return _roster
 
 
+def _draft_backend():
+    from fleet.core.backends import CompositeBackend
+
+    b = backend()
+    if isinstance(b, CompositeBackend):
+        return b.local
+    return b
+
+
+async def _complete_signed_draft(
+    task_id: str,
+    seq: int,
+    *,
+    approval_event: Dict[str, Any],
+    capability: Optional[str] = None,
+    fleet_id: Optional[str] = None,
+):
+    return await _draft_backend().complete_signed_draft_async(
+        task_id, seq, approval_event=approval_event, capability=capability, fleet_id=fleet_id
+    )
+
+
+async def _reject_signed_draft(
+    task_id: str,
+    seq: int,
+    *,
+    by: str = "operator",
+    reason: str = "",
+    capability: Optional[str] = None,
+):
+    return await asyncio.to_thread(
+        _draft_backend().reject_draft, task_id, seq, by=by, reason=reason, capability=capability
+    )
+
+
+async def _complete_privateer_commission(
+    name: str,
+    *,
+    commission_event: Dict[str, Any],
+    fleet_id: Optional[str] = None,
+):
+    from fleet.core.privateer import complete_commission
+
+    return await asyncio.to_thread(
+        complete_commission, name, commission_event=commission_event, fleet_id=fleet_id
+    )
+
+
+async def _decline_privateer_commission(name: str, *, reason: str = ""):
+    from fleet.core.privateer import decline_commission
+
+    return await asyncio.to_thread(decline_commission, name, reason=reason)
+
+
+def signer_manager() -> SignerManager:
+    """The NIP-46 remote operator signer manager; created on first use."""
+    global _signer_manager
+    if _signer_manager is None:
+        _signer_manager = SignerManager(relay_getter=get_nip46_relay)
+        _signer_manager.set_draft_handlers(
+            complete=_complete_signed_draft,
+            reject=_reject_signed_draft,
+        )
+        _signer_manager.set_commission_handlers(
+            complete=_complete_privateer_commission,
+            reject=_decline_privateer_commission,
+        )
+    return _signer_manager
+
+
+def get_nip46_relay() -> Nip46Relay:
+    """Built-in memory-only NIP-46 relay mounted on /nip46."""
+    global _nip46_relay
+    if _nip46_relay is None:
+        mgr = signer_manager()
+        _nip46_relay = Nip46Relay(
+            fleet_pubkeys=mgr.fleet_pubkeys,
+            nak=load_config().nostr.nak,
+            on_event=mgr.handle_nip46_event,
+            on_subscribe=mgr.handle_nip46_subscribe,
+        )
+    return _nip46_relay
+
+
+@app.websocket("/nip46")
+async def nip46_websocket(websocket: WebSocket):
+    """In-memory NIP-46 NostrConnect relay (no NIP-42 AUTH; kind 24133 peer-filtered)."""
+    await handle_fastapi_websocket(get_nip46_relay(), websocket)
+
+
+class SignerPairRequest(BaseModel):
+    relay_url: str = Field(default="", max_length=512)
+    host: str = Field(default="", max_length=255)
+    name: str = Field(default="Sovereign Fleet", max_length=100)
+
+
+class SignerBunkerRequest(BaseModel):
+    bunker_uri: str = Field(min_length=1, max_length=2048)
+
+
+@app.get("/api/fleet/signer")
+def get_signer_status():
+    return signer_manager().status()
+
+
+@app.post("/api/fleet/signer/pair")
+def start_signer_pair(request: Request, body: Optional[SignerPairRequest] = None):
+    req = body or SignerPairRequest()
+    req_host = req.host.strip() or (request.url.hostname or "")
+    try:
+        return signer_manager().start_nostrconnect_pairing(
+            relay_url=req.relay_url,
+            request_host=req_host,
+            request_scheme=request.url.scheme,
+            name=req.name,
+        )
+    except SignerError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/api/fleet/signer/bunker")
+async def pair_signer_bunker(request: Request, req: SignerBunkerRequest):
+    req_host = request.url.hostname or ""
+    try:
+        return await signer_manager().pair_bunker(req.bunker_uri, request_host=req_host)
+    except SignerUnreachable as e:      # the relay or the bunker, not the request
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except SignerError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/api/fleet/signer/test")
+async def send_signer_test():
+    """Ask the paired phone to sign a harmless test event (kind 4919); approves nothing."""
+    try:
+        return await signer_manager().request_test_signature()
+    except SignerUnreachable as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    except SignerError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get("/api/fleet/signer/test/{req_id}")
+def get_signer_test(req_id: str):
+    try:
+        return signer_manager().test_signature_status(req_id)
+    except SignerError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+class NotifyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ntfy: bool = False
+    ntfy_url: Optional[str] = Field(None, max_length=300)
+    matrix: bool = False
+    nostr: bool = False
+    nostr_relays: List[str] = Field(default_factory=list, max_length=10)
+    app_url: Optional[str] = Field(None, max_length=300)
+
+
+def _notify_view() -> Dict[str, Any]:
+    from fleet.core.notify import matrix_available, nostr_available
+    cfg = load_config()
+    s = load_settings()
+    nostr_stat = nostr_available(cfg)
+    return {"ntfy": {"enabled": s.notify_ntfy, "url": s.notify_ntfy_url or ""},
+            "matrix": {"enabled": s.notify_matrix, "available": matrix_available(cfg)},
+            "nostr": {"enabled": s.notify_nostr, "relays": list(s.notify_nostr_relays), **nostr_stat},
+            "app_url": s.notify_app_url or ""}
+
+
+@app.get("/api/fleet/notify")
+def get_notify():
+    """'Needs you' notification channels (core/notify.py): ntfy, Matrix and Nostr DM."""
+    return _notify_view()
+
+
+@app.post("/api/fleet/notify")
+def set_notify(req: NotifyRequest):
+    global _current_settings
+    from fleet.core.nostr_notify import NostrNotifyError, check_nostr_relays, nostr_dm_status
+    from fleet.core.notify import NotifyError, check_ntfy_url, matrix_available
+    cfg = load_config()
+    url = (req.ntfy_url or "").strip() or None
+    try:
+        if url:
+            url = check_ntfy_url(url)
+        if req.app_url:
+            check_ntfy_url(req.app_url.rstrip("/") + "/x")      # the same shape: http(s), a host, no user
+        relays = check_nostr_relays(req.nostr_relays)
+    except (NotifyError, NostrNotifyError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if req.ntfy and not url:
+        raise HTTPException(status_code=400, detail="switching ntfy on needs its topic address")
+    if req.matrix and not matrix_available(cfg):
+        raise HTTPException(status_code=400, detail="Matrix is not set up: [matrix] room_id and token in fleet.toml")
+    if req.nostr:
+        if not relays:
+            raise HTTPException(status_code=400, detail="switching Nostr DM on needs at least one relay address")
+        stat = nostr_dm_status(cfg)
+        if not stat.get("available"):
+            raise HTTPException(status_code=400, detail=stat.get("reason") or "Nostr DM requires a pinned operator key")
+    _current_settings = load_settings().model_copy(update={
+        "notify_ntfy": req.ntfy, "notify_ntfy_url": url, "notify_matrix": req.matrix,
+        "notify_nostr": req.nostr, "notify_nostr_relays": relays,
+        "notify_app_url": (req.app_url or "").strip() or None})
+    save_settings(_current_settings)
+    return _notify_view()
+
+
+@app.post("/api/fleet/notify/test")
+async def test_notify():
+    from fleet.core.notify import deliver
+    s = load_settings()
+    if not (s.notify_ntfy or s.notify_matrix or s.notify_nostr):
+        raise HTTPException(status_code=400, detail="no channel is switched on")
+    link = (s.notify_app_url or "").rstrip("/") + "/#/home" if s.notify_app_url else ""
+    return {"result": await deliver({"title": "Test from Sovereign Fleet", "body": "Notifications work.",
+                                     "priority": "default", "click": link}, s, load_config())}
+
+
+@app.delete("/api/fleet/signer")
+def clear_signer_pairing():
+    signer_manager().clear_pairing()
+    return {"status": "ok"}
+
+
+class CreatePrivateerRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    capabilities: List[str] = Field(min_length=1, max_length=32)
+    budget: int = Field(default=50, ge=1, le=10000)
+    allowed_domains: List[str] = Field(default_factory=list, max_length=64)
+    ttl_seconds: int = Field(default=7 * 86400, ge=60, le=365 * 86400)
+
+
+@app.get("/api/fleet/privateers")
+def list_privateer_items():
+    from fleet.core.privateer import list_privateers
+
+    return {"privateers": list_privateers()}
+
+
+@app.get("/api/fleet/privateers/{name}")
+def get_privateer_item(name: str):
+    from fleet.core.privateer import PrivateerError, get_privateer
+
+    try:
+        return get_privateer(name)
+    except PrivateerError as e:
+        code = 404 if "does not exist" in str(e) else 400
+        raise HTTPException(status_code=code, detail=str(e)) from e
+
+
+@app.post("/api/fleet/privateers", status_code=202)
+async def create_privateer_item(req: CreatePrivateerRequest):
+    from fleet.core.privateer import (
+        PrivateerError,
+        create_privateer,
+        privateer_nsec_path,
+        privateer_record_path,
+        request_commission_prompt,
+    )
+
+    mgr = signer_manager()
+    cfg = load_config()
+    try:
+        mgr._verified_paired_signer(cfg)
+        create_privateer(
+            req.name,
+            capabilities=req.capabilities,
+            budget=req.budget,
+            allowed_domains=req.allowed_domains,
+            ttl_seconds=req.ttl_seconds,
+            cfg=cfg,
+        )
+    except (SignerError, PrivateerError) as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+    try:
+        return await request_commission_prompt(
+            req.name,
+            signer_manager=mgr,
+            cfg=cfg,
+            ttl_seconds=req.ttl_seconds,
+        )
+    except PrivateerError as e:
+        privateer_record_path(req.name, cfg).unlink(missing_ok=True)
+        privateer_nsec_path(req.name, cfg).unlink(missing_ok=True)
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/api/fleet/privateers/{name}/commission", status_code=202)
+async def recommission_privateer_item(name: str, ttl_seconds: Optional[int] = None):
+    from fleet.core.privateer import PrivateerError, request_commission_prompt
+
+    try:
+        return await request_commission_prompt(
+            name,
+            signer_manager=signer_manager(),
+            ttl_seconds=ttl_seconds,
+        )
+    except PrivateerError as e:
+        code = 404 if "does not exist" in str(e) else 400
+        raise HTTPException(status_code=code, detail=str(e)) from e
+
+
+@app.delete("/api/fleet/privateers/{name}")
+def revoke_privateer_item(name: str):
+    from fleet.core.privateer import PrivateerError, revoke_privateer
+
+    try:
+        return revoke_privateer(name)
+    except PrivateerError as e:
+        code = 404 if "does not exist" in str(e) else 400
+        raise HTTPException(status_code=code, detail=str(e)) from e
+
+
 # JSON compresses about tenfold; the task list and the roster are the large ones.
 app.add_middleware(GZipMiddleware, minimum_size=2048)
 
@@ -98,9 +446,36 @@ async def require_token(request: Request, call_next):
     path = request.url.path
     if path in PUBLIC_PATHS or path.startswith("/static/"):
         return await call_next(request)
+    if path == "/api/mcp":
+        if (origin_err := mcp_http.validate_origin(request)) is not None:
+            return origin_err
+        auth_info, auth_err = mcp_http.authenticate_mcp_request(request, api_token())
+        if auth_err is not None:
+            return auth_err
+        assert auth_info is not None
+        request.state.fleet_scope = auth_info.scope
+        request.state.fleet_client = auth_info.client
+        request.state.fleet_mcp_auth = auth_info
+        needed = scopes.required_scope(request.method, path)
+        if not scopes.at_least(auth_info.scope, needed):
+            return JSONResponse(
+                {"detail": f"this token ({auth_info.client}, scope {auth_info.scope}) may not do this; it needs {needed}"},
+                status_code=403,
+            )
+        return await call_next(request)
+    scope, who = "admin", "operator"
     if not auth.is_authorized(request, api_token()):
-        return JSONResponse({"detail": "Not authenticated"}, status_code=401,
-                            headers={"WWW-Authenticate": "Bearer"})
+        header = request.headers.get("authorization", "")
+        entry = scopes.default_store().check(header[7:].strip()) if header.lower().startswith("bearer ") else None
+        if entry is None:
+            return JSONResponse({"detail": "Not authenticated"}, status_code=401,
+                                headers={"WWW-Authenticate": "Bearer"})
+        scope, who = entry["scope"], entry["name"]
+    request.state.fleet_scope, request.state.fleet_client = scope, who
+    needed = scopes.required_scope(request.method, path)
+    if not scopes.at_least(scope, needed):
+        return JSONResponse({"detail": f"this token ({who}, scope {scope}) may not do this; it needs {needed}"},
+                            status_code=403)
     return await call_next(request)
 
 
@@ -141,6 +516,119 @@ def delete_session(response: Response):
     return {"status": "ok"}
 
 
+# ── EVENTS (/api/v1/events: server-sent events from the event log, see fleet.core.events) ──
+
+EVENT_PING_SECONDS = 15
+EVENT_MAX_SECONDS = 30 * 60          # then the stream ends and the client reconnects with Last-Event-ID
+EVENT_POLL_SECONDS = 0.5             # how often the log file is looked at for news
+EVENT_MAX_STREAMS = 4                # per token or session
+_event_streams: Dict[str, int] = {}
+
+
+def _stream_key(request: Request) -> str:
+    """One key per token or session: a scoped token by name, else the admin token or the cookie."""
+    who = getattr(request.state, "fleet_client", "operator")
+    via = "bearer" if request.headers.get("authorization", "").lower().startswith("bearer ") else "cookie"
+    return f"{who}:{via}"
+
+
+def _sse_frame(rec: Dict[str, Any]) -> str:
+    kind = re.sub(r"[^A-Za-z0-9_.-]", "_", str(rec.get("type", "message")))
+    return f"id: {rec['id']}\nevent: {kind}\ndata: {json.dumps(rec, separators=(',', ':'))}\n\n"
+
+
+def _since(request: Request, latest: int) -> int:
+    for raw in (request.headers.get("last-event-id"), request.query_params.get("since")):
+        if raw is not None and raw.strip().isdigit():
+            return int(raw.strip())
+    return latest
+
+
+@app.get("/api/v1/events")
+async def get_events(request: Request, format: str = "sse", since: Optional[int] = None, limit: int = 500):
+    from fleet.core import events as event_log
+    log = event_log.default_log()
+    if format == "json":
+        start = max(0, since or 0)
+        recs = await asyncio.to_thread(log.read_since, start, max(1, min(limit, event_log.READ_LIMIT)))
+        return {"events": recs, "last_id": recs[-1]["id"] if recs else start}
+    if format != "sse":
+        raise HTTPException(status_code=400, detail="format must be sse or json")
+    key = _stream_key(request)
+    if _event_streams.get(key, 0) >= EVENT_MAX_STREAMS:
+        raise HTTPException(status_code=429, detail=f"at most {EVENT_MAX_STREAMS} open event streams per token or session")
+    last = _since(request, await asyncio.to_thread(log.latest_id))
+
+    async def stream():
+        nonlocal last
+        # counted here, not before the response: a client that leaves before the body starts never
+        # runs this generator, so its finally would never give the slot back (429 until a restart)
+        _event_streams[key] = _event_streams.get(key, 0) + 1
+        loop = asyncio.get_running_loop()
+        end = loop.time() + EVENT_MAX_SECONDS
+        next_ping = loop.time() + EVENT_PING_SECONDS
+        seen = None
+        try:
+            yield "retry: 3000\n: connected\n\n"
+            while loop.time() < end:
+                sig = log.signature()
+                if sig != seen:
+                    recs = await asyncio.to_thread(log.read_since, last, event_log.READ_LIMIT)
+                    seen = sig
+                    for rec in recs:
+                        last = rec["id"]
+                        yield _sse_frame(rec)
+                        next_ping = loop.time() + EVENT_PING_SECONDS
+                    if len(recs) >= event_log.READ_LIMIT:
+                        seen = None      # more waiting
+                        continue
+                if loop.time() >= next_ping:
+                    yield ": ping\n\n"
+                    next_ping = loop.time() + EVENT_PING_SECONDS
+                if await request.is_disconnected():
+                    return
+                await asyncio.sleep(EVENT_POLL_SECONDS)
+        finally:
+            left = _event_streams.get(key, 1) - 1
+            if left > 0:
+                _event_streams[key] = left
+            else:
+                _event_streams.pop(key, None)
+
+    return StreamingResponse(stream(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
+
+
+# ── TOKENS (scoped API tokens; admin only, see fleet.api.scopes) ──
+
+class TokenCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    scope: str = Field(min_length=1, max_length=16)
+    expires_in_days: Optional[float] = Field(None, gt=0, le=3650)
+
+
+@app.get("/api/fleet/tokens")
+def list_tokens():
+    return {"tokens": scopes.default_store().list()}
+
+
+@app.post("/api/fleet/tokens", status_code=201)
+def create_token(req: TokenCreateRequest):
+    try:
+        secret, entry = scopes.default_store().create(req.name, req.scope, expires_in_days=req.expires_in_days)
+    except scopes.TokenError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"token": secret, "shown_once": True, **entry}
+
+
+@app.delete("/api/fleet/tokens/{token_id}")
+def revoke_token(token_id: str):
+    try:
+        return scopes.default_store().revoke(token_id)
+    except scopes.TokenError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
 # ── TASKS ──
 
 class EnqueueTaskRequest(BaseModel):
@@ -148,6 +636,9 @@ class EnqueueTaskRequest(BaseModel):
     lane: Optional[str] = Field(None, max_length=128)
     depends_on: List[str] = Field(default_factory=list, max_length=64)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+    # Same key + same request returns the task the first attempt queued (also as the
+    # Idempotency-Key header); see fleet.core.idempotency.
+    idempotency_key: Optional[str] = Field(None, max_length=128)
 
 
 class TaskResponse(BaseModel):
@@ -162,9 +653,25 @@ class TaskResponse(BaseModel):
     issue: Optional[Dict[str, Any]] = None       # {repo, number, url} for a task from an issue
     metadata: Dict[str, Any] = Field(default_factory=dict)
     autopsy: Optional[Dict[str, Any]] = None
+    brief: Optional[Dict[str, Any]] = None      # tasks awaiting approval: why, yes/no, risk (core/brief.py)
 
 
-def _response(t: FleetTask) -> TaskResponse:
+def _brief_for(t: FleetTask, deps_map: Optional[Dict[str, List[str]]] = None) -> Optional[Dict[str, Any]]:
+    if t.status != "awaiting_approval":
+        return None
+    from fleet.core.brief import approval_brief
+    try:
+        if deps_map is None:
+            deps = [x.id for x in backend().list_tasks() if t.id in (x.depends_on or [])]
+        else:
+            deps = deps_map.get(t.id, [])
+        return approval_brief(t, cfg=load_config(), autonomy=_current_settings.autonomy_level, dependents=deps)
+    except Exception:  # noqa: BLE001 - a brief that fails must not hide the task
+        logging.getLogger("fleet.api.app").exception("approval brief failed for %s", t.id)
+        return None
+
+
+def _response(t: FleetTask, deps_map: Optional[Dict[str, List[str]]] = None) -> TaskResponse:
     meta = t.metadata or {}
     issue = meta.get("issue") if isinstance(meta.get("issue"), dict) else None
     autopsy = getattr(t, "autopsy", None) or (t.result or {}).get("autopsy")
@@ -173,7 +680,7 @@ def _response(t: FleetTask) -> TaskResponse:
                         lane=t.lane, depends_on=t.depends_on, result=t.result,
                         source=source if isinstance(source, str) else None,
                         issue={k: issue.get(k) for k in ("repo", "number", "url")} if issue else None,
-                        metadata=meta, autopsy=autopsy)
+                        metadata=meta, autopsy=autopsy, brief=_brief_for(t, deps_map))
 
 
 # Words that make a safe_auto task wait for approval. A convenience filter on the task text,
@@ -207,7 +714,11 @@ def list_tasks(request: Request):
     # One order for every backend (the local spool is oldest first, the composite newest first;
     # the dashboard reversed both and showed the oldest task on top behind a grid runner).
     tasks = sorted(backend().list_tasks(), key=lambda t: (float(t.created_at or 0), t.id), reverse=True)
-    body = json.dumps(jsonable_encoder([_response(t) for t in tasks]),
+    deps_map: Dict[str, List[str]] = {}
+    for x in tasks:
+        for d in (x.depends_on or []):
+            deps_map.setdefault(d, []).append(x.id)
+    body = json.dumps(jsonable_encoder([_response(t, deps_map) for t in tasks]),
                       separators=(",", ":"), ensure_ascii=False).encode()
     etag = '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
     if etag in [tag.strip() for tag in request.headers.get("if-none-match", "").split(",")]:
@@ -215,12 +726,100 @@ def list_tasks(request: Request):
     return Response(body, media_type="application/json", headers={"ETag": etag})
 
 
+_OPEN_STATUSES = ("queued", "in_progress", "awaiting_approval")
+
+
 @app.post("/api/fleet/tasks", response_model=TaskResponse)
-def enqueue_task(req: EnqueueTaskRequest, background_tasks: BackgroundTasks):
+def enqueue_task(req: EnqueueTaskRequest, background_tasks: BackgroundTasks, request: Request,
+                 response: Response):
     """Queue a task. On the grid backend, metadata.intent (project, title, assigned_lane,
-    acceptance_criteria, optional allowed_paths and gate_cmd) skips LLM triage."""
+    acceptance_criteria, optional allowed_paths and gate_cmd) skips LLM triage. With an
+    idempotency key (body or Idempotency-Key header) a retry returns the first task."""
+    from fleet.core import idempotency
+    req = _limit_to_scope(req, request)
+    key = _idempotency_key(req, request)
+    if key is None:
+        return _enqueue(req, background_tasks)
+    fp = idempotency.fingerprint({"text": req.text, "lane": req.lane, "depends_on": req.depends_on,
+                                  "metadata": req.metadata})
+
+    def still_valid(task_id: str, k: str) -> bool:
+        t = backend().get_task(task_id)
+        if t is None:
+            return False
+        return t.status in _OPEN_STATUSES if k.startswith(idempotency.AUTO_PREFIX) else True
+
+    store = idempotency.default_store()
+    try:
+        decision = store.begin(key, fp, still_valid=still_valid)
+    except idempotency.IdempotencyError as e:
+        raise HTTPException(status_code=e.status, detail=str(e)) from e
+    if decision.kind == "replay":
+        task = backend().get_task(decision.task_id)
+        if task is not None:
+            response.headers["Idempotent-Replayed"] = "true"
+            return _response(task)
+    try:
+        out = _enqueue(req, background_tasks)
+    except BaseException:
+        store.release(key)
+        raise
+    store.commit(key, out.id)
+    return out
+
+
+def _limit_to_scope(req: EnqueueTaskRequest, request: Request) -> EnqueueTaskRequest:
+    """A `propose` client may only ask: its task always waits for the operator, and it may not pick
+    a lane or harness or widen what the run reaches (the daemon enforces what the MCP front door
+    asks for)."""
+    scope = getattr(request.state, "fleet_scope", "admin")
+    if scopes.at_least(scope, "operate"):
+        return req
+    if req.lane:
+        raise HTTPException(status_code=403, detail="a propose token may not pick a lane")
+    meta = dict(req.metadata or {})
+    if meta.get("harness") not in (None, "", "auto"):
+        raise HTTPException(status_code=403, detail="a propose token may not pick a harness")
+    intent = meta.get("intent")
+    if intent is not None:
+        if not isinstance(intent, dict):
+            raise HTTPException(status_code=400, detail="intent must be an object")
+        extra = sorted(set(intent) - scopes.PROPOSE_INTENT_KEYS)
+        if extra:
+            raise HTTPException(status_code=403, detail=(
+                f"intent key(s) {', '.join(extra)} need an operate token; allowed: "
+                f"{', '.join(sorted(scopes.PROPOSE_INTENT_KEYS))}"))
+    for key in ("capabilities", "allowed_domains", "privateer", "escalate_to", "assigned_lane", "model"):
+        meta.pop(key, None)
+    meta["require_approval"] = True
+    meta.setdefault("source", "front_door")
+    meta["via_token"] = getattr(request.state, "fleet_client", "")
+    return req.model_copy(update={"metadata": meta})
+
+
+def _idempotency_key(req: EnqueueTaskRequest, request: Request) -> Optional[str]:
+    from fleet.core.idempotency import IdempotencyError, validate_key
+    header = request.headers.get("idempotency-key")
+    header = header.strip().strip('"') if header else None      # the draft sends it as a quoted string
+    body = req.idempotency_key
+    if header and body and header != body:
+        raise HTTPException(status_code=400, detail="Idempotency-Key header and idempotency_key differ")
+    key = header or body
+    if not key:
+        return None
+    try:
+        return validate_key(key)
+    except IdempotencyError as e:
+        raise HTTPException(status_code=e.status, detail=str(e)) from e
+
+
+def _enqueue(req: EnqueueTaskRequest, background_tasks: BackgroundTasks) -> TaskResponse:
     autonomy = _current_settings.autonomy_level
     needs_approval = autonomy == "manual_gate" or bool(autonomy == "safe_auto" and _RISKY.search(req.text))
+    # A client may only tighten the gate: metadata.require_approval = true holds the task for the
+    # operator whatever the autonomy tier (the MCP front door sets it on every task it queues).
+    if req.metadata.get("require_approval") is True:
+        needs_approval = True
     try:
         task = backend().enqueue(req.text, req.lane, req.depends_on, req.metadata, needs_approval)
     except BackendError as e:
@@ -265,6 +864,12 @@ def _act(action: str, task_id: str) -> TaskResponse:
     return _response(task)
 
 
+class DraftActionRequest(BaseModel):
+    by: str = "operator"
+    reason: str = ""
+    capability: Optional[str] = None
+
+
 @app.post("/api/fleet/tasks/{task_id}/approve", response_model=TaskResponse)
 def approve_task(task_id: str):
     return _act("approve", task_id)
@@ -273,6 +878,59 @@ def approve_task(task_id: str):
 @app.post("/api/fleet/tasks/{task_id}/reject", response_model=TaskResponse)
 def reject_task(task_id: str):
     return _act("reject", task_id)
+
+
+@app.get("/api/fleet/drafts")
+def list_all_drafts(status: Optional[str] = None, task_id: Optional[str] = None):
+    return {"drafts": list_task_drafts(task_id=task_id, status=status)}
+
+
+@app.get("/api/fleet/tasks/{task_id}/drafts")
+def list_drafts_for_task(task_id: str, status: Optional[str] = None):
+    drafts = list_task_drafts(task_id=task_id, status=status)
+    if backend().get_task(task_id) is None and not drafts:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    return {"task_id": task_id, "drafts": drafts}
+
+
+@app.post("/api/fleet/tasks/{task_id}/drafts/{seq}/approve", status_code=202)
+async def approve_task_draft(task_id: str, seq: int, body: Optional[DraftActionRequest] = None):
+    req = body or DraftActionRequest()
+    b = backend()
+    if not hasattr(b, "request_draft_signature_async"):
+        raise HTTPException(status_code=400, detail="Draft approval is only supported on local tasks")
+    try:
+        res = await b.request_draft_signature_async(
+            task_id,
+            seq,
+            by=req.by,
+            capability=req.capability,
+            signer_manager=signer_manager(),
+        )
+    except BackendError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if res is None:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    sig_req, draft, task = res
+    return {
+        "status": "awaiting_signature",
+        "signature_request": sig_req,
+        "draft": draft,
+        "task": _response(task),
+    }
+
+
+@app.post("/api/fleet/tasks/{task_id}/drafts/{seq}/reject")
+def reject_task_draft(task_id: str, seq: int, body: Optional[DraftActionRequest] = None):
+    req = body or DraftActionRequest()
+    try:
+        res = backend().reject_draft(task_id, seq, by=req.by, reason=req.reason, capability=req.capability)
+    except BackendError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    if res is None:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    draft, task = res
+    return {"draft": draft, "task": _response(task)}
 
 
 @app.post("/api/fleet/tasks/{task_id}/cancel", response_model=TaskResponse)
@@ -339,8 +997,16 @@ def waybar_status():
 
 # ── DASHBOARD SHELL & PWA ──
 
-@app.get("/", response_class=HTMLResponse)
+@app.get("/")
+def app_view():
+    """The new shell is the start page (operator, 2026-11-19). A redirect, not a copy: the shell's relative
+    paths stay right, and the browser carries a #token= fragment across it."""
+    return RedirectResponse("/static/app/", status_code=307)
+
+
+@app.get("/classic", response_class=HTMLResponse)
 def dashboard_view():
+    """The old dashboard, until the new shell has everything it has (UI-REDESIGN, parity)."""
     html_file = API_DIR / "dashboard.html"
     if html_file.exists():
         return HTMLResponse(content=html_file.read_text(encoding="utf-8"))
@@ -481,6 +1147,21 @@ def list_projects():
                           "default_branch": p.default_branch, "intake": p.intake.enabled}
                          for key, p in cfg.projects.items()],
             "dispatchable": dispatchable, "project_required": kind == "local"}
+
+
+@app.get("/api/fleet/templates")
+def list_templates(project: Optional[str] = None):
+    """Task templates: built-in, global (<fleet root>/templates) and the project's own
+    (<project>/.fleet/templates), a later one overriding an earlier by id (core/templates.py)."""
+    from fleet.core.templates import TemplateError, load_templates
+    cfg = load_config()
+    key = (project or "").strip() or None
+    if key is not None:
+        key = next((k for k, p in cfg.projects.items() if key == k or key in p.aliases), key)
+    try:
+        return {"templates": load_templates(cfg, key)}
+    except TemplateError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 @app.get("/api/fleet/projects/{project}/files")
@@ -954,6 +1635,143 @@ def sync_intake(project: str, req: Optional[IntakeSyncRequest] = None):
             "projects": service.status()}
 
 
+# ── ROUTINES (Q11) ──
+
+class RoutineCreateRequest(BaseModel):
+    id: str = Field(min_length=1, max_length=64)
+    title: str = Field(min_length=1, max_length=200)
+    prompt: str = Field(min_length=1, max_length=100_000)
+    schedule: Dict[str, Any]
+    max_lateness_seconds: int = Field(default=3600, ge=0, le=7 * 86400)
+    intent: Dict[str, Any] = Field(default_factory=dict)
+    lane: Optional[str] = Field(None, max_length=128)
+    harness: str = Field(default="auto", max_length=64)
+    depends_on: List[str] = Field(default_factory=list, max_length=64)
+
+
+class RoutineUpdateRequest(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=200)
+    prompt: Optional[str] = Field(None, min_length=1, max_length=100_000)
+    schedule: Optional[Dict[str, Any]] = None
+    max_lateness_seconds: Optional[int] = Field(None, ge=0, le=7 * 86400)
+    intent: Optional[Dict[str, Any]] = None
+    lane: Optional[str] = Field(None, max_length=128)
+    harness: Optional[str] = Field(None, max_length=64)
+    depends_on: Optional[List[str]] = Field(None, max_length=64)
+
+
+class RoutineDecisionRequest(BaseModel):
+    by: str = Field(default="operator", max_length=64)
+    # The review_id of the version the operator looked at (GET /api/fleet/routines/{id}); a change
+    # proposed after that has a different one, and the decision is refused instead of applying it unseen.
+    review_id: str = Field(min_length=1, max_length=64)
+
+
+def _routine_http_error(err: Exception) -> HTTPException:
+    code = 404 if "does not exist" in str(err) else 400
+    return HTTPException(status_code=code, detail=str(err))
+
+
+@app.get("/api/fleet/routines")
+def get_routines():
+    from fleet.core.routines import list_routines
+    return {"routines": list_routines(backend_obj=backend())}
+
+
+@app.post("/api/fleet/routines", status_code=201)
+def create_routine_item(req: RoutineCreateRequest):
+    from fleet.core.routines import RoutineError, create_routine
+    try:
+        return create_routine(
+            req.id,
+            title=req.title,
+            prompt=req.prompt,
+            schedule=req.schedule,
+            max_lateness_seconds=req.max_lateness_seconds,
+            intent=req.intent,
+            lane=req.lane,
+            harness=req.harness,
+            depends_on=req.depends_on,
+        )
+    except RoutineError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.get("/api/fleet/routines/{routine_id}")
+def get_routine_item(routine_id: str):
+    from fleet.core.routines import RoutineError, get_routine
+    try:
+        return get_routine(routine_id, backend_obj=backend())
+    except RoutineError as e:
+        raise _routine_http_error(e) from e
+
+
+@app.put("/api/fleet/routines/{routine_id}")
+def update_routine_item(routine_id: str, req: RoutineUpdateRequest):
+    from fleet.core.routines import RoutineError, propose_routine_change
+    updates = req.model_dump(exclude_unset=True)
+    try:
+        return propose_routine_change(routine_id, updates)
+    except RoutineError as e:
+        raise _routine_http_error(e) from e
+
+
+@app.post("/api/fleet/routines/{routine_id}/approve")
+def approve_routine_item(routine_id: str, body: RoutineDecisionRequest):
+    from fleet.core.routines import RoutineError, approve_routine
+    try:
+        return approve_routine(routine_id, by=body.by, review_id=body.review_id)
+    except RoutineError as e:
+        raise _routine_http_error(e) from e
+
+
+@app.post("/api/fleet/routines/{routine_id}/reject")
+def reject_routine_item(routine_id: str, body: RoutineDecisionRequest):
+    from fleet.core.routines import RoutineError, reject_routine
+    try:
+        return reject_routine(routine_id, by=body.by, review_id=body.review_id)
+    except RoutineError as e:
+        raise _routine_http_error(e) from e
+
+
+@app.post("/api/fleet/routines/{routine_id}/pause")
+def pause_routine_item(routine_id: str):
+    from fleet.core.routines import RoutineError, pause_routine
+    try:
+        return pause_routine(routine_id)
+    except RoutineError as e:
+        raise _routine_http_error(e) from e
+
+
+@app.post("/api/fleet/routines/{routine_id}/resume")
+def resume_routine_item(routine_id: str):
+    from fleet.core.routines import RoutineError, resume_routine
+    try:
+        return resume_routine(routine_id)
+    except RoutineError as e:
+        raise _routine_http_error(e) from e
+
+
+@app.post("/api/fleet/routines/{routine_id}/run")
+def run_routine_item(routine_id: str):
+    from fleet.core.routines import RoutineError, trigger_routine_now
+    try:
+        task_info = trigger_routine_now(routine_id, backend_obj=backend())
+        return {"status": "dispatched", "task": task_info}
+    except RoutineError as e:
+        raise _routine_http_error(e) from e
+
+
+@app.delete("/api/fleet/routines/{routine_id}")
+def delete_routine_item(routine_id: str):
+    from fleet.core.routines import RoutineError, delete_routine
+    try:
+        delete_routine(routine_id)
+        return {"status": "deleted", "id": routine_id}
+    except RoutineError as e:
+        raise _routine_http_error(e) from e
+
+
 # ── ROSTER ──
 
 class ToggleRosterRequest(BaseModel):
@@ -1015,3 +1833,17 @@ def trigger_roster_discovery():
 def add_custom_lane():
     """Lanes live in fleet.toml ([lanes.<name>]); there is no second list to add them to."""
     raise HTTPException(status_code=400, detail="add a lane to fleet.toml ([lanes.<name>]); see fleet.example.toml")
+
+
+# ── MCP OVER STREAMABLE HTTP (/api/mcp) ──
+
+@app.post("/api/mcp")
+async def mcp_post(request: Request):
+    """Streamable HTTP MCP endpoint (front_door only, Bearer-authenticated)."""
+    return await mcp_http.handle_mcp_post(request, app, api_token())
+
+
+@app.get("/api/mcp")
+async def mcp_get(request: Request):
+    """Streamable HTTP MCP SSE stream (front_door only, Bearer-authenticated)."""
+    return await mcp_http.handle_mcp_get(request, api_token())

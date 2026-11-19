@@ -45,6 +45,33 @@ gate_writable = []                # extra paths gates may write (tool caches); g
 dir = ""                          # key files the roster looks for (existence only, never read);
                                   # default ~/.config/sovereign-fleet/secrets (SOVEREIGN_SECRETS)
 
+# A capability is a third-party MCP server a task may ask for (intent key `capabilities`).
+# It runs in its own Landlock sandbox with its own scratch dir, an optional persistent cache dir
+# (`{cache}` -> `<root>/cache/<name>`, `{provenance_log}` -> `<root>/cache/<name>/provenance.jsonl`,
+# writable only by a capability whose command names those placeholders), its own egress proxy
+# (the task's `allowed_domains` only), its own tool gate (default deny, call budgets, pinned tool
+# list, required `effects` classes) and its own memory limit.
+# [capabilities.browser]
+# command = ["chrome-devtools-mcp", "--headless", "--isolated", "--executablePath", "/path/to/headless_shell", "--proxyServer", "{proxy}", "--no-usage-statistics", "--no-performance-crux", "--no-page-id-routing", "--chromeArg=--no-sandbox", "--chromeArg=--proxy-bypass-list=<-loopback>", "--chromeArg=--disable-quic"]
+# read_only = ["/path/to/chrome-devtools-mcp", "/path/to/headless_shell_dir"]
+# effects = ["read"]
+# rules = { navigate_page = "allow", take_snapshot = "allow", list_pages = "allow", wait_for = "allow" }
+# max_calls = 30
+# max_calls_per_tool = { navigate_page = 8 }
+# call_timeout = 60
+# memory_max = "1G"
+# pin = ""
+#
+# [capabilities.fetch]
+# command = ["/usr/bin/python3", "/path/to/fleet-capabilities/fetch-0.1.0/fetch_server.py", "--cache-dir", "{cache}", "--provenance-log", "{provenance_log}", "--cache-ttl", "300"]
+# read_only = ["/path/to/fleet-capabilities/fetch-0.1.0"]
+# effects = ["read"]
+# rules = { fetch_url = "allow" }
+# max_calls = 20
+# call_timeout = 30
+# memory_max = "512M"
+# pin = ""
+
 [grid_status]
 url = ""                          # optional API that reports quota-blocked lanes (FLEET_GRID_STATUS_URL)
 token_file = ""                   # its bearer token                    (FLEET_GRID_TOKEN_FILE)
@@ -159,6 +186,7 @@ discover = false                  # true: free tool-calling models no lane uses 
 # backend = "local"               # optional override: "local" or "grid" (strangler migration)
 # remote = "origin"
 # provider = "auto"               # "auto", "github" (gh CLI), "gitea" ([gitea] above) or "none"
+# private = true                  # true -> restrict every task to private local lanes only
 #
 # Tasks from this project's issues. Only an issue of a listed author with a valid ```fleet```
 # block runs unattended; every other issue waits for an approval in the dashboard.

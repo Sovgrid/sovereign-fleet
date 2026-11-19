@@ -14,6 +14,8 @@ os.environ["FLEET_CONFIG"] = os.path.join(_IMPORT_HOME, "config", "fleet.toml")
 os.environ["FLEET_MEMORY_LIMIT"] = "0"
 os.environ["FLEET_ROOT"] = os.path.join(_IMPORT_HOME, "fleet")
 os.environ["XDG_CONFIG_HOME"] = os.path.join(_IMPORT_HOME, "config")
+os.environ["FLEET_SIGNER_ANCHOR"] = os.path.join(_IMPORT_HOME, "config", "signer.pub")
+os.environ["FLEET_NIP46_RELAY"] = ""
 os.environ["FLEET_BACKGROUND"] = "0"
 os.environ["FLEET_MODEL_CATALOG"] = "off"
 
@@ -41,6 +43,15 @@ def require_local_tcp(port: int) -> None:
         pytest.skip("inside a sandbox: TCP to a local test server is not allowed; runs outside")
 
 
+def require_any_local_tcp() -> None:
+    """Skip unless this process may connect to a listener of its own on a free loopback port
+    (inside the fleet sandbox only the listed ports are open, so a test server is unreachable)."""
+    import socket
+    with socket.socket() as srv:
+        srv.bind(("127.0.0.1", 0)); srv.listen(1)
+        require_local_tcp(srv.getsockname()[1])
+
+
 def home_scratch(prefix: str):
     """A scratch dir in $HOME (writable outside the sandbox only), or a skip."""
     from pathlib import Path
@@ -49,6 +60,30 @@ def home_scratch(prefix: str):
     except PermissionError:
         pytest.skip("inside a sandbox: $HOME is not writable; runs outside")
 
+
+
+_NAK = None
+
+
+def require_nak() -> str:
+    """A nak binary this process may run, or a skip. Inside the fleet sandbox ~/bin is not
+    executable (2026-11-18: 16 signer tests failed every fleet task on this repo with
+    PermissionError); outside it these tests run as always."""
+    global _NAK
+    if _NAK is None:
+        import shutil
+        import subprocess
+        from pathlib import Path
+        candidate = Path.home() / "bin" / "nak"
+        nak = str(candidate) if candidate.exists() else (shutil.which("nak") or "")
+        if not nak:
+            pytest.skip("nak binary not installed")
+        try:
+            subprocess.run([nak, "--version"], capture_output=True, timeout=10, check=False)
+        except (PermissionError, OSError) as e:
+            pytest.skip(f"inside a sandbox: nak cannot run here ({e.__class__.__name__}); runs outside")
+        _NAK = nak
+    return _NAK
 
 
 # killpg(1, sig) is kill(-1, sig): every process of this user. A mocked process's pid converts to 1,
@@ -72,6 +107,8 @@ def isolate_fleet(monkeypatch, tmp_path):
     monkeypatch.setenv("FLEET_CONFIG", str(tmp_path / "config" / "fleet.toml"))  # never the real one
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("FLEET_SETTINGS_FILE", str(tmp_path / "config" / "settings.json"))
+    monkeypatch.setenv("FLEET_SIGNER_ANCHOR", str(tmp_path / "config" / "signer.pub"))
+    monkeypatch.setenv("FLEET_NIP46_RELAY", "")
     monkeypatch.setenv("FLEET_API_TOKEN", TEST_TOKEN)
     monkeypatch.setenv("SOVEREIGN_SECRETS", str(tmp_path / "secrets"))
     monkeypatch.delenv("FLEET_GRID_STATUS_URL", raising=False)
@@ -80,16 +117,23 @@ def isolate_fleet(monkeypatch, tmp_path):
     monkeypatch.setenv("FLEET_BACKGROUND", "0")      # no lane checks or intake polls in tests
     monkeypatch.setenv("FLEET_MODEL_CATALOG", "off")  # no models.dev download; tests pass a catalog
     monkeypatch.setattr(app_module, "_grid", None)
+    if hasattr(app_module, "_nip46_relay"):
+        monkeypatch.setattr(app_module, "_nip46_relay", None)
+    if hasattr(app_module, "_signer_manager"):
+        monkeypatch.setattr(app_module, "_signer_manager", None)
     store = TaskStore(spool_dir=str(tmp_path / "spool"))
     monkeypatch.setattr(app_module, "task_store", store)
     monkeypatch.setattr(app_module, "_api_token", None)
     monkeypatch.setattr(app_module, "_roster", None)
     monkeypatch.setattr(app_module, "_current_settings", FleetSettings())
+    from fleet.api import mcp_http
+    mcp_http.reset_state()
     reset_credential_plugin()
     router._running.clear()
     monkeypatch.setattr(quirks, "_models", {"ts": 0.0, "ids": []})
     monkeypatch.setattr(quirks, "_list_opencode_models", lambda timeout: [])   # never the real CLI
     yield store
+    mcp_http.reset_state()
     reset_credential_plugin()
 
 
@@ -122,7 +166,9 @@ def fake_process(stdout: bytes = b"", stderr: bytes = b"", returncode: int = 0):
 def _forget_verified_nostr_events():
     """verify_event remembers the events nak verified for the life of the process; a test must
     not inherit another test's verdicts."""
-    from fleet.core import nostr_identity
+    from fleet.core import nostr_identity, signer as signer_mod
     nostr_identity._VERIFIED.clear()
+    signer_mod._SIGNER_ID_CACHE.clear()
     yield
     nostr_identity._VERIFIED.clear()
+    signer_mod._SIGNER_ID_CACHE.clear()

@@ -122,7 +122,7 @@ async def test_waybar_status_endpoint():
 @pytest.mark.asyncio
 async def test_dashboard_html_view():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=AUTH) as client:
-        resp = await client.get("/")
+        resp = await client.get("/classic")
         assert resp.status_code == 200
         html = resp.text
         assert "<title>Sovereign Fleet</title>" in html
@@ -494,3 +494,23 @@ async def test_projects_say_what_a_new_task_can_name(monkeypatch, name, dispatch
         data = (await client.get("/api/fleet/projects")).json()
     assert data["dispatchable"] == dispatchable and data["project_required"] is required
 
+
+
+@pytest.mark.asyncio
+async def test_require_approval_only_tightens_the_gate(monkeypatch):
+    from fleet.core.settings import FleetSettings
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=AUTH) as client:
+        monkeypatch.setattr(app_module, "_current_settings", FleetSettings(autonomy_level="safe_auto"))
+        held = await client.post("/api/fleet/tasks", json={"text": "Add a docstring",
+                                                           "metadata": {"require_approval": True,
+                                                                        "source": "front_door"}})
+        assert held.status_code == 200 and held.json()["status"] == "awaiting_approval"
+        assert held.json()["source"] == "front_door"     # the dashboard marks it for the operator
+        # only a real true counts; a string or false never loosens anything
+        loose = await client.post("/api/fleet/tasks", json={"text": "Add a docstring",
+                                                            "metadata": {"require_approval": "yes"}})
+        assert loose.json()["status"] == "queued"
+        monkeypatch.setattr(app_module, "_current_settings", FleetSettings(autonomy_level="manual_gate"))
+        still = await client.post("/api/fleet/tasks", json={"text": "Add a docstring",
+                                                            "metadata": {"require_approval": False}})
+        assert still.json()["status"] == "awaiting_approval"

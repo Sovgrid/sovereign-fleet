@@ -22,7 +22,7 @@ import tomllib
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 
 def _config_home() -> Path:
@@ -66,6 +66,7 @@ class SandboxSection(_Strict):
     read_only: List[str] = Field(default_factory=list)   # extra paths agents may read
     writable: List[str] = Field(default_factory=list)    # extra paths agents may write
     gate_writable: List[str] = Field(default_factory=list)  # extra paths gates may write (caches)
+    private_tmp: bool = False                            # omit /tmp from sandbox writable paths (use scratch TMPDIR)
     # "ports": agents may connect to 443, 80, 53 and `ports` (any host). "allowlist": each agent run gets
     # its own egress proxy and reaches only allowlisted names through it (core/egress_proxy.py).
     egress: Literal["ports", "allowlist"] = "ports"
@@ -144,6 +145,33 @@ class HarnessSection(_Strict):
     enabled: bool = True            # false: remove this harness from the registry
 
 
+class CapabilitySection(_Strict):
+    """[capabilities.<name>]: a third-party MCP server a task may ask for (intent `capabilities`).
+    It runs confined behind the tool gate (core/capability.py, core/toolgate.py)."""
+    command: List[str] = Field(min_length=1)   # stdio MCP server; {proxy} and {scratch} are filled in
+    read_only: List[str] = Field(default_factory=list)   # what it may read besides system dirs and its runtime
+    env: Dict[str, str] = Field(default_factory=dict)    # its whole environment besides PATH, HOME, TMPDIR
+    network: bool = True                # false: no network at all; true: the task's allowed_domains only
+    rules: Dict[str, Literal["allow", "deny", "ask"]] = Field(default_factory=dict)  # tool or pattern; no match: deny
+    max_calls: int = Field(0, ge=0)                      # forwarded calls per task; 0: no limit
+    max_calls_per_tool: Dict[str, int] = Field(default_factory=dict)   # name or pattern -> shared limit
+    max_drafts: int = Field(5, ge=1, le=100)             # maximum unique pending/created ask drafts per task
+    call_timeout: int = Field(120, ge=1, le=3600)        # seconds per call
+    start_timeout: int = Field(30, ge=1, le=600)         # seconds until it answered initialize and tools/list
+    max_result_bytes: int = Field(200_000, ge=1000)      # what one answer may put into the agent's context
+    max_parallel_calls: int = Field(4, ge=1, le=64)
+    max_restarts: int = Field(1, ge=0, le=5)             # after a crash, per task
+    memory_max: str = "2G"                               # its own systemd MemoryMax; "" or "0": off
+    pin: str = ""                                        # sha256 of its tool list; a different list refuses to start
+    manifest_sha256: str = ""                            # sha256 over sorted read_only files; mismatch refuses to start
+    private_tmp: bool = True                             # omit /tmp from capability writable paths (uses scratch TMPDIR)
+    effects: List[Literal["read", "write", "send", "pay", "delete", "publish", "restart"]] = Field(
+        ..., min_length=1
+    )                                                    # required side-effect classes; non-read effects cannot use 'allow' rules
+    allowed_url_schemes: List[str] = Field(default_factory=lambda: ["http", "https"])
+    hash_only_args: List[str] = Field(default_factory=list)   # tools whose arguments are logged as hash only
+
+
 class LaneStep(_Strict):
     """One way to run a lane: a harness with a model and extra CLI arguments."""
     harness: str
@@ -200,6 +228,14 @@ class ModelEndpoint(_Strict):
 class RoutingSection(_Strict):
     max_lanes: int = Field(3, ge=1, le=10)        # lanes tried per task before it fails
     repair: bool = True                           # one repair pass with the failure on the same lane
+    # Escalation: when this many lanes really failed on a task (skipped lanes do not count), it
+    # gets ONE more attempt on the first of these lanes that may take it: lanes with a frontier
+    # model (a subscription CLI). Empty: no escalation. Naming a lane here is the go for this one
+    # use even when its provider's budget policy is `manual` (the default for paid providers);
+    # a private task still only goes to a private lane, and a quota block still holds.
+    escalate_to: List[str] = Field(default_factory=list)
+    escalate_after: int = Field(3, ge=1, le=10)
+    escalate_categories: List[str] = Field(default_factory=list)   # empty: every category
     history: str = ""                             # optional grid runner tasks.json to learn from
     # Projects whose tasks the router does not learn from: a benchmark's small synthetic tasks
     # would teach it that a lane is good at real work.
@@ -300,6 +336,20 @@ class NostrSection(_Strict):
     signs on a relay carries this key, never the operator's."""
     key_file: str = ""                # nsec file, 0600; absolute or a name in secrets.dir
     nak: str = "nak"                  # the nak CLI, used to derive the public key
+    nip46_relay: str = ""             # optional external ws(s):// NIP-46 relay URL; empty = built-in /nip46
+    signer_anchor: str = "/etc/sovereign-fleet/signer.pub"  # root-owned file holding one operator npub per line
+
+    @field_validator("nip46_relay")
+    @classmethod
+    def _nip46_relay(cls, v: str) -> str:
+        raw = (v or "").strip()
+        if not raw:
+            return ""
+        from urllib.parse import urlsplit
+        parts = urlsplit(raw)
+        if parts.scheme not in ("ws", "wss") or not parts.netloc:
+            raise ValueError("nip46_relay must be empty or a ws:// or wss:// URL")
+        return raw
 
 
 class MatrixSection(_Strict):
@@ -331,6 +381,7 @@ class FleetConfig(_Strict):
     lanes: Dict[str, LaneSpec] = Field(default_factory=dict)
     models: Dict[str, ModelEndpoint] = Field(default_factory=dict)
     harnesses: Dict[str, HarnessSection] = Field(default_factory=dict)
+    capabilities: Dict[str, CapabilitySection] = Field(default_factory=dict)
     ledger: LedgerSection = Field(default_factory=LedgerSection)
     projects: Dict[str, Project] = Field(default_factory=dict)
 
@@ -344,6 +395,36 @@ class FleetConfig(_Strict):
                     raise ValueError(f"project name '{name}' is used by '{seen[name]}' and '{key}'")
                 seen[name] = key
         return v
+
+    @model_validator(mode="after")
+    def _check_capability_policies(self) -> "FleetConfig":
+        from fleet.core.sandbox import ALWAYS_RW, SYSTEM_RW
+
+        unsafe_effects = {"send", "pay", "delete", "publish", "restart"}
+        for cap_name, cap in self.capabilities.items():
+            if (set(cap.effects) & unsafe_effects) and ("allow" in cap.rules.values()):
+                bad = sorted(set(cap.effects) & unsafe_effects)
+                raise ValueError(
+                    f"capabilities.{cap_name}: rules cannot use 'allow' when effects include {bad}"
+                )
+            sys_rw = [p for p in SYSTEM_RW if not (cap.private_tmp and p == "/tmp")]
+            rw_roots = [
+                *(Path(p).resolve() for p in ALWAYS_RW),
+                *(Path(p).resolve() for p in sys_rw),
+                *(Path(_expand(p)).resolve() for p in self.sandbox.writable),
+                *(Path(_expand(p)).resolve() for p in self.sandbox.gate_writable),
+                self.root.resolve(),
+                *(Path(_expand(p)).resolve() for h in self.harnesses.values() for p in h.state_paths),
+            ]
+            for ro_entry in cap.read_only:
+                ro_path = Path(_expand(ro_entry)).resolve()
+                for rw_path in rw_roots:
+                    if ro_path == rw_path or ro_path.is_relative_to(rw_path):
+                        raise ValueError(
+                            f"capabilities.{cap_name}.read_only path {ro_entry!r} "
+                            f"overlaps writable path {str(rw_path)!r}"
+                        )
+        return self
 
     # resolved values -----------------------------------------------------------
 
@@ -366,6 +447,12 @@ class FleetConfig(_Strict):
             return None
         path = Path(_expand(self.nostr.key_file))
         return path if path.is_absolute() else self.secrets_dir / path
+
+    @property
+    def signer_anchor_path(self) -> Path:
+        """Path to the root-owned pinned operator npub anchor file."""
+        raw = (self.nostr.signer_anchor or "").strip() or "/etc/sovereign-fleet/signer.pub"
+        return Path(_expand(raw))
 
     @property
     def matrix_token_file(self) -> Path:
@@ -507,6 +594,8 @@ _ENV: Dict[str, Tuple[str, str, Any]] = {
     "FLEET_GRID_STATUS_URL": ("grid_status", "url", str),
     "FLEET_GRID_TOKEN_FILE": ("grid_status", "token_file", str),
     "FLEET_PLUGINS_CREDENTIALS": ("plugins", "credentials", str),
+    "FLEET_SIGNER_ANCHOR": ("nostr", "signer_anchor", str),
+    "FLEET_NIP46_RELAY": ("nostr", "nip46_relay", str),
 }
 # Added to the file's list rather than replacing it.
 _ENV_EXTEND = {"FLEET_SANDBOX_PORTS": ("sandbox", "ports")}
@@ -678,6 +767,13 @@ def check(cfg: FleetConfig) -> List[str]:
                             f"set {option} to its full path")
     if cfg.routing.switch_local and not cfg.routing.switch_command:
         problems.append("routing.switch_local needs routing.switch_command")
+    anchor = cfg.signer_anchor_path
+    if anchor.exists() or anchor.is_symlink():
+        from fleet.core.signer import verify_anchor_file
+
+        ok, _, err = verify_anchor_file(anchor)
+        if not ok:
+            problems.append(f"nostr.signer_anchor: {err}")
     return problems
 
 

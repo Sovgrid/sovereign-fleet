@@ -2,7 +2,7 @@
   "name": "Sovereign Fleet",
   "short_name": "Fleet",
   "id": "/",
-  "start_url": "/",
+  "start_url": "/static/app/",
   "scope": "/",
   "display": "standalone",
   "orientation": "portrait-primary",
