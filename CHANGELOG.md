@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.1] - 2026-11-19
+
+### Fixed
+- **Settings sheets on a wide screen (`api/static/app/index.html`).** Notifications, About and Access opened in a 76 px column under the side bar instead of the pane beside the list, because `html[data-navmode="side"] .app` outranked `.app[data-sheet="open"]`. The pane now always takes its own column, and the grid has one row that may shrink.
+- **Sheet text no longer overlaps.** When a sheet was taller than its pane, its rows shrank down to a switch's minimum height, so the Nostr DM hint ran over the relay field. Rows now keep the height of their content and the sheet scrolls.
+- **Long text wraps inside a sheet.** A long URL, path or id in a row, a label or a summary widened the pane past the screen, taking the inputs and buttons with it.
+- **Bottom bar on a wide screen.** With the bottom bar chosen, Search and Menu sat under the open pane; the bar now ends where the pane begins.
+- **Form controls.** URL, password and number inputs get the same style as text inputs.
+- **Phone sheet is modal.** While a sheet covers the page on a phone, the page behind it is `inert`, so neither taps nor focus reach it; this is lifted on close, on Back and when the window grows past 900 px. The Nostr relay field names its hint (`aria-describedby`).
+
 ## [0.13.0] - 2026-11-19
 
 ### Security

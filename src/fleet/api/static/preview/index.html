@@ -169,7 +169,7 @@ html[data-surface="flat"] .card { background: transparent; box-shadow: none; bor
 
 .field { display: grid; gap: .25rem; }
 .field > label, .lab { font-size: .8125rem; color: var(--muted); }
-input[type="text"], input[type="search"], textarea, select { min-height: 44px; width: 100%; background: var(--card-2); color: var(--text); border: var(--border) solid var(--hair-2); border-radius: var(--r-control); padding: .5rem calc(.75rem * var(--space-x)); font: inherit; }
+input[type="text"], input[type="search"], input[type="url"], input[type="password"], input[type="number"], textarea, select { min-height: 44px; width: 100%; min-width: 0; background: var(--card-2); color: var(--text); border: var(--border) solid var(--hair-2); border-radius: var(--r-control); padding: .5rem calc(.75rem * var(--space-x)); font: inherit; }
 textarea { min-height: 6rem; resize: vertical; }
 input[type="range"] { width: 100%; min-height: 44px; accent-color: var(--accent); }
 input[type="color"] { min-width: 44px; min-height: 44px; padding: 2px; background: var(--card-2); border: var(--border) solid var(--hair-2); border-radius: var(--r-control); }
@@ -180,6 +180,7 @@ input[type="color"] { min-width: 44px; min-height: 44px; padding: 2px; backgroun
 .seg button { flex: 1 1 auto; min-width: 0; min-height: 44px; padding: 0 .5rem; overflow-wrap: anywhere; border: 0; background: none; color: var(--muted); font: inherit; border-radius: calc(var(--r-control) - 3px); cursor: pointer; transition: background var(--t-hover), color var(--t-hover); }
 .seg button[aria-pressed="true"] { background: var(--raised); color: var(--text); box-shadow: var(--shadow); }
 .switch { display: flex; align-items: center; gap: .75rem; min-height: 44px; cursor: pointer; }
+.switch > span { min-width: 0; overflow-wrap: anywhere; }
 .switch input { appearance: none; width: 2.75rem; height: 1.5rem; flex: none; background: var(--hair-2); border-radius: var(--r-pill); position: relative; transition: background var(--t-out); margin: 0; cursor: pointer; }
 .switch input::after { content: ""; position: absolute; top: 3px; left: 3px; width: calc(1.5rem - 6px); height: calc(1.5rem - 6px); background: var(--text); border-radius: var(--r-pill); transition: transform var(--t-out) var(--ease-out); }
 .switch input:checked { background: var(--accent); }
@@ -243,7 +244,11 @@ html[data-labels="mono"] .nav button, html[data-labels="mono"] .tag, html[data-l
 .grip i { width: 2.5rem; height: .3125rem; border-radius: var(--r-pill); background: var(--hair-2); }
 .sheet-head { display: flex; align-items: center; gap: .5rem; padding: 0 calc(1rem * var(--space-x)); }
 .sheet-head h2 { flex: 1; font-size: 1.0625rem; }
-.sheet-body { overflow: auto; padding: calc(.5rem * var(--space-y)) calc(1rem * var(--space-x)) calc(1.25rem * var(--space-y)); display: grid; gap: calc(.75rem * var(--space-y)); }
+.sheet-body { overflow: auto; padding: calc(.5rem * var(--space-y)) calc(1rem * var(--space-x)) calc(1.25rem * var(--space-y)); display: grid; gap: calc(.75rem * var(--space-y)); align-content: start; }
+/* one column that may shrink, rows as tall as their content (an auto row shrinks to a control's min-height and
+   text overlaps), and long URLs or paths wrap instead of widening the pane */
+.sheet-body { grid-template-columns: minmax(0, 1fr); grid-auto-rows: max-content; overflow-wrap: anywhere; }
+.sheet-body .field { grid-template-columns: minmax(0, 1fr); }
 .toast { position: fixed; left: 50%; bottom: 6rem; transform: translate(-50%, 1rem); z-index: 60; max-width: min(92vw, 28rem); background: var(--raised); color: var(--text); border: var(--border) solid var(--hair-2); border-radius: var(--r-control); padding: .625rem 1rem; box-shadow: var(--pop); opacity: 0; pointer-events: none; transition: opacity var(--t-out), transform var(--t-in) var(--ease-out); }
 .toast[data-show="true"] { opacity: 1; transform: translate(-50%, 0); }
 
@@ -366,7 +371,7 @@ code, pre, .mono, .diff { font-variant-ligatures: var(--liga, contextual); }
 
 /* ===== Wide screens: list beside detail, tiled windows ===== */
 @media (min-width: 900px) {
-  .app { height: calc(100dvh - 1.75rem); min-height: 0; padding: var(--gap-out); gap: var(--gap-out); background: var(--desk); }
+  .app { height: calc(100dvh - 1.75rem); min-height: 0; grid-template-rows: minmax(0, 1fr); padding: var(--gap-out); gap: var(--gap-out); background: var(--desk); }
   html[data-navmode="side"] .nav { position: static; height: auto; align-self: stretch; }
   .nav, .main, .sheet { background: var(--panel); }
   .main, .nav { overflow: auto; border: var(--border) solid var(--window-border); border-radius: var(--r-window); }
@@ -374,9 +379,10 @@ code, pre, .mono, .diff { font-variant-ligatures: var(--liga, contextual); }
   .topbar { top: 0; }
   html[data-navmode="bottom"] .main { padding-bottom: 5.5rem; }
   html[data-navmode="bottom"] .nav { left: var(--gap-out); right: var(--gap-out); bottom: var(--gap-out); }
-  .app[data-sheet="open"] { grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--pane-w); }
+  html[data-navmode="side"] .app[data-sheet="open"], .app[data-sheet="open"] { grid-template-columns: var(--rail-w) minmax(0, 1fr) var(--pane-w); }
   html[data-navmode="bottom"] .app[data-sheet="open"] { grid-template-columns: minmax(0, 1fr) var(--pane-w); }
-  .sheet { position: static; transform: none; visibility: hidden; display: none; max-height: none; border-radius: var(--r-window); border: var(--border) solid var(--window-border); box-shadow: none; overflow: auto; }
+  html[data-navmode="bottom"] .app[data-sheet="open"] > .nav { right: calc(var(--pane-w) + 2 * var(--gap-out)); }
+  .sheet { position: static; transform: none; visibility: hidden; display: none; min-height: 0; max-height: none; border-radius: var(--r-window); border: var(--border) solid var(--window-border); box-shadow: none; overflow: auto; }
   .sheet[data-open="true"] { display: flex; visibility: visible; border-color: var(--window-border-active); box-shadow: var(--window-ring); animation: arrive var(--t-in) var(--ease-out); }
   .scrim { display: none; }
   .grip { cursor: default; min-height: .5rem; } .grip i { display: none; }
@@ -434,6 +440,7 @@ details[open] > summary::after { transform: rotate(-135deg); }
 .device, .device[data-here="true"] { border: 0; background: none; padding: 0; }
 .field > label, .lab { font-size: .875rem; }
 .sheet .row .title, .sheet .row .meta { white-space: normal; }
+.sheet .row .meta { flex: 0 1 auto; min-width: 0; }
 .sheet .row .meta { text-align: right; }
 
 /* ── Glance: shape, colour and icons carry what words used to. Same tokens, no new weight. ── */

@@ -242,3 +242,22 @@ def test_pending_drafts_surface_amber_on_approval_and_simple_mode(html):
     draft_src = js[js.index("function renderDraftCards"):js.index("var fillBriefBase")]
     assert "innerHTML" not in draft_src
     assert "Send to Amber" in draft_src and "/drafts/" in draft_src and "/approve" in draft_src
+
+
+def test_desktop_sheet_grid_specificity_and_notify_controls(html):
+    js = _script(html)
+    assert 'html[data-navmode="side"] .app[data-sheet="open"], .app[data-sheet="open"]' in html
+    assert "grid-template-rows: minmax(0, 1fr);" in html
+    for input_type in ('input[type="url"]', 'input[type="password"]', 'input[type="number"]'):
+        assert input_type in html
+    assert "setSheetBackdropInert" in js and ".inert" in js
+    assert '"aria-describedby": "n-nostr-hint"' in js and 'id: "n-nostr-hint"' in js
+
+
+def test_sheet_rows_never_shrink_and_long_text_wraps(html):
+    # 2026-11-19: in a pane shorter than its content an auto row shrank to a switch's 44px min-height, so the
+    # Nostr hint ran over the relay field; a long URL or path in a row's meta widened the pane past the screen
+    assert ".sheet-body { grid-template-columns: minmax(0, 1fr); grid-auto-rows: max-content; overflow-wrap: anywhere; }" in html
+    assert ".sheet .row .meta { flex: 0 1 auto; min-width: 0; }" in html
+    # a bottom bar on a wide screen stops at the pane instead of running under it
+    assert 'html[data-navmode="bottom"] .app[data-sheet="open"] > .nav { right: calc(var(--pane-w) + 2 * var(--gap-out)); }' in html
