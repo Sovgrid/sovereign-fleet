@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Docs
+- README and `llms.txt` describe MCP over HTTPS (`/api/mcp`, new in 0.13.0): how a client connects with its own token, what each scope sees, and the origin rule and limits.
+
 ## [0.13.1] - 2026-11-19
 
 ### Fixed

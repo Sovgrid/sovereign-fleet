@@ -438,6 +438,32 @@ extensions:
 
 For untrusted or front-door assistants (**OpenClaw**, **Goose**, chat bridges) that should only hand off work and read status without approval/cancel/retry/budget rights, add `["-m", "fleet.api.mcp_server", "--mode", "front_door"]` (or `FLEET_MCP_MODE=front_door`): this restricts `tools/list` and `tools/call` to the **11** front-door tools (`fleet_dispatch_task`, `fleet_list_tasks`, `fleet_get_task_status`, `fleet_get_task_receipt`, `fleet_system_health`, `fleet_lane_health` (read-only), `fleet_issue_intake` (read-only), `fleet_get_budgets`, `fleet_get_ledger`, `fleet_show_task`, and `fleet_show_approval`), refusing `approve`/`reject`/`cancel`/`retry`/`clear`/`tighten`/`probe`/`sync` at the server. Every task queued via `front_door` stays in `awaiting_approval`, and its `intent` is restricted to `project`, `title`, `acceptance_criteria`, `allowed_paths`, `gate_cmd`, and `category`.
 
+### MCP over HTTPS: `/api/mcp`
+
+A client that cannot start a process on the daemon's machine (an app on a phone, a client running as another OS
+user) reaches the same front-door surface over MCP streamable HTTP: `POST /api/mcp`, and `GET /api/mcp` for the event
+stream, on the daemon's own port. Give each client its own token:
+
+```bash
+fleet token create my-phone --scope propose     # the secret is shown once
+```
+
+Point the client at `https://<daemon host>:8444/api/mcp` with `Authorization: Bearer <token>`. In Pi Pocket, for
+example: `pi mcp add fleet --url https://<daemon host>:8444/api/mcp --bearer-token-env-var FLEET_TOKEN`, with the
+token in that variable.
+
+- **Front door only.** The 11 front-door tools, the `ui://` cards and the prompts; a `read` token sees the 10 read
+  tools, `propose` and up add `fleet_dispatch_task`. The 17-tool `full` mode stays on stdio, on the machine.
+- **The caller's own token on every call.** A tool runs against the API with the caller's token, never the daemon's,
+  so the scope table decides as for any API call: a `propose` task always waits for approval and may not pick a lane,
+  a harness, capabilities or domains.
+- **Bearer only.** A token in the query string or a session cookie is refused (401).
+- **Origin.** A browser request must come from the daemon's configured origin or one listed in
+  `FLEET_MCP_ALLOWED_ORIGINS` (comma-separated); the request's own `Host` never counts (DNS rebinding). A client
+  that sends no `Origin` is not a browser and passes this check.
+- **Limits.** 256 KB per request (413), 32 messages per batch, 60 requests a minute per token and 4 event streams
+  (429), 65 s per call.
+
 The MCP server also exposes file-based prompt templates as MCP Prompts (`prompts/list`, `prompts/get`) and two read-only SEP-1865 MCP Apps cards (`ui://fleet/task-card`, `ui://fleet/approval-card`, mimeType `text/html;profile=mcp-app`) via `fleet_show_task` and `fleet_show_approval` (rendered live in Goose Desktop `1.46.0` as read-and-route cards linking to `<base>/static/app/#/t/<task_id>` with zero approve/reject controls).
 
 It reads the token like the daemon does (`FLEET_API_TOKEN` or the token file). Over `https` a host name
