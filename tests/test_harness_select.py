@@ -99,41 +99,6 @@ async def test_harness_choice_true_for_local_backend(monkeypatch):
             assert "version" not in h  # no version strings
 
 
-def test_dashboard_html_no_invented_labels():
-    """dashboard.html contains no invented labels."""
-    from pathlib import Path
-    html = (Path(__file__).parents[1] / "src/fleet/api/dashboard.html").read_text(encoding="utf-8")
-
-    # These invented labels must not exist
-    assert "v1.54" not in html
-    assert "Block / MCP" not in html
-    assert "Coordinator Optimal" not in html
-    assert "Multi-Model CLI" not in html
-    assert "Autonomous Patching" not in html
-    assert "Autonomous Coding Agent" not in html
-
-    # New factual labels must exist
-    assert "Auto: the router picks" in html
-
-    # Grid hint text must exist
-    assert "The grid runner picks the CLI by lane; choose a lane instead." in html
-
-    # Harness select group and hint elements must exist
-    assert 'id="harness-select-group"' in html
-    assert 'id="harness-grid-hint"' in html
-
-
-def test_dashboard_html_harness_select_structure():
-    """dashboard.html has the correct harness select structure."""
-    from pathlib import Path
-    html = (Path(__file__).parents[1] / "src/fleet/api/dashboard.html").read_text(encoding="utf-8")
-
-    # Only "Auto" is static; every harness option is built from the API (one source: the classes)
-    assert '<option value="auto" selected>Auto: the router picks</option>' in html
-    assert '<option value="goose">' not in html
-    assert "opt.textContent = h.label || h.id;" in html
-
-
 def test_plugins_api_gives_every_harness_its_label():
     """The menu reads id and label from /api/fleet/plugins; a new harness needs no dashboard edit."""
     from fastapi.testclient import TestClient

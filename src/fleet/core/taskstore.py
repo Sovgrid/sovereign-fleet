@@ -4,6 +4,7 @@ Every change is a read-modify-write under one exclusive flock, and the file is r
 atomically (temp file, fsync, rename): a crash never leaves a half-written or empty spool.
 """
 
+import copy
 import fcntl
 import json
 import logging
@@ -258,45 +259,141 @@ class TaskStore:
         self._mutate(change)
         return found[0] if found else None
 
-    def requeue_orphans(self, max_recoveries: int = 2) -> Tuple[List[str], List[str]]:
-        """Move every orphaned *in_progress* task back to *queued* or *failed*.
+    def requeue_orphans(
+        self,
+        max_recoveries: int = 2,
+        *,
+        open_calls_fn: Optional[Callable[[FleetTask], Dict[str, Any]]] = None,
+        branch_heads: Optional[Dict[str, Optional[str]]] = None,
+    ) -> Tuple[List[str], List[str]]:
+        """Move orphaned *in_progress* tasks back to *queued*, *awaiting_approval*, or *failed*.
 
-        Within a single locked ``_mutate`` call each task whose status is ``"in_progress"``
-        is examined.  The value of ``metadata["recovered"]`` (defaulting to ``0``) is
-        incremented.  When the new value is still below *max_recoveries* the task goes back
-        to ``"queued"`` with the updated ``metadata["recovered"]``; otherwise it becomes
-        ``"failed"`` with a result dict whose ``"error"`` value describes how many daemon
-        restarts it survived.  Tasks in any other state are left untouched.
+        Closed active attempts become ``"interrupted"`` attempt records. Tasks with an interrupted
+        non-safe tool call (or broken call-log hash chain) move to ``"awaiting_approval"`` instead
+        of being replayed blindly. Otherwise ``metadata["recovered"]`` resets to ``0`` when the task's
+        branch advanced since the previous recovery; tasks exceeding *max_recoveries* become ``"failed"``.
 
         Returns a tuple ``(requeued_ids, failed_ids)``.
         """
+        from fleet.core.receipts import build_receipt, save_attempt_receipt
+        from fleet.core.toolgate import inspect_task_open_calls
+
         requeued: List[str] = []
         failed: List[str] = []
+        held: List[Tuple[str, str]] = []
+        attempt_receipts_to_save: List[Tuple[str, Dict[str, Any]]] = []
+        receipts_to_save: List[Tuple[FleetTask, Dict[str, Any]]] = []
+        cfg_cache: list[Any] = []
+
+        def _check_open_calls(task: FleetTask) -> Dict[str, Any]:
+            if open_calls_fn is not None:
+                return open_calls_fn(task)
+            if not cfg_cache:
+                cfg_cache.append(load_config())
+            cfg = cfg_cache[0]
+            return inspect_task_open_calls(task.id, root=cfg.root, capabilities=cfg.capabilities)
 
         def change(tasks: List[FleetTask]) -> bool:
+            now = time.time()
             for t in tasks:
                 if t.status != "in_progress":
                     continue
-                recovered: int = t.metadata.get("recovered", 0)
+                active = t.metadata.get("active_attempt")
+                if isinstance(active, dict) and active.get("attempt_id"):
+                    started_at = float(active.get("started_at") or now)
+                    att_rec: Dict[str, Any] = {
+                        "attempt_id": active["attempt_id"],
+                        "seq": int(active.get("seq") or (len(t.metadata.get("attempt_records") or []) + 1)),
+                        "task_id": t.id,
+                        "lane": active.get("lane") or t.lane,
+                        "harness": active.get("harness") or t.metadata.get("harness"),
+                        "model": active.get("model") or t.metadata.get("model"),
+                        "started_at": started_at,
+                        "ended_at": now,
+                        "duration_seconds": round(max(0.0, now - started_at), 2),
+                        "status": "interrupted",
+                        "exit_code": None,
+                        "reason": "interrupted (daemon crash / orphan recovery)",
+                        "branch": None,
+                        "commit": None,
+                    }
+                    prior = list(t.metadata.get("attempt_records") or [])
+                    t.metadata["attempt_records"] = [*prior, att_rec]
+                    t.metadata.pop("active_attempt", None)
+                    attempt_receipts_to_save.append((t.id, att_rec))
+
+                preserved: Dict[str, Any] = (
+                    {k: t.result[k] for k in ("usage_runs", "branch", "commit") if k in t.result}
+                    if isinstance(t.result, dict)
+                    else {}
+                )
+
+                call_info = _check_open_calls(t)
+                unsafe_open = list(call_info.get("unsafe_open") or [])
+                chain_broken = bool(call_info.get("chain_broken"))
+                if chain_broken or unsafe_open:
+                    parts = [
+                        f"{c.get('capability', '?')}/{c.get('tool', '?')} (call #{c.get('call_id', '?')})"
+                        for c in unsafe_open
+                    ]
+                    parts.extend(str(e) for e in (call_info.get("chain_errors") or []))
+                    summary = "; ".join(parts) or "open capability tool call or broken call log"
+                    reason = f"outcome unknown after interruption: {summary}"
+                    t.status = "awaiting_approval"
+                    t.result = {
+                        **preserved,
+                        "error": reason,
+                        "exit_code": 1,
+                        "replay_held": True,
+                        "open_tool_calls": unsafe_open,
+                        "chain_broken": chain_broken,
+                    }
+                    t.metadata["replay_held"] = True
+                    t.metadata["open_tool_calls"] = unsafe_open
+                    held.append((t.id, reason))
+                    receipts_to_save.append((copy.deepcopy(t), dict(t.result)))
+                    continue
+
+                recovered: int = int(t.metadata.get("recovered", 0) or 0)
+                head = (branch_heads or {}).get(t.id)
+                prev_head = t.metadata.get("last_recovery_head")
+                if recovered > 0 and head and head != prev_head:
+                    recovered = 0
+                    t.metadata["recovered_resets"] = int(t.metadata.get("recovered_resets", 0) or 0) + 1
+                if head:
+                    t.metadata["last_recovery_head"] = head
+
                 if recovered >= max_recoveries:
                     t.status = "failed"
                     t.result = {
+                        **preserved,
                         "error": f"interrupted {recovered} times (daemon restarts); not requeued again",
                         "exit_code": 1,
                     }
                     failed.append(t.id)
+                    receipts_to_save.append((copy.deepcopy(t), dict(t.result)))
                 else:
                     t.status = "queued"
                     t.result = None
                     t.metadata["recovered"] = recovered + 1
                     requeued.append(t.id)
-            return bool(requeued or failed)
+            return bool(requeued or failed or held)
 
         self._mutate(change)
+        for tid, att in attempt_receipts_to_save:
+            save_attempt_receipt(tid, att, spool_dir=self.spool_dir)
+        for task_snap, res in receipts_to_save:
+            build_receipt(task_snap, res, duration_seconds=0.0, spool_dir=self.spool_dir)
         for tid in requeued:
             events.emit("task.queued", task_id=tid, data={"id": tid, "status": "queued"})
         for tid in failed:
             events.emit("task.failed", task_id=tid, data={"id": tid, "status": "failed"})
+        for tid, reason in held:
+            events.emit(
+                "task.awaiting_approval",
+                task_id=tid,
+                data={"id": tid, "status": "awaiting_approval", "reason": reason},
+            )
         return requeued, failed
 
     def archive_completed(self) -> int:

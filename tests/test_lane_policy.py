@@ -375,3 +375,26 @@ def test_on_limit_wait_on_blocked_allowed_lanes_uses_earliest_block_end(tmp_path
     assert now + 850 <= not_before <= now + 950  # picks earliest block end (agy_b, 900s < default 6h cap)
     assert "agy_b" in stored.metadata["wait_reason"]
     assert res["deferred"] is True
+
+
+def test_settings_on_limit_and_wait_hours_act_as_task_default():
+    from fastapi.testclient import TestClient
+    from fleet.api.app import app
+    from fleet.core.engine import _task_limit_policy
+    from fleet.core.taskstore import FleetTask
+
+    with TestClient(app) as client:
+        r = client.post(
+            "/api/fleet/settings",
+            headers={"Authorization": "Bearer test-token"},
+            json={"on_limit": "wait_then_switch", "wait_hours": 12},
+        )
+        assert r.status_code == 200
+        data = r.json()
+        assert data["on_limit"] == "wait_then_switch" and data["wait_hours"] == 12
+
+    t_default = FleetTask(id="t-def", text="inherit global policy", metadata={})
+    assert _task_limit_policy(t_default) == ("wait_then_switch", 12.0)
+
+    t_override = FleetTask(id="t-ovr", text="task override", metadata={"on_limit": "switch", "wait_hours": 1})
+    assert _task_limit_policy(t_override) == ("switch", 1.0)

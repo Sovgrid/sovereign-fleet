@@ -73,7 +73,7 @@ def _log(tmp_path):
 
 
 def _calls(tmp_path):
-    return [r for r in _log(tmp_path) if "tool" in r]
+    return [r for r in _log(tmp_path) if "decision" in r]
 
 
 def _alive(pid):
@@ -490,13 +490,15 @@ async def test_the_log_is_a_chain_and_an_edit_or_a_missing_line_shows(tmp_path):
     finally:
         await gate.stop()
     path = tmp_path / "calls.jsonl"
-    assert verify_call_log(path) == (True, 5, "")               # start, three calls, end
+    assert verify_call_log(path) == (True, 8, "")               # start, 3*(call_started + decision), end
     records = _log(tmp_path)
     assert records[0]["event"] == "start" and records[0]["pin"] == gate.pin and records[-1]["event"] == "end"
-    assert "hunter2" not in path.read_text() and "args" not in records[2]       # hash only
-    assert len(records[2]["args_sha256"]) == 64 and len(records[3]["args"]) == 2000
+    assert records[1]["event"] == "call_started" and records[1]["call_id"] == records[2]["call_id"]
+    assert records[3]["event"] == "call_started" and "args" not in records[3]
+    assert "hunter2" not in path.read_text() and "args" not in records[4]       # hash only
+    assert len(records[4]["args_sha256"]) == 64 and len(records[6]["args"]) == 2000
     lines = path.read_text().splitlines()
-    path.write_text("\n".join([lines[0], lines[1].replace("one", "two"), *lines[2:]]) + "\n")
+    path.write_text("\n".join([*lines[:2], lines[2].replace("one", "two"), *lines[3:]]) + "\n")
     assert verify_call_log(path)[0] is False
     path.write_text("\n".join([lines[0], *lines[2:]]) + "\n")
     assert verify_call_log(path)[0] is False
@@ -504,7 +506,7 @@ async def test_the_log_is_a_chain_and_an_edit_or_a_missing_line_shows(tmp_path):
     again = ToolGate(ARGV, ALLOW_ALL, path, env=_env())           # a second gate continues the chain
     await again.start()
     await again.stop()
-    assert verify_call_log(path) == (True, 7, "")
+    assert verify_call_log(path) == (True, 10, "")
 
 
 # ── B1: coming up ─────────────────────────────────────────────────────────────
@@ -593,9 +595,11 @@ async def test_a_server_that_dies_is_started_once_more_and_says_what_was_lost(tm
         assert gate.restarts == 1
     finally:
         await gate.stop()
-    events = [r.get("event") or r["decision"] for r in _log(tmp_path)]
+    log_rows = _log(tmp_path)
+    events = [r.get("event") or r["decision"] for r in log_rows if r.get("event") != "call_started"]
     assert events == ["start", "error_upstream", "restart", "error_upstream", "allowed", "error_upstream",
                       "error_upstream", "end"]
+    assert sum(1 for r in log_rows if r.get("event") == "call_started") == 5
 
 
 async def test_a_server_that_asks_the_client_gets_an_answer_and_does_not_wait_forever(tmp_path):

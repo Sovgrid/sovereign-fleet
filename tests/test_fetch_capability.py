@@ -326,8 +326,8 @@ async def test_g9_shared_fetch_cache_persists_across_runs_and_records_call_log(t
         log2 = root / "toolcalls" / "task-g9-2.fetch.jsonl"
         assert verify_call_log(log1)[0]
         assert verify_call_log(log2)[0]
-        calls1 = [json.loads(line) for line in log1.read_text(encoding="utf-8").splitlines() if '"tool"' in line]
-        calls2 = [json.loads(line) for line in log2.read_text(encoding="utf-8").splitlines() if '"tool"' in line]
+        calls1 = [json.loads(line) for line in log1.read_text(encoding="utf-8").splitlines() if '"decision"' in line]
+        calls2 = [json.loads(line) for line in log2.read_text(encoding="utf-8").splitlines() if '"decision"' in line]
         assert len(calls1) == 1 and calls1[0].get("source_sha256") == expected_sha and calls1[0].get("cached") is False
         assert len(calls2) == 1 and calls2[0].get("source_sha256") == expected_sha and calls2[0].get("cached") is True
 
@@ -417,7 +417,7 @@ async def test_g9_toolgate_records_source_sha256_and_cached_from_meta(tmp_path):
     finally:
         await gate.stop()
 
-    calls = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines() if '"tool"' in line]
+    calls = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines() if '"decision"' in line]
     assert len(calls) == 1
     assert calls[0].get("source_sha256") == "a" * 64
     assert calls[0].get("cached") is True

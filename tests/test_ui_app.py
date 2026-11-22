@@ -148,7 +148,6 @@ def test_task_detail_is_filled_from_the_task(html):
 
 def test_surfaces_without_a_daemon_side_stay_out(html):
     assert '<li data-module="coordinator-chat" hidden>' in html and 'id="chat" hidden' in html
-    assert 'id="limit-seg"' not in html                       # FLEET-LANE-POLICY first
 
 
 def test_live_events_through_an_event_source_on_this_origin(html):
@@ -221,14 +220,17 @@ def test_notifications_and_task_links(html):
     assert "linkRoute" in js and r"#\/t\/" in js          # #/t/<task id> opens the card
 
 
-def test_the_new_shell_is_the_start_page_and_the_old_one_stays_at_classic():
-    # operator 2026-11-19: "/" opens the new shell; nothing is lost while parity is open
-    from fleet.api.app import app
+def test_the_new_shell_is_the_start_page_and_classic_redirects():
+    # operator 2026-11-22: "/" opens the new shell and /classic redirects to it after parity cleanup
+    from fleet.api.app import API_DIR, app
+    assert not (API_DIR / "dashboard.html").exists()
     with TestClient(app) as client:
         r = client.get("/", follow_redirects=False)
         assert r.status_code == 307 and r.headers["location"] == "/static/app/"
-        old = client.get("/classic")
-        assert old.status_code == 200 and "SOVEREIGN FLEET" in old.text
+        old = client.get("/classic", follow_redirects=False)
+        assert old.status_code == 307 and old.headers["location"] == "/static/app/"
+        shell = client.get("/static/app/")
+        assert shell.status_code == 200 and "Open the old dashboard" not in shell.text
         assert client.get("/manifest.json").json()["start_url"] == "/static/app/"
 
 
@@ -258,6 +260,141 @@ def test_sheet_rows_never_shrink_and_long_text_wraps(html):
     # 2026-11-19: in a pane shorter than its content an auto row shrank to a switch's 44px min-height, so the
     # Nostr hint ran over the relay field; a long URL or path in a row's meta widened the pane past the screen
     assert ".sheet-body { grid-template-columns: minmax(0, 1fr); grid-auto-rows: max-content; overflow-wrap: anywhere; }" in html
+    assert ".sheet .row { flex-wrap: wrap;" in html
+    assert "overflow-wrap: break-word;" in html
+    assert ".sheet .row .title { flex: 1 1 6rem; min-inline-size: min-content;" in html
     assert ".sheet .row .meta { flex: 0 1 auto; min-width: 0; }" in html
     # a bottom bar on a wide screen stops at the pane instead of running under it
     assert 'html[data-navmode="bottom"] .app[data-sheet="open"] > .nav { right: calc(var(--pane-w) + 2 * var(--gap-out)); }' in html
+
+
+def test_home_health_banner_reflects_live_needs_and_hides_decorative_svg(html):
+    js = _script(html)
+    assert '<div class="hero" id="health"><svg class="i" aria-hidden="true"><use id="health-icon" href="#i-check"/></svg><span id="health-text"> </span></div>' in html
+    assert '<span id="health-text">All good</span>' not in html
+    assert ".hero.attn { background: none; color: var(--text); }" in html
+    assert ".hero.attn svg { color: var(--warn); }" in html
+    assert "function renderHealth()" in js
+    fn_src = js[js.index("function renderHealth()"):js.index("function filterTasks(")]
+    assert "innerHTML" not in fn_src
+    assert 'classList.toggle("attn"' in fn_src
+    assert '"#i-warn"' in fn_src and '"#i-check"' in fn_src
+    assert "txt.textContent" in fn_src
+    glance_src = js[js.index("function renderGlance()"):js.index("function renderHealth()")]
+    badges_src = js[js.index("function badges()"):js.index("function sheetList(")]
+    assert "renderHealth();" in glance_src
+    assert "renderHealth();" in badges_src
+def test_pi_pocket_settings_sheet(html):
+    js = _script(html)
+    assert 'data-open="pi-pocket"' in html and 'id="m-pi-pocket"' in html
+    assert '["pi-pocket", "Pi Pocket", "settings"]' in js
+    assert 'LIVE_SHEETS["pi-pocket"]' in js
+    for route in (
+        '"/api/fleet/pi-pocket"',
+        '"/api/fleet/pi-pocket/power"',
+        '"/api/fleet/pi-pocket/settings"',
+        '"/api/fleet/pi-pocket/upgrade"',
+    ):
+        assert route in js
+    sheet_src = js[js.index('LIVE_SHEETS["pi-pocket"]'):js.index("function piPocketWords")]
+    assert "innerHTML" not in sheet_src
+    assert 'role: "switch"' in sheet_src and 'switch: ""' in sheet_src
+    assert "own OS user" in sheet_src
+    # the card says how long the timer waits, and that the operator's own "Install now" does not
+    assert "days old" in sheet_src and "Install now skips the wait" in sheet_src
+    assert "cur.newer_available" in sheet_src
+    assert "schedulePoll" in sheet_src and "clearTimeout" in sheet_src
+
+
+def test_your_apps_sheet_and_home_hint(html):
+    js = _script(html)
+    assert 'data-open="apps"' in html
+    assert 'id="apps-hint"' in html and 'id="apps-hint-dismiss"' in html
+    assert "appsHintDismissed" in js
+    assert '"/api/fleet/apps"' in js
+    assert "LIVE_SHEETS" in js and "apps: function ()" in js
+    apps_src = js[js.index("apps: function ()"):js.index('LIVE_SHEETS.notify')]
+    assert "innerHTML" not in apps_src
+    assert 'scope: "col"' in apps_src and 'scope: "row"' in apps_src
+    assert "Open Pi Pocket" in apps_src and "pi_pocket_url" in apps_src
+    assert "The only place where anything is decided." in apps_src
+    assert (
+        ".apps-table { width: 100%; border-collapse: collapse; font-size: .875rem; "
+        "text-align: left; overflow-wrap: break-word; }"
+    ) in html
+    assert (
+        ".apps-table, .apps-table caption, .apps-table thead, .apps-table tbody, "
+        ".apps-table tr, .apps-table th, .apps-table td { display: block; }"
+    ) in html
+
+
+def test_home_health_shows_not_connected_when_daemon_unreachable(html):
+    js = _script(html)
+    assert "offline: false" in js
+    fn_src = js[js.index("function renderHealth()"):js.index("function filterTasks(")]
+    assert "LIVE.offline" in fn_src and '"Not connected"' in fn_src
+    ref_src = js[js.index("function refresh()"):js.index("function refreshSide()")]
+    assert "!r.ok" in ref_src
+    assert "LIVE.offline = true" in ref_src and "renderHealth();" in ref_src
+
+
+def test_ui_parity_routines_archive_voice_and_on_limit(html):
+    js = _script(html)
+    # Routine create form (honours propose scope: omits forced lane/harness)
+    assert 'id="new-routine-btn"' in html
+    assert "function openRoutineCreate()" in js
+    rc_src = js[js.index("function openRoutineCreate()"):js.index("/* ---- Providers and models")]
+    assert "innerHTML" not in rc_src
+    assert '"/api/fleet/routines"' in rc_src and 'id: "routine-create-form"' in rc_src
+    # Archive actions & filter
+    assert 'data-filter="archived"' in html
+    assert 'id="archive-completed-btn"' in html and 'id="task-archive"' in html
+    assert '"/archive"' in js and '"/unarchive"' in js and '"/api/fleet/tasks/archive-completed"' in js
+    # Voice input
+    assert '<symbol id="i-mic"' in html and 'id="voice-btn"' in html
+    assert '"/api/fleet/transcribe"' in js and "MediaRecorder" in js
+    # Providers on_limit persistence
+    assert 'id="limit-seg"' in html and 'data-limit="wait_then_switch"' in html and 'id="wait-chips"' in html
+    lim_src = js[js.index("renderLimit = function ()"):js.index("/* ---- Settings: one fetch per source")]
+    assert "innerHTML" not in lim_src
+    assert '"/api/fleet/settings"' in lim_src and "on_limit" in lim_src and "wait_hours" in lim_src
+
+
+def test_dialog_containers_and_wcag_contrast_tokens(html):
+    assert '<div class="sheet" id="sheet" role="dialog"' in html
+    assert '<div class="chat" id="chat" hidden role="dialog"' in html
+    assert not re.search(r"<aside[^>]+role=\"dialog\"", html)
+    assert "--muted: color-mix(in srgb, var(--body) 84%, var(--bg));" in html
+    assert "--faint: color-mix(in srgb, var(--body) 74%, var(--bg));" in html
+    assert '<h2 class="group-title">When a limit is reached</h2>' in html
+    assert (
+        '.chip[aria-pressed="true"], .chip[aria-current="true"] '
+        "{ background: var(--accent-soft); border-color: var(--accent); color: var(--text);"
+    ) in html
+
+
+def test_privateer_create_commission_and_revoke_sheet(html):
+    js = _script(html)
+    priv_src = js[js.index("privateers: function ()"):js.index("coordinator: function ()")]
+    assert "innerHTML" not in priv_src
+    for token in (
+        "openPrivateer",
+        '"priv-create-form"',
+        '"pv-name"',
+        '"pv-caps"',
+        '"pv-budget"',
+        '"pv-domains"',
+        '"pv-days"',
+        '"pv-msg"',
+        '"pv-submit"',
+        '"pv-recommission-btn"',
+        '"pv-revoke-btn"',
+        'autocorrect: "off"',
+        'autocapitalize: "none"',
+        'spellcheck: "false"',
+        '"aria-live": "polite"',
+        '"/api/fleet/privateers"',
+        '"/commission"',
+        '"DELETE"',
+    ):
+        assert token in priv_src, f"missing {token} in privateers sheet"

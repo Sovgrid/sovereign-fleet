@@ -40,6 +40,19 @@ class _Strict(BaseModel):
 class FleetSection(_Strict):
     root: str = "~/.fleet"            # spool and worktrees
     coordinator: str = "unset"        # name shown in the dashboard
+    pi_pocket_url: str = ""           # optional tailnet HTTPS/HTTP address shown in Your apps
+
+    @field_validator("pi_pocket_url")
+    @classmethod
+    def _pi_pocket_url(cls, v: str) -> str:
+        raw = (v or "").strip()
+        if not raw:
+            return ""
+        from urllib.parse import urlsplit
+        parts = urlsplit(raw)
+        if parts.scheme not in ("http", "https") or not parts.netloc:
+            raise ValueError("pi_pocket_url must be empty or an http:// or https:// URL")
+        return raw.rstrip("/")
 
 
 class DaemonSection(_Strict):
@@ -170,6 +183,7 @@ class CapabilitySection(_Strict):
     )                                                    # required side-effect classes; non-read effects cannot use 'allow' rules
     allowed_url_schemes: List[str] = Field(default_factory=lambda: ["http", "https"])
     hash_only_args: List[str] = Field(default_factory=list)   # tools whose arguments are logged as hash only
+    replay: Literal["safe", "never"] = "never"                # "safe": read-only idempotent calls may retry after a crash
 
 
 class LaneStep(_Strict):
@@ -407,6 +421,11 @@ class FleetConfig(_Strict):
                 raise ValueError(
                     f"capabilities.{cap_name}: rules cannot use 'allow' when effects include {bad}"
                 )
+            if cap.replay == "safe" and set(cap.effects) != {"read"}:
+                non_read = sorted(set(cap.effects) - {"read"})
+                raise ValueError(
+                    f"capabilities.{cap_name}: replay='safe' is only allowed when effects is ['read'], got {non_read}"
+                )
             sys_rw = [p for p in SYSTEM_RW if not (cap.private_tmp and p == "/tmp")]
             rw_roots = [
                 *(Path(p).resolve() for p in ALWAYS_RW),
@@ -587,6 +606,7 @@ def _derive_models(lanes: Dict[str, "LaneSpec"]) -> Tuple[Dict[str, ModelEndpoin
 _ENV: Dict[str, Tuple[str, str, Any]] = {
     "FLEET_ROOT": ("fleet", "root", str),
     "FLEET_COORDINATOR": ("fleet", "coordinator", str),
+    "FLEET_PI_POCKET_URL": ("fleet", "pi_pocket_url", str),
     "FLEET_TOKEN_FILE": ("daemon", "token_file", str),
     "FLEET_BACKEND": ("backend", "kind", str),
     "FLEET_GRID_RUNNER_DIR": ("backend", "grid_runner_dir", str),

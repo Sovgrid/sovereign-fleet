@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import stat
 import subprocess
 import sys
@@ -663,30 +662,6 @@ def test_amber_reconnect_limit_1_resends_multiple_pending_requests(tmp_path, mon
                     seen_seqs.add(tags["seq"])
             assert seen_eose is True
             assert seen_seqs == {"1", "2"}
-
-
-def test_dashboard_riskline_renders_waiting_for_phone_signature_badge():
-    node = shutil.which("node")
-    if not node:
-        pytest.skip("node not installed")
-    dash = (Path(__file__).resolve().parents[1] / "src" / "fleet" / "api" / "dashboard.html").read_text(encoding="utf-8")
-    assert "Waiting for phone signature" in dash
-    assert "[RESEND PROMPT]" in dash
-    # Evaluate escapeHtml + riskLine directly via Node
-    start_esc = dash.index("function escapeHtml(")
-    end_esc = dash.index("\n    function ", start_esc + 10)
-    start_risk = dash.index("function riskLine(")
-    end_risk = dash.index("\n    // Tab Navigation", start_risk)
-    js = (
-        dash[start_esc:end_esc]
-        + "\n"
-        + dash[start_risk:end_risk]
-        + "\nconst task = {id:'t1', status:'awaiting_approval', metadata:{pending_drafts:[{seq:1, capability:'mail', tool:'send_email', arguments:{to:'a@b'}, signature_status:'awaiting_signature'}]}};"
-        + "\nprocess.stdout.write(riskLine(task));"
-    )
-    out = subprocess.check_output([node, "-e", js], text=True)
-    assert "Waiting for phone signature" in out
-    assert "[RESEND PROMPT]" in out
 
 
 @pytest.mark.asyncio

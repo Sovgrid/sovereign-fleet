@@ -1,6 +1,4 @@
-"""Tests for FLEET-H4: Dashboard Auto + Advanced with measured numbers and (harness, model) dropdowns."""
-
-from pathlib import Path
+"""Tests for FLEET-H4: task dispatch with harness/model metadata and router pairs API."""
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -9,55 +7,6 @@ from fleet.api.app import app
 from fleet.core.config import FleetConfig, ModelEndpoint
 
 AUTH = {"Authorization": "Bearer test-token"}
-DASHBOARD_HTML = Path(__file__).parents[1] / "src" / "fleet" / "api" / "dashboard.html"
-
-
-def test_dashboard_contains_h4_elements():
-    """Verify dashboard.html contains Auto button, dual selects, presets and pair preview."""
-    html = DASHBOARD_HTML.read_text(encoding="utf-8")
-
-    # 1. Auto recommendation button & stats
-    assert 'id="btn-auto-pair"' in html
-    assert 'id="auto-pair-badge"' in html
-    assert 'id="auto-pair-text"' in html
-    assert 'id="auto-pair-stats"' in html
-
-    # 2. Dual selects: harness & model
-    assert 'id="harness-select"' in html
-    assert 'id="model-select"' in html
-
-    # 3. Dynamic pair status preview
-    assert 'id="pair-status-preview"' in html
-
-    # 4. Presets row
-    assert "applyPreset('auto', 'auto')" in html
-    assert "applyPreset('goose', 'local_qwen')" in html
-    assert "applyPreset('aider', 'local_qwen')" in html
-
-    # 5. Functions in script
-    assert "function loadModels()" in html
-    assert "function loadRouterPairs()" in html
-    assert "function onPairSelectionChange" in html
-    assert "function onModelSelectChange()" in html
-    assert "function selectAutoPair()" in html
-    assert "function applyPreset(" in html
-
-    # 6. Categorized optgroup subheaders for manual model selection
-    assert "LOCAL & SOVEREIGN" in html
-    assert "FREE TIER" in html
-    assert "NVIDIA NIM" in html
-    assert "SUBSCRIPTIONS & CLOUD" in html
-
-
-@pytest.mark.asyncio
-async def test_dashboard_serves_html():
-    """GET / or /dashboard serves 200 with the upgraded dashboard HTML."""
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        res = await client.get("/classic")
-        assert res.status_code == 200
-        assert "SOVEREIGN FLEET" in res.text
-        assert "btn-auto-pair" in res.text
-        assert "model-select" in res.text
 
 
 @pytest.mark.asyncio

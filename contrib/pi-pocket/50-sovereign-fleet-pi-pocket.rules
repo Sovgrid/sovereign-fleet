@@ -1,0 +1,19 @@
+// Sovereign Fleet: allow only the four unit actions needed to start/stop/restart Pi Pocket
+// and start its root upgrade oneshot. Rendered with the daemon OS user on install.
+polkit.addRule(function (action, subject) {
+    if (action.id !== "org.freedesktop.systemd1.manage-units") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    if (subject.user !== "@FLEET_USER@") {
+        return polkit.Result.NOT_HANDLED;
+    }
+    var unit = action.lookup("unit");
+    var verb = action.lookup("verb");
+    if (unit === "pi-pocket.service" && (verb === "start" || verb === "stop" || verb === "restart")) {
+        return polkit.Result.YES;
+    }
+    if (unit === "pi-pocket-upgrade.service" && verb === "start") {
+        return polkit.Result.YES;
+    }
+    return polkit.Result.NOT_HANDLED;
+});

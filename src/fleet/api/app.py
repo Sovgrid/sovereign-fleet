@@ -16,12 +16,12 @@ import logging
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Response, WebSocket
 from fastapi.encoders import jsonable_encoder
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import RedirectResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -339,6 +339,68 @@ async def test_notify():
     link = (s.notify_app_url or "").rstrip("/") + "/#/home" if s.notify_app_url else ""
     return {"result": await deliver({"title": "Test from Sovereign Fleet", "body": "Notifications work.",
                                      "priority": "default", "click": link}, s, load_config())}
+
+
+class PiPocketPowerRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action: Literal["start", "stop", "restart"]
+
+
+class PiPocketSettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    auto_upgrade: bool
+
+
+@app.get("/api/fleet/apps")
+def get_apps():
+    """Configured tailnet links for companion phone apps (read-only)."""
+    cfg = load_config()
+    return {
+        "pi_pocket_url": cfg.fleet.pi_pocket_url or None,
+        "buzz_relay_url": cfg.buzz.relay_url or None,
+    }
+
+
+@app.get("/api/fleet/pi-pocket")
+def get_pi_pocket():
+    """Pi Pocket service state, versions, and last upgrade outcome (admin-only)."""
+    from fleet.core import pi_pocket
+    return pi_pocket.get_status(load_settings())
+
+
+@app.post("/api/fleet/pi-pocket/power")
+def set_pi_pocket_power(req: PiPocketPowerRequest):
+    """Start, stop, or restart `pi-pocket.service` via the 4-action polkit rule."""
+    from fleet.core import pi_pocket
+    try:
+        return pi_pocket.set_power(req.action, load_settings())
+    except pi_pocket.PiPocketError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+@app.post("/api/fleet/pi-pocket/settings")
+def set_pi_pocket_settings(req: PiPocketSettingsRequest):
+    """Toggle Pi Pocket automated upgrades (3-day delay after stable release)."""
+    global _current_settings
+    from fleet.core import pi_pocket
+    try:
+        updated, view = pi_pocket.set_settings(req.auto_upgrade, load_settings())
+    except pi_pocket.PiPocketError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    _current_settings = updated
+    return view
+
+
+@app.post("/api/fleet/pi-pocket/upgrade", status_code=202)
+def trigger_pi_pocket_upgrade():
+    """Trigger the root `pi-pocket-upgrade.service` oneshot asynchronously."""
+    from fleet.core import pi_pocket
+    try:
+        return pi_pocket.trigger_upgrade(load_settings())
+    except pi_pocket.PiPocketError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.delete("/api/fleet/signer")
@@ -1004,13 +1066,10 @@ def app_view():
     return RedirectResponse("/static/app/", status_code=307)
 
 
-@app.get("/classic", response_class=HTMLResponse)
-def dashboard_view():
-    """The old dashboard, until the new shell has everything it has (UI-REDESIGN, parity)."""
-    html_file = API_DIR / "dashboard.html"
-    if html_file.exists():
-        return HTMLResponse(content=html_file.read_text(encoding="utf-8"))
-    return HTMLResponse(content="<h1>Sovereign Fleet</h1>")
+@app.get("/classic")
+def classic_redirect():
+    """Legacy dashboard removed after parity; keep /classic redirecting for old bookmarks."""
+    return RedirectResponse("/static/app/", status_code=307)
 
 
 @app.get("/manifest.json", response_class=JSONResponse)
@@ -1678,9 +1737,38 @@ def get_routines():
     return {"routines": list_routines(backend_obj=backend())}
 
 
+def _limit_routine_to_scope(
+    request: Request,
+    *,
+    lane: Optional[str],
+    harness: Optional[str],
+    intent: Optional[Dict[str, Any]],
+) -> str:
+    """Enforce `propose` token boundaries on routine proposals and attribute `via_token:<client>`."""
+    scope = getattr(request.state, "fleet_scope", "admin")
+    client = (getattr(request.state, "fleet_client", "") or "operator").strip() or "operator"
+    proposer = "operator" if client == "operator" else f"via_token:{client}"
+    if scopes.at_least(scope, "operate"):
+        return proposer
+    if lane:
+        raise HTTPException(status_code=403, detail="a propose token may not pick a lane")
+    if harness not in (None, "", "auto"):
+        raise HTTPException(status_code=403, detail="a propose token may not pick a harness")
+    if intent is not None:
+        if not isinstance(intent, dict):
+            raise HTTPException(status_code=400, detail="intent must be an object")
+        extra = sorted(set(intent) - scopes.PROPOSE_INTENT_KEYS)
+        if extra:
+            raise HTTPException(status_code=403, detail=(
+                f"intent key(s) {', '.join(extra)} need an operate token; allowed: "
+                f"{', '.join(sorted(scopes.PROPOSE_INTENT_KEYS))}"))
+    return proposer
+
+
 @app.post("/api/fleet/routines", status_code=201)
-def create_routine_item(req: RoutineCreateRequest):
+def create_routine_item(req: RoutineCreateRequest, request: Request):
     from fleet.core.routines import RoutineError, create_routine
+    proposer = _limit_routine_to_scope(request, lane=req.lane, harness=req.harness, intent=req.intent)
     try:
         return create_routine(
             req.id,
@@ -1692,6 +1780,7 @@ def create_routine_item(req: RoutineCreateRequest):
             lane=req.lane,
             harness=req.harness,
             depends_on=req.depends_on,
+            by=proposer,
         )
     except RoutineError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
@@ -1707,11 +1796,17 @@ def get_routine_item(routine_id: str):
 
 
 @app.put("/api/fleet/routines/{routine_id}")
-def update_routine_item(routine_id: str, req: RoutineUpdateRequest):
+def update_routine_item(routine_id: str, req: RoutineUpdateRequest, request: Request):
     from fleet.core.routines import RoutineError, propose_routine_change
     updates = req.model_dump(exclude_unset=True)
+    proposer = _limit_routine_to_scope(
+        request,
+        lane=updates.get("lane"),
+        harness=updates.get("harness"),
+        intent=updates.get("intent"),
+    )
     try:
-        return propose_routine_change(routine_id, updates)
+        return propose_routine_change(routine_id, updates, by=proposer)
     except RoutineError as e:
         raise _routine_http_error(e) from e
 

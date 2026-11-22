@@ -231,9 +231,6 @@ def test_g6_could_not_empty_worktree_lifecycle_keeps_receipt_skips_review_and_re
     assert receipt["outcome"] == "could_not"
     assert receipt["status"] == "completed"
 
-    dash = (Path(__file__).resolve().parent.parent / "src" / "fleet" / "api" / "dashboard.html").read_text()
-    assert "result.could_not" in dash
-
 
 def test_g7_prior_could_not_kept_in_engine_run_state_not_task_metadata(tmp_path, monkeypatch):
     """G7: _prior_could_not lives in FleetEngine per-run memory, never persisted into task.metadata."""

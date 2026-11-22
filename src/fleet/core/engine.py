@@ -13,6 +13,7 @@ import json
 import logging
 import math
 import re
+import secrets
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -28,7 +29,7 @@ from fleet.core.gateguard import GateGuard
 from fleet.core.models import compute_compatibility
 from fleet.core.quota import (QuotaLadder, block_lane_until, lane_block_info,
                               next_pacific_midnight, record_lane_quota_event)
-from fleet.core.receipts import build_receipt, generate_autopsy
+from fleet.core.receipts import build_receipt, generate_autopsy, save_attempt_receipt
 from fleet.core.router import Attempt, Router, lane_finished, lane_started, running_lanes
 from fleet.core.taskstore import FleetTask, TaskStore, is_sensitive
 from fleet.core.usage import summarize_runs
@@ -225,16 +226,28 @@ MAX_WAIT_HOURS = 24.0
 
 
 def _task_limit_policy(task: Optional[FleetTask]) -> Tuple[str, float]:
-    """Return (on_limit, wait_hours) from task metadata (falling back to intent)."""
+    """Return (on_limit, wait_hours) from task metadata, falling back to intent then saved settings."""
     if task is None:
         return "switch", DEFAULT_WAIT_HOURS
     meta = task.metadata or {}
     intent = meta.get("intent") if isinstance(meta.get("intent"), dict) else {}
-    raw_mode = meta.get("on_limit") if "on_limit" in meta else intent.get("on_limit")
+    settings_obj = None
+    if "on_limit" not in meta and "on_limit" not in intent:
+        from fleet.core.settings import load_settings
+        settings_obj = load_settings()
+        raw_mode = settings_obj.on_limit
+    else:
+        raw_mode = meta.get("on_limit") if "on_limit" in meta else intent.get("on_limit")
     mode = str(raw_mode).strip() if raw_mode is not None else "switch"
     if mode not in VALID_ON_LIMIT:
         mode = "switch"
-    raw_hours = meta.get("wait_hours") if "wait_hours" in meta else intent.get("wait_hours")
+    if "wait_hours" not in meta and "wait_hours" not in intent:
+        if settings_obj is None:
+            from fleet.core.settings import load_settings
+            settings_obj = load_settings()
+        raw_hours = settings_obj.wait_hours
+    else:
+        raw_hours = meta.get("wait_hours") if "wait_hours" in meta else intent.get("wait_hours")
     hours = DEFAULT_WAIT_HOURS
     if raw_hours is not None and not isinstance(raw_hours, bool):
         try:
@@ -373,6 +386,44 @@ class FleetEngine:
                 {"lane": lane, "harness": res.get("harness", ""), "at": int(time.time()),
                  "usage": res.get("usage")})
 
+    def _finish_attempt(
+        self,
+        task: FleetTask,
+        active_attempt: Dict[str, Any],
+        *,
+        status: str,
+        exit_code: Optional[int],
+        reason: str,
+        result: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Persist per-attempt receipt, update task attempt_records, and clear active_attempt."""
+        ended_at = time.time()
+        started_at = float(active_attempt.get("started_at") or ended_at)
+        res = result or {}
+        attempt_rec: Dict[str, Any] = {
+            "attempt_id": active_attempt["attempt_id"],
+            "seq": active_attempt["seq"],
+            "task_id": task.id,
+            "lane": task.metadata.get("resolved_lane") or res.get("lane") or task.lane,
+            "harness": task.metadata.get("resolved_harness") or res.get("harness") or task.metadata.get("harness"),
+            "model": task.metadata.get("resolved_model") or res.get("model") or task.metadata.get("model"),
+            "started_at": started_at,
+            "ended_at": ended_at,
+            "duration_seconds": round(max(0.0, ended_at - started_at), 2),
+            "status": status,
+            "exit_code": exit_code,
+            "reason": str(reason or status)[:300],
+            "branch": res.get("branch"),
+            "commit": res.get("commit"),
+        }
+        save_attempt_receipt(task.id, attempt_rec, spool_dir=self.task_store.spool_dir)
+        prior_attempts = list((task.metadata or {}).get("attempt_records") or [])
+        attempt_records = [*prior_attempts, attempt_rec]
+        task.metadata["attempt_records"] = attempt_records
+        task.metadata.pop("active_attempt", None)
+        self.task_store.update_metadata(task.id, {"attempt_records": attempt_records, "active_attempt": None})
+        return attempt_rec
+
     async def run_single_task(self, task: FleetTask) -> Dict[str, Any]:
         """Runs one task: worktree, sandboxed harness, GateGuard, then keeps the work.
 
@@ -402,6 +453,19 @@ class FleetEngine:
                 return {"error": f"Waiting: dependencies not yet completed ({deps})", "exit_code": 75}
 
         self.task_store.update_task_status(task.id, "in_progress")
+        prior_attempts = list((task.metadata or {}).get("attempt_records") or [])
+        attempt_seq = len(prior_attempts) + 1
+        active_attempt = {
+            "attempt_id": f"att-{attempt_seq}-{secrets.token_hex(4)}",
+            "seq": attempt_seq,
+            "task_id": task.id,
+            "lane": task.lane,
+            "harness": task.metadata.get("harness"),
+            "model": task.metadata.get("model"),
+            "started_at": time.time(),
+        }
+        task.metadata["active_attempt"] = active_attempt
+        self.task_store.update_metadata(task.id, {"active_attempt": active_attempt})
 
         priv_name = _task_privateer(task)
         if priv_name:
@@ -423,6 +487,14 @@ class FleetEngine:
                 autopsy = generate_autopsy(task, err_res)
                 task.autopsy = autopsy
                 err_res["autopsy"] = autopsy
+                self._finish_attempt(
+                    task,
+                    active_attempt,
+                    status="failed",
+                    exit_code=1,
+                    reason=err_res["error"],
+                    result=err_res,
+                )
                 receipt = build_receipt(task, err_res, duration_seconds=0.0, spool_dir=self.task_store.spool_dir)
                 err_res["receipt"] = receipt
                 task.metadata["receipt"] = receipt
@@ -444,6 +516,14 @@ class FleetEngine:
             autopsy = generate_autopsy(task, err_res)
             task.autopsy = autopsy
             err_res["autopsy"] = autopsy
+            self._finish_attempt(
+                task,
+                active_attempt,
+                status="failed",
+                exit_code=1,
+                reason=err_res["error"],
+                result=err_res,
+            )
             receipt = build_receipt(task, err_res, duration_seconds=0.0, spool_dir=self.task_store.spool_dir)
             err_res["receipt"] = receipt
             task.metadata["receipt"] = receipt
@@ -503,6 +583,36 @@ class FleetEngine:
                     },
                 )
                 task.metadata["pending_drafts"] = result["pending_drafts"]
+
+            attempt_status = "interrupted" if shutdown else status
+            if shutdown:
+                attempt_reason = str(result.get("error") or "interrupted")
+                attempt_exit: Optional[int] = None
+            elif status == "completed":
+                attempt_reason = "ok"
+                attempt_exit = result.get("exit_code", 0)
+            elif status == "awaiting_approval":
+                attempt_reason = (
+                    "pending_drafts"
+                    if result.get("pending_drafts")
+                    else str((result.get("landing") or {}).get("detail") or "awaiting_approval")
+                )
+                attempt_exit = result.get("exit_code", 0)
+            elif status == "cancelled":
+                attempt_reason = "cancelled"
+                attempt_exit = result.get("exit_code", 1)
+            else:
+                attempt_reason = str(result.get("error") or "failed")
+                attempt_exit = result.get("exit_code", 1)
+
+            self._finish_attempt(
+                task,
+                active_attempt,
+                status=attempt_status,
+                exit_code=attempt_exit,
+                reason=attempt_reason,
+                result=result,
+            )
 
             receipt = build_receipt(task, result, duration_seconds=dur, spool_dir=self.task_store.spool_dir)
             result["receipt"] = receipt
@@ -728,7 +838,9 @@ class FleetEngine:
 
         endpoint = self.models.get(model_name) if model_name else None
         if model_name and endpoint is None:
-            return "failed", {"error": f"Model '{model_name}' not configured in [models]", "exit_code": 1}
+            # A CLI's own model (agy, claude-code, cursor) is not an endpoint: pin it through its lane.
+            return "failed", {"error": f"Model '{model_name}' not configured in [models]; to pin a CLI's own "
+                                       "model, name its lane instead of harness and model", "exit_code": 1}
 
         if endpoint is not None:
             compat, reason = compute_compatibility(

@@ -269,6 +269,195 @@ def verify_call_log(path: Path) -> tuple[bool, int, str]:
     return True, count, ""
 
 
+def _max_logged_call_id(path: Path) -> int:
+    max_id = 0
+    try:
+        raw_lines = Path(path).read_bytes().splitlines()
+    except OSError:
+        return 0
+    for raw in raw_lines:
+        if not raw.strip():
+            continue
+        try:
+            rec = json.loads(raw)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        cid = rec.get("call_id")
+        if isinstance(cid, int) and not isinstance(cid, bool) and cid > max_id:
+            max_id = cid
+    return max_id
+
+
+def find_open_calls(path: Path) -> tuple[bool, list[dict[str, Any]], str]:
+    """Return ``(intact, open_calls, detail)`` for a hash-chained capability call log.
+
+    An open call has a write-ahead ``call_started`` record without a matching outcome ``decision``.
+    """
+    intact, _count, detail = verify_call_log(path)
+    open_map: dict[Any, dict[str, Any]] = {}
+    try:
+        raw_lines = Path(path).read_bytes().splitlines()
+    except OSError as e:
+        return False, [], str(e)
+    for raw in raw_lines:
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        try:
+            rec = json.loads(stripped)
+        except ValueError:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        cid = rec.get("call_id")
+        if cid is None:
+            continue
+        if rec.get("event") == "call_started":
+            open_map[cid] = {
+                "call_id": cid,
+                "tool": rec.get("tool", ""),
+                "args_sha256": rec.get("args_sha256", ""),
+                "replay": rec.get("replay", "never"),
+                "capability": rec.get("capability", ""),
+                "seq": rec.get("seq"),
+                "ts": rec.get("ts"),
+            }
+        elif "decision" in rec:
+            open_map.pop(cid, None)
+    return intact, list(open_map.values()), detail
+
+
+def inspect_task_open_calls(
+    task_id: str,
+    *,
+    root: Path | None = None,
+    capabilities: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Inspect all capability call logs for *task_id* for broken chains or unclosed forwarded calls."""
+    if not task_id:
+        return {"unsafe_open": [], "safe_open": [], "chain_broken": False, "chain_errors": []}
+    if root is None:
+        from fleet.core.config import load_config
+
+        root_path = load_config().root
+    else:
+        root_path = Path(root)
+    toolcalls_dir = root_path / "toolcalls"
+    if not toolcalls_dir.is_dir():
+        return {"unsafe_open": [], "safe_open": [], "chain_broken": False, "chain_errors": []}
+    safe_id = re.sub(r"[^A-Za-z0-9_.-]", "_", task_id or "run")
+    prefix = f"{safe_id}."
+    unsafe_open: list[dict[str, Any]] = []
+    safe_open: list[dict[str, Any]] = []
+    chain_broken = False
+    chain_errors: list[str] = []
+    for path in sorted(toolcalls_dir.glob(f"{prefix}*.jsonl")):
+        if path.name.endswith(".bodies.jsonl"):
+            continue
+        cap_name = path.name[len(prefix) : -len(".jsonl")]
+        if not cap_name:
+            continue
+        intact, open_calls, detail = find_open_calls(path)
+        if not intact:
+            chain_broken = True
+            chain_errors.append(f"{cap_name}: {detail or 'call log chain broken'}")
+        for entry in open_calls:
+            logged_replay = entry.get("replay")
+            if capabilities is not None:
+                cfg_cap = capabilities.get(cap_name)
+                is_safe = (
+                    logged_replay == "safe"
+                    and cfg_cap is not None
+                    and getattr(cfg_cap, "replay", "never") == "safe"
+                )
+            else:
+                is_safe = logged_replay == "safe"
+            effective = "safe" if is_safe else "never"
+            item = {"capability": cap_name, **entry, "effective_replay": effective}
+            if is_safe:
+                safe_open.append(item)
+            else:
+                unsafe_open.append(item)
+    return {
+        "unsafe_open": unsafe_open,
+        "safe_open": safe_open,
+        "chain_broken": chain_broken,
+        "chain_errors": chain_errors,
+    }
+
+
+def acknowledge_open_calls(
+    task_id: str,
+    *,
+    by: str = "operator",
+    root: Path | None = None,
+) -> list[dict[str, Any]]:
+    """Append hash-chained ``acknowledged`` outcomes for unclosed calls on *task_id*.
+
+    Refuses with ``ToolGateError`` before writing anything if any capability log
+    chain for *task_id* is broken.
+    """
+    if not task_id:
+        return []
+    if root is None:
+        from fleet.core.config import load_config
+
+        root_path = load_config().root
+    else:
+        root_path = Path(root)
+    toolcalls_dir = root_path / "toolcalls"
+    if not toolcalls_dir.is_dir():
+        return []
+    safe_id = re.sub(r"[^A-Za-z0-9_.-]", "_", task_id or "run")
+    prefix = f"{safe_id}."
+    pending: list[tuple[Path, str, list[dict[str, Any]]]] = []
+    chain_errors: list[str] = []
+    for path in sorted(toolcalls_dir.glob(f"{prefix}*.jsonl")):
+        if path.name.endswith(".bodies.jsonl"):
+            continue
+        cap_name = path.name[len(prefix) : -len(".jsonl")]
+        if not cap_name:
+            continue
+        intact, open_calls, detail = find_open_calls(path)
+        if not intact:
+            chain_errors.append(f"{cap_name}: {detail or 'call log chain broken'}")
+        elif open_calls:
+            pending.append((path, cap_name, open_calls))
+    if chain_errors:
+        raise ToolGateError(
+            "refusing to acknowledge open tool calls with broken call log chain: "
+            + "; ".join(chain_errors)
+        )
+    acknowledged: list[dict[str, Any]] = []
+    for path, cap_name, open_calls in pending:
+        log = CallLog(path)
+        try:
+            for entry in open_calls:
+                log.write(
+                    event="call_acknowledged",
+                    task_id=task_id,
+                    capability=cap_name,
+                    call_id=entry["call_id"],
+                    tool=entry.get("tool", ""),
+                    args_sha256=entry.get("args_sha256", ""),
+                    decision="acknowledged",
+                    by=by,
+                    reason="operator approved task replay after interruption",
+                )
+                acknowledged.append(
+                    {
+                        "capability": cap_name,
+                        "call_id": entry["call_id"],
+                        "tool": entry.get("tool", ""),
+                    }
+                )
+        finally:
+            log.close()
+    return acknowledged
+
+
 def _group_exists(pgid: int) -> bool:
     """Whether any process of the group is left. Never asks about group 0 or 1 (see memlimit)."""
     if not isinstance(pgid, int) or isinstance(pgid, bool) or pgid <= 1:
@@ -527,7 +716,7 @@ class ToolGate:
                  hash_only_args: Sequence[str] = (), name: str = "capability",
                  bodies_path: Path | None = None, approval_dir: Path | None = None,
                  task_id: str = "", draft_max_age_seconds: int = DRAFT_MAX_AGE_SECONDS,
-                 max_drafts: int = 5, parent_budget: Budget | None = None):
+                 max_drafts: int = 5, replay: str = "never", parent_budget: Budget | None = None):
         self.argv, self.env, self.cwd = list(argv), env, cwd
         self.rules = Rules(rules)
         self.budget = Budget(max_calls, max_calls_per_tool, parent=parent_budget)
@@ -550,6 +739,8 @@ class ToolGate:
         self.drafts: list[Path] = []
         self._draft_seq = 0
         self._drafted_seqs: set[int] = set()
+        self.replay: str = "safe" if replay == "safe" else "never"
+        self._call_seq: int = 0
         self.host, self.port, self.name = host, port, name
         self.call_timeout, self.start_timeout = float(call_timeout), float(start_timeout)
         self.max_result_bytes, self.max_restarts = int(max_result_bytes), int(max_restarts)
@@ -588,6 +779,7 @@ class ToolGate:
     async def start(self) -> None:
         if self.audit_path is not None:
             self._log = CallLog(self.audit_path)   # a gate that cannot log does not start
+            self._call_seq = _max_logged_call_id(self.audit_path)
         if self.bodies_path is not None:
             self.bodies_path.parent.mkdir(parents=True, exist_ok=True)
             self._bodies_file = open(self.bodies_path, "ab", buffering=0)  # noqa: SIM115
@@ -949,6 +1141,17 @@ class ToolGate:
     ) -> dict[str, Any]:
         if count_budget:
             self.budget.count(tool)   # counted when forwarded: a call in flight uses its budget
+        self._call_seq += 1
+        call_id = self._call_seq
+        self._record(
+            event="call_started",
+            call_id=call_id,
+            tool=tool,
+            args_sha256=args_sha256,
+            replay=self.replay,
+            capability=self.name,
+            task_id=self.task_id,
+        )
         async with self._calls:
             try:
                 upstream = await self._live_upstream()
@@ -956,7 +1159,7 @@ class ToolGate:
                 answer = await upstream.request("tools/call", {"name": tool, "arguments": arguments},
                                                 self.call_timeout)
             except TimeoutError as e:
-                return done("error_timeout", _tool_error(f"{tool}: {e}. The call was cancelled."), reason=str(e))
+                return done("error_timeout", _tool_error(f"{tool}: {e}. The call was cancelled."), call_id=call_id, reason=str(e))
             except (UpstreamGone, ToolGateError) as e:
                 if self._upstream is not None and self._upstream.gone is None:
                     state = "It was started again; whatever it held (open pages, sessions) is lost."
@@ -964,9 +1167,9 @@ class ToolGate:
                     state = "The next call starts it again, without whatever it held (open pages, sessions)."
                 else:
                     state = "It is not available any more."
-                return done("error_upstream", _tool_error(f"{tool}: {e}. {state}"), reason=str(e))
+                return done("error_upstream", _tool_error(f"{tool}: {e}. {state}"), call_id=call_id, reason=str(e))
             except asyncio.CancelledError:   # the gate stops or the agent hung up: still on record
-                done("cancelled", {}, reason="the connection ended before the answer")
+                done("cancelled", {}, call_id=call_id, reason="the connection ended before the answer")
                 raise
             finally:
                 self._inflight.pop(client_id, None)
@@ -976,7 +1179,7 @@ class ToolGate:
             error = answer["error"] if isinstance(answer["error"], dict) else {"message": str(answer["error"])}
             err_result = _tool_error(f"{tool}: {str(error.get('message', 'error'))[:2000]}")
             shown_sha = self._record_body(tool, args_sha256, _sha(b""), err_result, is_error=True, cut=False)
-            return done("allowed", err_result, is_error=True, result_bytes=0, shown_sha256=shown_sha)
+            return done("allowed", err_result, call_id=call_id, is_error=True, result_bytes=0, shown_sha256=shown_sha)
         result = answer.get("result") if isinstance(answer.get("result"), dict) else {}
         prov_extra: dict[str, Any] = {}
         raw_meta = result.get("_meta")
@@ -1009,7 +1212,7 @@ class ToolGate:
         shown, size, digest, cut = _cut_result(result, self.max_result_bytes)
         is_err = bool(result.get("isError"))
         shown_sha = self._record_body(tool, args_sha256, digest, shown, is_error=is_err, cut=cut)
-        return done("allowed", shown, is_error=is_err, result_bytes=size,
+        return done("allowed", shown, call_id=call_id, is_error=is_err, result_bytes=size,
                     result_sha256=digest, shown_sha256=shown_sha, cut=cut, **prov_extra)
 
     async def _call(

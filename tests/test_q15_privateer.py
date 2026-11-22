@@ -484,9 +484,9 @@ async def test_engine_refuses_uncommissioned_privateer_and_signs_receipt_with_pr
 
 
 def test_dashboard_includes_privateers_management_panel():
-    dash = (Path(__file__).resolve().parents[1] / "src" / "fleet" / "api" / "dashboard.html").read_text(encoding="utf-8")
-    assert "privateers-card" in dash
-    assert "/api/fleet/privateers" in dash
+    app_html = (Path(__file__).resolve().parents[1] / "src" / "fleet" / "api" / "static" / "app" / "index.html").read_text(encoding="utf-8")
+    assert "/api/fleet/privateers" in app_html
+    assert "priv-create-form" in app_html
 
 
 @pytest.mark.asyncio
@@ -579,7 +579,7 @@ Path("result.json").write_text(json.dumps({{"secret_env_present": secret_env_pre
     audit_path = cfg.root / "toolcalls" / "t-priv-budget.probe.jsonl"
     assert audit_path.is_file()
     entries = [json.loads(line) for line in audit_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    decisions = [e.get("decision") for e in entries if e.get("tool") == "probe"]
+    decisions = [e.get("decision") for e in entries if e.get("tool") == "probe" and "decision" in e]
     assert decisions == ["allowed", "allowed", "denied_budget"], entries
     committed_result = json.loads(
         subprocess.check_output(
@@ -756,14 +756,14 @@ Path("out.json").write_text(json.dumps(results), encoding="utf-8")
 
     e1 = [json.loads(l) for l in (tc_dir / "t-priv-cumul.probe.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
     e2 = [json.loads(l) for l in (tc_dir / "t-priv-cumul.probe2.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
-    assert [e.get("decision") for e in e1 if e.get("tool") == "probe"] == ["allowed", "allowed"]
-    assert [e.get("decision") for e in e2 if e.get("tool") == "probe"] == ["allowed", "denied_budget"]
+    assert [e.get("decision") for e in e1 if e.get("tool") == "probe" and "decision" in e] == ["allowed", "allowed"]
+    assert [e.get("decision") for e in e2 if e.get("tool") == "probe" and "decision" in e] == ["allowed", "denied_budget"]
 
     # Re-run the same task id with fresh harness/gates -> cumulative count (3/3) rejects the very next call!
     store.update_task_status("t-priv-cumul", "queued")
     await engine.run_single_task(store.get_task("t-priv-cumul"))
     e1_after = [json.loads(l) for l in (tc_dir / "t-priv-cumul.probe.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
-    assert [e.get("decision") for e in e1_after if e.get("tool") == "probe"] == ["allowed", "allowed", "denied_budget", "denied_budget"]
+    assert [e.get("decision") for e in e1_after if e.get("tool") == "probe" and "decision" in e] == ["allowed", "allowed", "denied_budget", "denied_budget"]
 
     # 3. Revoked commission refused by engine skips privateer_signature on failed receipt
     revoke_privateer("offline-bot", cfg=cfg)
@@ -1130,7 +1130,7 @@ Path("e2e.txt").write_text("done\\n", encoding="utf-8")
     tc_dir = cfg.root / "toolcalls"
     p1 = [json.loads(l) for l in (tc_dir / "t-e2e-budget.probe.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
     p2 = [json.loads(l) for l in (tc_dir / "t-e2e-budget.probe2.jsonl").read_text(encoding="utf-8").splitlines() if l.strip()]
-    assert [e.get("decision") for e in p1 if e.get("tool") == "probe"] == ["allowed", "allowed", "denied_budget", "denied_budget"]
-    assert [e.get("decision") for e in p2 if e.get("tool") == "probe"] == ["allowed", "denied_budget", "denied_budget", "denied_budget"]
+    assert [e.get("decision") for e in p1 if e.get("tool") == "probe" and "decision" in e] == ["allowed", "allowed", "denied_budget", "denied_budget"]
+    assert [e.get("decision") for e in p2 if e.get("tool") == "probe" and "decision" in e] == ["allowed", "denied_budget", "denied_budget", "denied_budget"]
     r_bud = load_receipt("t-e2e-budget", spool_dir=store.spool_dir)
     assert r_bud is not None and verify_receipt_signature(r_bud, cfg=cfg) is True

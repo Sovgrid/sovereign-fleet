@@ -526,15 +526,6 @@ async def test_grid_plugins_payload_reports_harness_selectable(grid):
                 assert harnesses["claude-code"]["reason"] == "not installed"
 
 
-def test_dashboard_shows_harness_select_on_grid_backend():
-    from pathlib import Path
-    html = (Path(__file__).parents[1] / "src/fleet/api/dashboard.html").read_text(encoding="utf-8")
-    assert 'id="harness-select"' in html
-    assert 'id="harness-select-group"' in html
-    assert 'updateHarnessSelect()' in html
-    assert 'info.selectable' in html
-
-
 @pytest.mark.asyncio
 async def test_risk_rating_lands_on_a_grid_task(grid, monkeypatch):
     """The rating of a held task is stored in the runner's task (its "meta") and shows on the

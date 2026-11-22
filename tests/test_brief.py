@@ -77,3 +77,15 @@ async def test_api_attaches_the_brief_to_waiting_tasks_only(monkeypatch):
         assert listed[held["id"]]["brief"]["risk"]["level"] in ("low", "medium", "high")
         one = (await c.get(f"/api/fleet/tasks/{held['id']}")).json()
         assert one["brief"]["why"]
+
+
+def test_a_task_held_after_a_crash_says_why_and_is_not_recommended():
+    """recover() holds a task whose tool call has no outcome; the brief must say so before a replay."""
+    b = approval_brief(_task(replay_held=True,
+                             open_tool_calls=[{"capability": "github", "tool": "create_issue", "call_id": 3}],
+                             intent={"project": "blog", "allowed_paths": ["src/x.py"],
+                                     "gate_cmd": {"pytest": "tests/x.py"}}), now=1000.0)
+    assert "github/create_issue" in b["why"][0] and "unknown" in b["why"][0]
+    assert b["risk"]["level"] == "high"
+    assert b["recommendation"]["action"] == "look_closely"
+    assert "twice" in b["if_approve"][0]

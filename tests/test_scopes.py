@@ -204,3 +204,67 @@ def test_cli_token_create_list_revoke(monkeypatch, capsys):
     with pytest.raises(SystemExit):
         cli.main(["token", "revoke", "abc"])
     assert calls[-1] == ("DELETE", "/api/fleet/tokens/abc", None)
+
+
+@pytest.mark.asyncio
+async def test_propose_routine_attributes_token_and_cannot_widen_reach():
+    sched = {"kind": "interval", "every_seconds": 3600}
+    async with _client() as c:
+        prop_tok = (await _token(c, "propose", "pi-pocket"))["token"]
+        op_tok = (await _token(c, "operate", "ops-bot"))["token"]
+
+        # Propose token cannot pick lane, harness, or privileged intent keys on POST
+        for bad_post in (
+            {"id": "bad-lane", "title": "t", "prompt": "p", "schedule": sched, "lane": "local_qwen"},
+            {"id": "bad-harn", "title": "t", "prompt": "p", "schedule": sched, "harness": "claude_code"},
+            {"id": "bad-int", "title": "t", "prompt": "p", "schedule": sched,
+             "intent": {"project": "x", "allowed_domains": ["evil.example"]}},
+        ):
+            r = await c.post("/api/fleet/routines", headers=_bearer(prop_tok), json=bad_post)
+            assert r.status_code == 403, f"{bad_post} gave {r.status_code}: {r.text}"
+
+        # Valid routine proposal by propose token attributes via_token:<name>
+        ok_post = await c.post("/api/fleet/routines", headers=_bearer(prop_tok), json={
+            "id": "prop-routine",
+            "title": "Check tests",
+            "prompt": "Run tests cleanly",
+            "schedule": sched,
+            "intent": {"project": "alpha", "title": "Check tests"},
+        })
+        assert ok_post.status_code == 201, ok_post.text
+        assert ok_post.json()["created_by"] == "via_token:pi-pocket"
+
+        # Approve as operator so PUT can propose a pending_change
+        rev_id = ok_post.json()["review_id"]
+        app_r = await c.post("/api/fleet/routines/prop-routine/approve", headers=ADMIN,
+                             json={"by": "operator", "review_id": rev_id})
+        assert app_r.status_code == 200, app_r.text
+
+        # Propose token cannot set lane, harness, or disallowed intent keys on PUT
+        for bad_put in (
+            {"lane": "local_qwen"},
+            {"harness": "goose"},
+            {"intent": {"project": "x", "capabilities": ["fetch"]}},
+        ):
+            r = await c.put("/api/fleet/routines/prop-routine", headers=_bearer(prop_tok), json=bad_put)
+            assert r.status_code == 403, f"{bad_put} gave {r.status_code}: {r.text}"
+
+        # Valid PUT proposal by propose token attributes via_token:<name> (never "operator")
+        ok_put = await c.put("/api/fleet/routines/prop-routine", headers=_bearer(prop_tok), json={
+            "prompt": "Updated prompt text",
+        })
+        assert ok_put.status_code == 200, ok_put.text
+        assert ok_put.json()["pending_change"]["proposed_by"] == "via_token:pi-pocket"
+
+        # Operate token may set lane and still records via_token:<name>; admin operator records "operator"
+        op_put = await c.put("/api/fleet/routines/prop-routine", headers=_bearer(op_tok), json={
+            "lane": "local_qwen",
+        })
+        assert op_put.status_code == 200, op_put.text
+        assert op_put.json()["pending_change"]["proposed_by"] == "via_token:ops-bot"
+
+        adm_post = await c.post("/api/fleet/routines", headers=ADMIN, json={
+            "id": "adm-routine", "title": "Admin check", "prompt": "Run check", "schedule": sched,
+        })
+        assert adm_post.status_code == 201, adm_post.text
+        assert adm_post.json()["created_by"] == "operator"

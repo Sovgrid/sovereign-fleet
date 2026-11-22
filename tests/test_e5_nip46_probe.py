@@ -17,6 +17,8 @@ import pytest
 from conftest import require_nak
 
 E5_PATH = Path(__file__).resolve().parents[1] / "reviews" / "experiments" / "beyond-code-e5" / "e5.py"
+# The experiment lives in reviews/, which the public tree leaves out.
+pytestmark = pytest.mark.skipif(not E5_PATH.is_file(), reason="experiment E5 is not in this tree")
 
 
 def _load_e5():

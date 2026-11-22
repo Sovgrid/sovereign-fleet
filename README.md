@@ -38,7 +38,7 @@ Sovereign Fleet runs coding-agent CLIs (**Goose**, **Claude Code**, **OpenCode**
 - **Decoupled `(Harness × Model)` Router with Quota Windows:** Routes across local model servers (vLLM, SGLang, Ollama), free cloud tiers, and subscription CLIs alike. Thompson sampling ranks compatible `(harness, model)` pairs by cost-weighted minutes per correct result (`bakeoff_priors.json`), automatically rests rate-limited lanes until their quota reset, and replaces retired models with probed same-family successors.
 - **Spend Quota Deliberately (Budgets):** Local models, free tiers, your own subscriptions and paid-per-use providers each get a policy (`normal`, `reserve`, `manual`) with sensible defaults; the coordinator's own subscription stays in reserve, and a coordinator agent can tighten a policy over MCP but never loosen one. A weekly ledger shows the tokens your agents used and what they would have cost at a reference model's API list prices.
 - **Verify Before Claim (Sandboxed Quality Gates):** An agent's report is a claim, not proof. Every run must pass scope checks (`allowed_paths` + companion tests), AST syntax checks, the repository's own gate (`scripts/verify.sh` or `pytest`), and the task gate inside a credential-free sandbox before merging or opening a PR.
-- **Steer from Anywhere:** Dispatch and approve tasks from the installable mobile Web PWA (`/` redirects to `/static/app/`, legacy dashboard at `/classic`; `/#token=...`), from coordinator agents via the 17-tool **MCP server** (including 11-tool `--mode front_door` and read-only MCP Apps cards), receive title-only "needs you" alerts via **ntfy**, **Matrix**, or one-way NIP-17 **Nostr DM** (off by default, pinned anchor recipient only), reply `!fleet approve <id>` in **Matrix**, or label **GitHub / Gitea issues** with a ```` ```fleet ```` contract block.
+- **Steer from Anywhere:** Dispatch and approve tasks from the installable mobile Web PWA (`/` and `/classic` redirect to `/static/app/`; `/#token=...`), from coordinator agents via the 17-tool **MCP server** (including 11-tool `--mode front_door` and read-only MCP Apps cards), receive title-only "needs you" alerts via **ntfy**, **Matrix**, or one-way NIP-17 **Nostr DM** (off by default, pinned anchor recipient only), reply `!fleet approve <id>` in **Matrix**, or label **GitHub / Gitea issues** with a ```` ```fleet ```` contract block.
 
 ### In our own use
 
@@ -74,7 +74,7 @@ Status: **beta**: we run it every day; config can still change between minor rel
 | **Goose Recipes & Evals** | Goose recipes (recipe format `1.0.0`) in `recipes/*/recipe.yaml` (`fleet-ab-proposal-eval/recipe.yaml`, `fleet-self-improvement/recipe.yaml`, `fleet-bench-runner/recipe.yaml`) for deterministic A/B proposal evaluation, self-improvement loops, and benchmark execution. Loaded on demand via `goose run --recipe` with zero context overhead on regular tasks ([docs/EVALS_AND_BENCHMARKS.md](https://github.com/Sovgrid/sovereign-fleet/blob/main/docs/EVALS_AND_BENCHMARKS.md)). |
 | **Model roster** | The lanes of your fleet.toml, nothing built in (models, prices and free tiers change faster than releases). For each lane: switched off in the dashboard (the router then skips it too), dead or retired at the last health check, resting after a provider limit, CLI missing, local model not loaded, key missing, or online. Keys are only checked for presence. |
 | **Provider keys** | Per lane `key_env` + `key_file` (or a credential plugin): the key goes into that CLI run's environment only. A `CredentialPlugin` (`[plugins] credentials`) can supply keys from a vault or a key manager; the package ships none. |
-| **Dashboard & Mobile** | The slim mobile-first shell at `/static/app/` is now the start page (`/` returns a `307` redirect so `#token=` fragments and `#/t/<task_id>` deep links survive, while the legacy dashboard stays available at `/classic` from About). It shows Home, Tasks (with structured approval briefs on held tasks), Task detail (tries, landing, files, test output, receipt, drafts), Schedule (operator-approved routines with `review_id` binding), Providers & Models, Ledger, Plugins, Access (scoped tokens shown once), Connect phone (Amber pairing + `kind 4919` "Send a test approval"), and Notifications (optional title-only **ntfy**, **Matrix**, and one-way NIP-17 **Nostr DM** alerts to the pinned key over operator relays). Live updates arrive over SSE (`/api/v1/events`) with polite `5 s` / `60 s` fallback polling; untrusted text is rendered strictly via `textContent`, file-based prompt templates come from `/api/fleet/templates`, and text stays >= 11 px with WCAG AA contrast. Sign-in via one-tap link (`/#token=...`) exchanges the token for the HttpOnly session cookie. |
+| **Dashboard & Mobile** | The slim mobile-first shell at `/static/app/` is the dashboard (`/` and legacy `/classic` return a `307` redirect so `#token=` fragments and `#/t/<task_id>` deep links survive). It shows Home, Tasks (with structured approval briefs on held tasks), Task detail (tries, landing, files, test output, receipt, drafts), Schedule (operator-approved routines with `review_id` binding), Routines & Privateer create/commission/revoke, archive controls, voice input, Providers & Models (with persisted `on_limit` quota policy), Ledger, Plugins, Your apps (tailnet companion guide), Access (scoped tokens shown once), Connect phone (Amber pairing + `kind 4919` "Send a test approval"), Settings > Pi Pocket host/upgrade controls, and Notifications (optional title-only **ntfy**, **Matrix**, and one-way NIP-17 **Nostr DM** alerts to the pinned key over operator relays). Live updates arrive over SSE (`/api/v1/events`) with polite `5 s` / `60 s` fallback polling; untrusted text is rendered strictly via `textContent`, file-based prompt templates come from `/api/fleet/templates`, and text stays >= 11 px with WCAG AA contrast. Sign-in via one-tap link (`/#token=...`) exchanges the token for the HttpOnly session cookie. |
 | **Cancel** | Local backend: marks the task cancelled; cancels the asyncio task so the agent's and the gates' process groups are killed; keeps the work on the `fleet/<id>` branch. Grid backend: the runner stops the agent. |
 
 ## Security model
@@ -172,6 +172,20 @@ what it can reach instead of trusting it.
 - **Current limits & planned Privateer parts:** only `goose` and `claude-code`
   attach capabilities today; remote HTTP capability servers are not supported; capability resources and prompts are
   not forwarded to agents; in `sandbox.egress = "ports"` mode UDP is not filtered for the agent.
+- **Crash durability & replay safety (`core/engine.py`, `core/toolgate.py`, `core/executor.py`):** every execution
+  attempt gets its own attempt ID and persisted per-attempt receipt (including `interrupted`), which the task
+  receipt aggregates. The tool gate writes a hash-chained `call_started` intent record (arguments hashed, never raw
+  values for `hash_only_args`) before forwarding upstream; capabilities default to `replay = "never"` (`"safe"` is
+  allowed only when `effects = ["read"]`), so on daemon crash recovery any task with an interrupted non-safe call or
+  broken call-log chain moves to `awaiting_approval` (`outcome unknown`) instead of replaying silently. Orphan
+  recovery counters also reset when the task branch advanced between restarts.
+
+### What Sovereign Fleet does not do
+
+- **Not a single-session chat IDE:** tasks run asynchronously in isolated git worktrees behind verification gates, not as an interactive single-turn chat loop.
+- **Cannot make arbitrary external APIs exactly-once on its own:** crash recovery stops unacknowledged side-effect calls from re-running (`replay = "never"`), but once an external request leaves the machine without provider idempotency, human inspection decides whether to retry.
+- **Linux-only kernel enforcement:** filesystem, network, and unix-socket sandboxing depend on Linux >= 6.12 Landlock ABI 6; other kernels or OSes are refused when sandboxing is required.
+- **Not an agent persona or long-term memory store:** front-door assistants (such as OpenClaw or Buzz) stay external clients with read/propose tokens, while worker CLIs start with an ephemeral fleet-owned home per run.
 
 ## System requirements
 
@@ -239,6 +253,18 @@ fragment (browsers never send the fragment to the server), exchanges it for the 
 cookie and clears it from the address bar. Put that link into a QR code to sign in a phone. The
 access log never records a query string, so a token sent as `?token=` by mistake does not reach it.
 
+### Phone
+
+Three apps cover different jobs on your phone (summarised in Settings -> **Your apps** inside the web app):
+
+| You want to | App | Rule |
+| :--- | :--- | :--- |
+| See what runs, approve, give a task | **Fleet app** (`/static/app/`) | The only place where anything is decided. |
+| Work with the AI yourself, quickly | **Pi Pocket** | Runs a local model under its own OS user with no `/home` or `/data`; can propose fleet tasks over MCP. Configure `[fleet] pi_pocket_url` in `fleet.toml` to show its link in **Your apps**. |
+| Discuss work, with others or agents | **Buzz** | A message from you in the fleet channel starts the fleet. |
+
+Alarms go over Matrix or one-way encrypted Nostr DM once you configure your relay URL(s) in Settings -> Notifications.
+
 ### Configuration
 
 One file, `~/.config/sovereign-fleet/fleet.toml` (or `$FLEET_CONFIG`), holds everything specific
@@ -252,7 +278,7 @@ fleet config check     # repos exist, TLS files readable, token file private, no
 
 | Section | What it sets |
 | :--- | :--- |
-| `[fleet]` | `root` (spool and worktrees), `coordinator` (name in the dashboard) |
+| `[fleet]` | `root` (spool and worktrees), `coordinator` (name in the dashboard), `pi_pocket_url` (optional HTTPS link shown in Settings -> Your apps) |
 | `[daemon]` | `host`, `port`, `tls_cert`, `tls_key`, `token_file` |
 | `[backend]` | `kind` (`local` or `grid`), `grid_runner_dir`, `max_concurrent` |
 | `[sandbox]` | `ports` agents may reach besides 443/80/53, `egress` (`"ports"`, or `"allowlist"` for the per-run egress proxy) with `allowed_domains`, extra `read_only` and `writable` paths, `memory_max` (systemd `MemoryMax` ceiling per agent run and gate where systemd is available, process-group watchdog elsewhere, default "8G"; "" or "0" switches it off) |

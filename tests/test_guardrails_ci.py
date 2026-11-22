@@ -57,7 +57,7 @@ def test_match_path_patterns():
     patterns = ["src/fleet/**", "tests/*.py", "README.md", "docs/"]
 
     assert match_path("src/fleet/core/engine.py", patterns) is True
-    assert match_path("src/fleet/api/dashboard.html", patterns) is True
+    assert match_path("src/fleet/api/static/app/index.html", patterns) is True
     assert match_path("tests/test_core.py", patterns) is True
     assert match_path("README.md", patterns) is True
     assert match_path("docs/INSTALL.md", patterns) is True

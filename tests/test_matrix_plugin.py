@@ -357,3 +357,26 @@ async def test_g11_f2_matrix_request_approval_masks_visible_and_strips_userinfo(
     assert "tok-secret-999" not in msg and secret_tok not in msg
     assert "[masked]" in msg
 
+
+
+@pytest.mark.asyncio
+async def test_matrix_refuses_approve_of_a_task_held_after_a_crash(tmp_path):
+    """A task held after a crash (replay_held) is approved only in the fleet app, which shows the
+    risk and acknowledges the open tool calls; a Matrix approve would skip both."""
+    store = TaskStore(spool_dir=str(tmp_path / "spool"))
+    store.enqueue(
+        FleetTask(
+            id="t-held-mx",
+            text="Send update",
+            status="awaiting_approval",
+            metadata={"replay_held": True, "open_tool_calls": [{"capability": "mail", "call_id": 1}]},
+        )
+    )
+    plugin = MatrixOutputPlugin(room_id="!r:m.org", token="tok", allowed_senders=[OPERATOR])
+    with patch.object(plugin, "post_message", new_callable=AsyncMock):
+        resp = await plugin.handle_command("!fleet approve t-held-mx", store, sender=OPERATOR)
+    assert "[WARN]" in resp
+    assert "fleet app" in resp
+    held = store.get_task("t-held-mx")
+    assert held.status == "awaiting_approval"
+    assert held.metadata.get("replay_held") is True

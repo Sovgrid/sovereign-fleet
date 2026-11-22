@@ -21,7 +21,7 @@
 - Security properties have tests that exercise the real thing (`tests/test_security.py`: sandbox, token, path traversal; `tests/test_worktree.py`: git config injection). Never weaken or skip them to make a change pass.
 
 ## 4. Working next to a running daemon
-- A daemon may run straight from a checkout (`PYTHONPATH=src`). It reads `dashboard.html` on every request and imports the Python once at its start, so an edit or a branch switch there changes the live dashboard at once and the Python only after a restart, and the two then disagree.
+- A daemon may run straight from a checkout (`PYTHONPATH=src`). It reads `src/fleet/api/static/app/index.html` on every request and imports the Python once at its start, so an edit or a branch switch there changes the live dashboard at once and the Python only after a restart, and the two then disagree.
 - Make changes in a separate `git worktree`. Bring them to a daemon's checkout only together with a restart.
 
 ## 5. Honesty

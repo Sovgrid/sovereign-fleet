@@ -1,8 +1,7 @@
 /* Sovereign Fleet Service Worker - Shell Caching for PWA */
-const CACHE_NAME = 'sovereign-fleet-v5';
+const CACHE_NAME = 'sovereign-fleet-v6';
 const SHELL_URLS = [
   '/static/app/',
-  '/classic',
   '/manifest.json',
   '/static/icon.svg'
 ];

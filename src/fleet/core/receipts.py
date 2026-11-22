@@ -179,6 +179,14 @@ def build_receipt(
         },
     }
 
+    attempts = list((task.metadata or {}).get("attempt_records") or [])
+    if not attempts:
+        attempts = load_attempt_receipts(task.id, spool_dir=spool)
+    if attempts:
+        receipt["attempts"] = attempts
+        if attempts[-1].get("attempt_id"):
+            receipt["attempt_id"] = attempts[-1]["attempt_id"]
+
     if "error" in result and result["error"]:
         receipt["error"] = result["error"]
 
@@ -257,26 +265,66 @@ def build_receipt(
     return receipt
 
 
-def save_receipt(receipt: Dict[str, Any], spool_dir: Optional[Path] = None) -> Path:
-    """Atomically writes a receipt to <spool>/receipts/<task_id>.json."""
-    cfg = load_config()
-    spool = Path(spool_dir) if spool_dir else (cfg.root / "spool")
-    receipts_dir = spool / "receipts"
-    receipts_dir.mkdir(parents=True, exist_ok=True)
+def _safe_receipt_part(text: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", text or "unknown")
 
-    task_id = receipt.get("task_id", f"task-{int(time.time())}")
-    target_path = receipts_dir / f"{task_id}.json"
 
-    fd, tmp = tempfile.mkstemp(dir=str(receipts_dir), prefix=f".{task_id}.", suffix=".tmp")
+def _atomic_write_json(target_path: Path, data: Any) -> None:
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=str(target_path.parent), prefix=f".{target_path.stem}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(receipt, f, indent=2)
+            json.dump(data, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, target_path)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise
+
+
+def save_attempt_receipt(
+    task_id: str,
+    attempt: Dict[str, Any],
+    spool_dir: Optional[Path] = None,
+) -> Path:
+    """Atomically writes one per-attempt receipt under <spool>/receipts/attempts/<task_id>/."""
+    cfg = load_config()
+    spool = Path(spool_dir) if spool_dir else (cfg.root / "spool")
+    attempt_id = str(attempt.get("attempt_id") or f"att-{attempt.get('seq', 0)}")
+    target_path = spool / "receipts" / "attempts" / _safe_receipt_part(task_id) / f"{_safe_receipt_part(attempt_id)}.json"
+    _atomic_write_json(target_path, dict(attempt))
+    return target_path
+
+
+def load_attempt_receipts(task_id: str, spool_dir: Optional[Path] = None) -> List[Dict[str, Any]]:
+    """Loads persisted per-attempt receipts for task_id ordered by (seq, started_at)."""
+    cfg = load_config()
+    spool = Path(spool_dir) if spool_dir else (cfg.root / "spool")
+    att_dir = spool / "receipts" / "attempts" / _safe_receipt_part(task_id)
+    if not att_dir.is_dir():
+        return []
+    records: List[Dict[str, Any]] = []
+    for fp in sorted(att_dir.glob("*.json")):
+        try:
+            data = json.loads(fp.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict):
+            records.append(data)
+    records.sort(key=lambda r: (int(r.get("seq") or 0), float(r.get("started_at") or 0.0)))
+    return records
+
+
+def save_receipt(receipt: Dict[str, Any], spool_dir: Optional[Path] = None) -> Path:
+    """Atomically writes a receipt to <spool>/receipts/<task_id>.json."""
+    cfg = load_config()
+    spool = Path(spool_dir) if spool_dir else (cfg.root / "spool")
+    receipts_dir = spool / "receipts"
+
+    task_id = receipt.get("task_id", f"task-{int(time.time())}")
+    target_path = receipts_dir / f"{task_id}.json"
+    _atomic_write_json(target_path, receipt)
 
     logger.debug("Saved task receipt for %s to %s", task_id, target_path)
     return target_path

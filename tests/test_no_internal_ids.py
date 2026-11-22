@@ -13,8 +13,8 @@ def _visible(html: str) -> str:
     return re.sub(r"<!--.*?-->", "", html, flags=re.S)
 
 
-def test_dashboard_shows_no_internal_ids():
-    html = _visible((ROOT / "src/fleet/api/dashboard.html").read_text(encoding="utf-8"))
+def test_app_shows_no_internal_ids():
+    html = _visible((ROOT / "src/fleet/api/static/app/index.html").read_text(encoding="utf-8"))
     assert not INTERNAL.findall(html)
 
 

@@ -40,8 +40,8 @@
   /* text */
   --text: var(--o-fg-bright);
   --body: var(--o-fg);
-  --muted: color-mix(in srgb, var(--body) 72%, var(--bg));
-  --faint: color-mix(in srgb, var(--body) 52%, var(--bg));
+  --muted: color-mix(in srgb, var(--body) 84%, var(--bg));
+  --faint: color-mix(in srgb, var(--body) 74%, var(--bg));
   /* accent */
   --accent: var(--o-accent);
   --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
@@ -175,13 +175,13 @@ input[type="range"] { width: 100%; min-height: 44px; accent-color: var(--accent)
 input[type="color"] { min-width: 44px; min-height: 44px; padding: 2px; background: var(--card-2); border: var(--border) solid var(--hair-2); border-radius: var(--r-control); }
 .chips { display: flex; flex-wrap: wrap; gap: .5rem; }
 .chip { min-height: 44px; padding: 0 calc(.875rem * var(--space-x)); border-radius: var(--r-pill); background: var(--card-2); color: var(--body); border: var(--border) solid var(--hair-2); font: inherit; cursor: pointer; transition: background var(--t-hover); }
-.chip[aria-pressed="true"], .chip[aria-current="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
+.chip[aria-pressed="true"], .chip[aria-current="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--text); font-weight: 600; }
 .seg { display: flex; flex-wrap: wrap; min-width: 0; background: var(--card-2); border-radius: var(--r-control); padding: 3px; gap: 3px; border: var(--border) solid var(--hair); }
 .seg button { flex: 1 1 auto; min-width: 0; min-height: 44px; padding: 0 .5rem; overflow-wrap: anywhere; border: 0; background: none; color: var(--muted); font: inherit; border-radius: calc(var(--r-control) - 3px); cursor: pointer; transition: background var(--t-hover), color var(--t-hover); }
 .seg button[aria-pressed="true"] { background: var(--raised); color: var(--text); box-shadow: var(--shadow); }
 .switch { display: flex; align-items: center; gap: .75rem; min-height: 44px; cursor: pointer; }
 .switch > span { min-width: 0; overflow-wrap: anywhere; }
-.switch input { appearance: none; width: 2.75rem; height: 1.5rem; flex: none; background: var(--hair-2); border-radius: var(--r-pill); position: relative; transition: background var(--t-out); margin: 0; cursor: pointer; }
+.switch input { appearance: none; accent-color: var(--accent); width: 2.75rem; height: 1.5rem; flex: none; background: var(--hair-2); border-radius: var(--r-pill); position: relative; transition: background var(--t-out); margin: 0; cursor: pointer; }
 .switch input::after { content: ""; position: absolute; top: 3px; left: 3px; width: calc(1.5rem - 6px); height: calc(1.5rem - 6px); background: var(--text); border-radius: var(--r-pill); transition: transform var(--t-out) var(--ease-out); }
 .switch input:checked { background: var(--accent); }
 .switch input:checked::after { transform: translateX(1.25rem); background: var(--accent-ink); }
@@ -416,6 +416,8 @@ h1 { font-size: 1.125rem; }
 .btn.primary { background: var(--accent); }
 .hero { background: none; padding: 0; color: var(--muted); gap: .5rem; }
 .hero svg { color: var(--ok); }
+.hero.attn { background: none; color: var(--text); }
+.hero.attn svg { color: var(--warn); }
 details, details[open] { border: 0; border-top: var(--border) solid var(--hair); border-radius: 0; padding: 0; }
 details[open] { padding-bottom: calc(.5rem * var(--space-y)); }
 details > summary { justify-content: space-between; list-style: none; font-size: .875rem; }
@@ -439,9 +441,11 @@ details[open] > summary::after { transform: rotate(-135deg); }
 .yn strong { color: var(--text); font-weight: 500; }
 .device, .device[data-here="true"] { border: 0; background: none; padding: 0; }
 .field > label, .lab { font-size: .875rem; }
-.sheet .row .title, .sheet .row .meta { white-space: normal; }
+.sheet .row { flex-wrap: wrap; row-gap: .125rem; padding-block: calc(.5rem * var(--space-y)); }
+.sheet .row .title, .sheet .row .meta { white-space: normal; overflow-wrap: break-word; }
+.sheet .row .title { flex: 1 1 6rem; min-inline-size: min-content; max-inline-size: 100%; overflow: visible; text-overflow: clip; }
 .sheet .row .meta { flex: 0 1 auto; min-width: 0; }
-.sheet .row .meta { text-align: right; }
+.sheet .row .meta { max-inline-size: 100%; text-align: start; }
 
 /* ── Glance: shape, colour and icons carry what words used to. Same tokens, no new weight. ── */
 .glyph { width: .875rem; height: .875rem; flex: none; color: var(--pc, var(--faint)); fill: currentColor; stroke: none; }
@@ -503,6 +507,23 @@ details > summary { align-items: center; }
 .list > li { animation: fadein var(--t-in) var(--ease-out); }
 @media (prefers-reduced-motion: reduce) { .list > li { animation: none; } }
   .fold[data-empty] { display: none; }
+  .apps-hint { display: grid; gap: .5rem; }
+  .apps-table-wrap { overflow: auto; max-inline-size: 100%; container-type: inline-size; }
+  .apps-table { width: 100%; border-collapse: collapse; font-size: .875rem; text-align: left; overflow-wrap: break-word; }
+  .apps-table caption { text-align: left; color: var(--muted); font-size: .875rem; margin-bottom: .5rem; }
+  .apps-table th, .apps-table td { padding: .5rem .375rem; border-bottom: var(--border) solid var(--hair); vertical-align: top; }
+  .apps-table thead th { color: var(--muted); font-weight: 500; position: sticky; top: 0; background: var(--card); z-index: 1; }
+  .apps-table tbody th { font-weight: 500; }
+  @container (width < 460px) {
+    .apps-table, .apps-table caption, .apps-table thead, .apps-table tbody, .apps-table tr, .apps-table th, .apps-table td { display: block; }
+    .apps-table thead { display: none; }
+    .apps-table tr { border: var(--border) solid var(--hair); border-radius: var(--r-row); padding: .5rem .625rem; margin-bottom: .5rem; background: var(--card-2); }
+    .apps-table th, .apps-table td { border: 0; padding: .15rem 0; }
+    .apps-table tbody th { font-weight: 600; color: var(--text); }
+    .apps-table td[data-label]::before { content: attr(data-label) ": "; color: var(--muted); font-weight: 500; }
+  }
+  .voice-bar { display: flex; align-items: center; gap: .625rem; flex-wrap: wrap; }
+  .sec-head { flex-wrap: wrap; }
 </style>
 <script>
 /* Before the first paint: where the navigation sits, so nothing jumps when the page script runs. */
@@ -567,6 +588,7 @@ details > summary { align-items: center; }
     <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="9" r="3.500"/><path d="M5 20a7 7 0 0 1 14 0"/></symbol>
     <symbol id="i-wallet" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M16 14h2"/></symbol>
     <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 13l2-7h12l2 7v5H4z"/><path d="M4 13h5l1 2h4l1-2h5"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></symbol>
   </defs>
 </svg>
 
@@ -607,13 +629,20 @@ details > summary { align-items: center; }
           </div>
         </section>
         <section class="screen first-paint" data-screen="home" data-title="Home">
-        <div class="hero" id="health"><svg class="i"><use href="#i-check"/></svg><span id="health-text">All good</span></div>
+        <div class="hero" id="health"><svg class="i" aria-hidden="true"><use id="health-icon" href="#i-check"/></svg><span id="health-text"> </span></div>
         <div class="glance" id="glance">
           <button type="button" class="tile t-warn" data-glance="needs" data-go="tasks/needs"><svg class="i" aria-hidden="true"><use href="#i-shield"/></svg><span class="num" id="g-needs"> </span><span class="lab2">need you</span></button>
           <button type="button" class="tile t-run" data-glance="running" data-go="tasks/running"><svg class="i" aria-hidden="true"><use href="#i-bolt"/></svg><span class="num" id="g-running"> </span><span class="lab2">running</span></button>
           <button type="button" class="tile t-ok" data-glance="next" data-go="schedule"><svg class="i" aria-hidden="true"><use href="#i-clock"/></svg><span class="num" id="g-next"> </span><span class="lab2">next run</span></button>
           <button type="button" class="tile" data-glance="spend" data-go="providers" aria-label="Providers"><svg class="ring" viewBox="0 0 36 36" aria-hidden="true"><circle class="trk" cx="18" cy="18" r="14"/><circle class="val" id="g-ring" cx="18" cy="18" r="14" pathLength="100" stroke-dasharray="0 100"/></svg><span class="lab2" id="g-spend"> </span></button>
         </div>
+        <aside class="card box apps-hint" id="apps-hint" aria-label="Your phone apps" hidden>
+          <p class="small">Three apps on your phone: decide here in Fleet, chat with local AI in Pi Pocket, discuss work in Buzz.</p>
+          <div class="btns">
+            <button type="button" class="btn" data-open="apps">Your apps</button>
+            <button type="button" class="btn primary" id="apps-hint-dismiss">Got it</button>
+          </div>
+        </aside>
         <div id="mods-home" class="stack">
           <article class="card" data-module="needs-you">
             <div class="card-head"><h2>Needs you</h2><span class="tag warn" id="need-tag">3</span></div>
@@ -640,7 +669,9 @@ details > summary { align-items: center; }
             <button type="button" class="chip" data-filter="needs" aria-pressed="false">Needs you</button>
             <button type="button" class="chip" data-filter="running" aria-pressed="false">Running</button>
             <button type="button" class="chip" data-filter="done" aria-pressed="false">Done</button>
+            <button type="button" class="chip" data-filter="archived" aria-pressed="false">Archived</button>
           </div>
+          <button type="button" class="btn" id="archive-completed-btn">Archive finished</button>
         </details>
       </section>
 
@@ -648,7 +679,10 @@ details > summary { align-items: center; }
       <section class="screen pair" data-screen="task" data-title="Task">
         <div class="task-head"><h2 id="task-title"></h2><span class="tag" id="task-status"></span></div>
         <p class="muted small" id="task-meta"></p>
-        <button type="button" class="btn primary block" id="task-primary" data-go="approval">Review</button>
+        <div class="btns" id="task-actions">
+          <button type="button" class="btn primary block" id="task-primary" data-go="approval">Review</button>
+          <button type="button" class="btn" id="task-archive" hidden>Archive</button>
+        </div>
         <div id="mods-task" class="fold-list">
           <details class="fold" data-advanced data-module="status" data-empty>
             <summary><span class="ic sm" style="--t:var(--warn)"><svg class="i" aria-hidden="true"><use href="#i-clock"/></svg></span><span class="grow">Progress</span><small class="muted" id="f-status-sum"></small></summary>
@@ -708,7 +742,7 @@ details > summary { align-items: center; }
 
       <!-- SCHEDULE BOARD: what is at work and what comes up, filled from routines, their next runs and their history -->
       <section class="screen" data-screen="schedule" data-title="Schedule">
-        <div class="sec-head"><h2>Needs you</h2><small class="muted" id="sched-now-label">Now 14:20</small></div>
+        <div class="sec-head"><h2>Needs you</h2><button type="button" class="btn" id="new-routine-btn">Propose routine</button><small class="muted" id="sched-now-label">Now 14:20</small></div>
         <ul class="list" id="sched-needs" aria-live="polite"></ul>
         <div class="mini-tl" id="mini-tl" data-mini-timeline role="img" aria-label="Next 24 hours"></div>
         <h2>Next up</h2>
@@ -756,9 +790,9 @@ details > summary { align-items: center; }
         </div>
         <div class="two-col" id="prov-cols">
           <div data-pane="providers" class="stack">
-            <h3 class="group-title">Signed in</h3>
+            <h2 class="group-title">Signed in</h2>
             <ul class="list" id="prov-signed"></ul>
-            <h3 class="group-title">Not configured</h3>
+            <h2 class="group-title">Not configured</h2>
             <ul class="list" id="prov-not"></ul>
             <details data-advanced>
               <summary>Search</summary>
@@ -777,8 +811,18 @@ details > summary { align-items: center; }
                 <button type="button" class="chip" data-model-filter="allowed" aria-pressed="false">Available</button>
                 <button type="button" class="chip" data-model-filter="favorites" aria-pressed="false">On this computer</button>
               </div>
-              <h3 class="group-title">When cheaper lanes fail</h3>
+              <h2 class="group-title">When cheaper lanes fail</h2>
               <ul class="list" id="hard-list"></ul>
+              <h2 class="group-title">When a limit is reached</h2>
+              <div class="seg" role="group" aria-label="When a limit is reached" id="limit-seg">
+                <button type="button" data-limit="switch" aria-pressed="false">Switch at once</button>
+                <button type="button" data-limit="wait" aria-pressed="false">Wait</button>
+                <button type="button" data-limit="wait_then_switch" aria-pressed="false">Wait, then switch</button>
+              </div>
+              <div id="wait-box">
+                <div class="chips" id="wait-chips" role="group" aria-label="Hours to wait"></div>
+              </div>
+              <p class="small muted" id="limit-text" aria-live="polite"></p>
             </details>
           </div>
         </div>
@@ -795,6 +839,10 @@ details > summary { align-items: center; }
           <div class="field"><label for="adv-lane">Lane</label><select id="adv-lane"><option value="">Automatic</option></select></div>
           <div class="field"><label for="adv-harness">Harness</label><select id="adv-harness"><option value="auto">Automatic</option></select></div>
         </details>
+        <div class="voice-bar">
+          <button type="button" class="btn" id="voice-btn" aria-pressed="false"><svg class="i" aria-hidden="true"><use href="#i-mic"/></svg><span id="voice-label">Speak</span></button>
+          <span class="small muted" id="voice-status" aria-live="polite"></span>
+        </div>
         <button type="button" class="btn primary block" id="send-task">Send</button>
       </section>
 
@@ -827,6 +875,7 @@ details > summary { align-items: center; }
         <ul class="list inset" id="mods-settings">
           <li data-module="signer"><button type="button" class="row" data-go="connect-phone"><span class="ic" style="--t:var(--ok)"><svg class="i" aria-hidden="true"><use href="#i-phone"/></svg></span><span class="title">Connect phone</span><span class="meta" id="m-signer"></span></button></li>
           <li data-module="notify"><button type="button" class="row" data-open="notify"><span class="ic" style="--t:var(--warn)"><svg class="i" aria-hidden="true"><use href="#i-bell"/></svg></span><span class="title">Notifications</span><span class="meta" id="m-notify"></span></button></li>
+          <li data-module="pi-pocket"><button type="button" class="row" data-open="pi-pocket"><span class="ic" style="--t:var(--accent)"><svg class="i" aria-hidden="true"><use href="#i-phone"/></svg></span><span class="title">Pi Pocket</span><span class="meta" id="m-pi-pocket"></span></button></li>
           <li data-module="providers"><button type="button" class="row" data-go="providers"><span class="ic" style="--t:var(--accent)"><svg class="i" aria-hidden="true"><use href="#i-plug"/></svg></span><span class="title">Providers and models</span><span class="meta" id="m-providers"></span></button></li>
           <li data-module="autonomy"><button type="button" class="row" data-open="autonomy"><span class="ic" style="--t:var(--warn)"><svg class="i" aria-hidden="true"><use href="#i-shield"/></svg></span><span class="title">Autonomy and approvals</span><span class="meta" id="m-autonomy"></span></button></li>
           <li data-module="lanes"><button type="button" class="row" data-open="lanes"><span class="ic" style="--t:var(--ok)"><svg class="i" aria-hidden="true"><use href="#i-lanes"/></svg></span><span class="title">Lanes and health</span><span class="meta" id="m-lanes"></span></button></li>
@@ -836,6 +885,7 @@ details > summary { align-items: center; }
         <ul class="list inset">
           <li><button type="button" class="row" data-go="appearance"><span class="ic" style="--t:var(--accent)"><svg class="i" aria-hidden="true"><use href="#i-palette"/></svg></span><span class="title">Appearance</span></button></li>
           <li><button type="button" class="row" data-go="layout"><span class="ic" style="--t:var(--warn)"><svg class="i" aria-hidden="true"><use href="#i-layout"/></svg></span><span class="title">Layout</span></button></li>
+          <li><button type="button" class="row" data-open="apps"><span class="ic" style="--t:var(--accent)"><svg class="i" aria-hidden="true"><use href="#i-phone"/></svg></span><span class="title">Your apps</span><span class="meta">3 on your phone</span></button></li>
           <li><button type="button" class="row" data-open="about"><span class="ic" style="--t:var(--muted)"><svg class="i" aria-hidden="true"><use href="#i-info"/></svg></span><span class="title">About</span></button></li>
         </ul>
       </section>
@@ -1000,14 +1050,14 @@ details > summary { align-items: center; }
     </div>
   </main>
 
-  <aside class="sheet" id="sheet" role="dialog" aria-modal="false" aria-labelledby="sheet-title" data-open="false">
+  <div class="sheet" id="sheet" role="dialog" aria-modal="false" aria-labelledby="sheet-title" data-open="false">
     <button type="button" class="grip" id="grip" aria-label="Drag down to close"><i></i></button>
     <div class="sheet-head"><h2 id="sheet-title">Module</h2><button type="button" class="icon-btn" id="sheet-close" aria-label="Close"><svg class="i"><use href="#i-close"/></svg></button></div>
     <div class="sheet-body" id="sheet-body"></div>
-  </aside>
+  </div>
 </div>
 <!-- Coordinator chat: it proposes, you tap. It holds front-door rights only, so it cannot approve, reject, cancel or spend. -->
-<aside class="chat" id="chat" hidden role="dialog" aria-modal="false" aria-labelledby="chat-title" data-open="false">
+<div class="chat" id="chat" hidden role="dialog" aria-modal="false" aria-labelledby="chat-title" data-open="false">
   <div class="chat-head"><svg class="i" aria-hidden="true"><use href="#i-compass"/></svg><h2 id="chat-title">Coordinator</h2><button type="button" class="icon-btn" id="chat-close" aria-label="Close the chat"><svg class="i"><use href="#i-close"/></svg></button></div>
   <div class="chat-meta">
     <label for="chat-model" class="sr">Model for this chat</label>
@@ -1026,7 +1076,7 @@ details > summary { align-items: center; }
     <input type="text" id="chat-input" autocomplete="off" placeholder="Ask, or describe work in plain words">
     <button type="submit" class="btn primary" aria-label="Send"><svg class="i"><use href="#i-send"/></svg></button>
   </form>
-</aside>
+</div>
 <div class="scrim" id="scrim" data-open="false"></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
@@ -1081,7 +1131,7 @@ var MOTION = {
 var KEY = "fleet-ui-preview", DEFKEY = "fleet-ui-preview-default";
 var DEFAULTS = { theme: "calm", colors: "auto", "text-size": 15, density: "compact", corners: 50, tiling: null,
                  motion: "system", font: "system", mono: "system", ligatures: "contextual", accent: null, nav: "auto", order: {}, hidden: [],
-                 limit: "wait-then-switch", wait: 6, notAllowed: [], favorites: ["claude-sonnet", "qwen3-coder"],
+                 appsHintDismissed: false, limit: "wait-then-switch", wait: 6, notAllowed: [], favorites: ["claude-sonnet", "qwen3-coder"],
                  currency: "USD", rates: {} };
 
 /* Currency: the codes come from the browser (Intl), not from a list kept here. Sample prices are in dollars;
@@ -1115,7 +1165,7 @@ var MODULES = [
   ["tasks", "Tasks", "menu"], ["routines", "Routines", "menu"], ["templates", "Templates", "menu"], ["models", "Models", "menu"],
   ["budgets", "Budgets and spend", "menu"], ["ledger", "Ledger", "menu"], ["plugins", "Plugins", "menu"], ["issue-sources", "Issue sources", "menu"], ["privateers", "Privateers", "menu"], ["coordinator", "Coordinator", "menu"],
   ["schedule-board", "Schedule", "menu"],
-  ["signer", "Connect phone", "settings"], ["notify", "Notifications", "settings"], ["providers", "Providers and models", "settings"], ["autonomy", "Autonomy and approvals", "settings"], ["lanes", "Lanes and health", "settings"], ["access", "Access (token, devices)", "settings"],
+  ["signer", "Connect phone", "settings"], ["notify", "Notifications", "settings"], ["pi-pocket", "Pi Pocket", "settings"], ["providers", "Providers and models", "settings"], ["autonomy", "Autonomy and approvals", "settings"], ["lanes", "Lanes and health", "settings"], ["access", "Access (token, devices)", "settings"],
   ["status", "Status and timeline", "task"],["drafts", "Drafts awaiting signature", "task"], ["changes", "Changes", "task"], ["gate", "Gate output", "task"], ["receipt", "Receipt", "task"], ["attempts", "Attempts", "task"]
 ];
 var PLACES = [["home", "Home", "mods-home"], ["menu", "Menu", "mods-menu"], ["settings", "Settings", "mods-settings"], ["task", "Task details", "mods-task"]];
@@ -1144,7 +1194,7 @@ var SHEETS = {
   access: ["Access (token, devices)", "Who may use this fleet.", [["Access token", "Created 12 days ago"], ["This phone", "Connected"], ["Work laptop", "Last seen today"]]],
   about: ["About", "", []]
 };
-var SETTING_INDEX = [["Theme", "appearance"], ["Currency", "appearance"], ["Colors", "appearance"], ["Text size", "appearance"], ["Density", "appearance"], ["Corners", "appearance"], ["Tiling", "appearance"], ["Motion", "appearance"], ["Font", "appearance"], ["Ligatures", "appearance"], ["Accent", "appearance"], ["Navigation", "appearance"], ["Layout", "layout"], ["Providers and API keys", "providers"]];
+var SETTING_INDEX = [["Theme", "appearance"], ["Currency", "appearance"], ["Colors", "appearance"], ["Text size", "appearance"], ["Density", "appearance"], ["Corners", "appearance"], ["Tiling", "appearance"], ["Motion", "appearance"], ["Font", "appearance"], ["Ligatures", "appearance"], ["Accent", "appearance"], ["Navigation", "appearance"], ["Layout", "layout"], ["Providers and API keys", "providers"], ["Your apps", "settings", "apps"]];
 
 /* Routines for the schedule board. Times are hours from "now" (14:20 in this sample).
    kind: repeat or once. runs: upcoming slots. past: slots behind us, with what happened. */
@@ -1164,7 +1214,7 @@ var HARD = [["claude-opus", "Opus"], ["agy-pro", "agy pro"]];
 var LIMIT_TEXT = {
   "switch": "The task moves to the next lane right away.",
   "wait": "The task waits for the lane to come back, up to the time you chose, and then goes on by itself.",
-  "wait-then-switch": "The task waits up to the time you chose. If the lane is still resting, it moves to the next lane."
+  "wait_then_switch": "The task waits up to the time you chose. If the lane is still resting, it moves to the next lane."
 };
 
 /* ============================================================================================
@@ -1352,7 +1402,7 @@ $("#use-default").addEventListener("click", function () {
   catch (e) { toast("Could not save here: storage is off"); }
 });
 $("#reset-all").addEventListener("click", function () {
-  state = clone(DEFAULTS); save(); applyAll(); applyLayout(); renderLayout(); renderModels(); renderLimit(); toast("Back to the defaults");
+  state = clone(DEFAULTS); save(); applyAll(); applyLayout(); renderLayout(); renderModels(); renderLimit(); renderAppsHint(); toast("Back to the defaults");
 });
 
 /* ============================================================================================
@@ -1470,7 +1520,7 @@ function renderLists() {
   if (!needs.children.length) needs.appendChild(emptyItem("Nothing needs you"));
   if (!running.children.length) running.appendChild(emptyItem("Nothing running now"));
   if (!recent.children.length) recent.appendChild(emptyItem("No results yet"));
-  filterTasks("all");
+  filterTasks(taskFilter);
   renderGlance();
 }
 /* The tiles above the lists count the same data the lists show; nothing is typed in twice. */
@@ -1480,23 +1530,65 @@ function renderGlance() {
   $("#g-running").textContent = n(function (t) { return t.state === "running"; });
   var next = ROUTINES.filter(function (r) { return r.state === "scheduled" && r.runs.length; }).map(function (r) { return r.runs[0]; }).sort(function (a, b) { return a - b; })[0];
   $("#g-next").textContent = next === undefined ? "none" : away(next).replace("in ", "");
+  renderHealth();
 }
+function renderHealth() {
+  var el = $("#health"), txt = $("#health-text"), ic = $("#health-icon");
+  if (!el || !txt || !LIVE) return;
+  if (LIVE.offline) {
+    el.classList.add("attn");
+    if (ic) ic.setAttribute("href", "#i-warn");
+    txt.textContent = "Not connected";
+    return;
+  }
+  if (!LIVE.loaded) return;
+  var waiting = TASKS.filter(function (t) { return t.state === "needs"; }).length;
+  var failed = TASKS.filter(function (t) { return t.state === "failed"; }).length;
+  var running = TASKS.filter(function (t) { return t.state === "running"; }).length;
+  var sum = (typeof SIDE === "object" && SIDE) ? SIDE.laneSummary : null;
+  var dead = (sum && Number(sum.dead)) || 0;
+  var resting = Array.isArray(PROVIDERS) ? PROVIDERS.filter(function (p) { return p.health === "rest"; }).length : 0;
+  var parts = [];
+  if (waiting) parts.push(waiting + " waiting for you");
+  if (failed) parts.push(failed + " failed");
+  if (dead) parts.push(dead + (dead === 1 ? " lane down" : " lanes down"));
+  if (!parts.length && resting) parts.push(resting + (resting === 1 ? " provider resting" : " providers resting"));
+  var attn = parts.length > 0;
+  el.classList.toggle("attn", attn);
+  if (ic) ic.setAttribute("href", attn ? "#i-warn" : "#i-check");
+  txt.textContent = attn ? parts.join(", ") : (running ? "All good, " + running + " running" : "All good");
+}
+var taskFilter = "all";
 function filterTasks(f) {
+  taskFilter = f || "all";
   var ul = $("#list-tasks"); ul.textContent = "";
-  TASKS.filter(function (t) { return f === "all" || (f === "needs" && (t.state === "needs" || t.state === "failed")) || t.state === f || (f === "done" && (t.state === "failed-old" || t.state === "cancelled")); }).forEach(function (t) { ul.appendChild(taskRow(t)); });
-  $$("#task-filter .chip").forEach(function (c) { c.setAttribute("aria-pressed", String(c.dataset.filter === f)); });
+  TASKS.filter(function (t) {
+    if (taskFilter === "archived") return t.state === "archived";
+    if (t.state === "archived") return false;
+    return taskFilter === "all" || (taskFilter === "needs" && (t.state === "needs" || t.state === "failed")) || t.state === taskFilter || (taskFilter === "done" && (t.state === "failed-old" || t.state === "cancelled"));
+  }).forEach(function (t) { ul.appendChild(taskRow(t)); });
+  $$("#task-filter .chip").forEach(function (c) { c.setAttribute("aria-pressed", String(c.dataset.filter === taskFilter)); });
 }
 function showTask(id) {
-  var t = TASKS[id] || TASKS[0]; if (!t) { $("#task-title").textContent = "No tasks yet"; return; } var label = { needs: "Needs you", failed: "Failed", "failed-old": "Failed", cancelled: "Cancelled", running: "Running", done: "Done" }[t.state];
+  var t = TASKS[id] || TASKS[0]; if (!t) { $("#task-title").textContent = "No tasks yet"; return; } var label = { needs: "Needs you", failed: "Failed", "failed-old": "Failed", cancelled: "Cancelled", running: "Running", done: "Done", archived: "Archived" }[t.state];
   $("#task-title").textContent = t.title; $("#task-status").textContent = label;
-  $("#task-status").className = "tag " + ({ needs: "warn", failed: "err", "failed-old": "err", cancelled: "", running: "accent", done: "ok" }[t.state]);
+  $("#task-status").className = "tag " + ({ needs: "warn", failed: "err", "failed-old": "err", cancelled: "", running: "accent", done: "ok", archived: "" }[t.state]);
   $("#task-meta").textContent = t.line;
-  var pr = $("#task-primary"); delete pr.dataset.go; pr.hidden = false;
-  if (!t) { pr.hidden = true; return; }
+  var pr = $("#task-primary"), ar = $("#task-archive"); delete pr.dataset.go; pr.hidden = false;
+  if (!t) { pr.hidden = true; if (ar) ar.hidden = true; return; }
   if (t.state === "needs") { pr.textContent = pendingDraftsOf(t.raw).length ? "Review signature" : "Review"; pr.dataset.go = "approval/" + t.id; }
   else if (t.state === "failed" || t.state === "failed-old") { pr.textContent = "Retry"; pr.onclick = function () { act("retry", t); }; }
   else if (t.state === "running") { pr.textContent = "Cancel"; pr.onclick = function () { act("cancel", t); }; }
   else pr.hidden = true;
+  if (ar) {
+    if (t.state === "done" || t.state === "failed" || t.state === "failed-old" || t.state === "cancelled") {
+      ar.hidden = false; ar.textContent = "Archive"; ar.onclick = function () { act("archive", t); };
+    } else if (t.state === "archived") {
+      ar.hidden = false; ar.textContent = "Restore from archive"; ar.onclick = function () { act("unarchive", t); };
+    } else {
+      ar.hidden = true;
+    }
+  }
   $$("#list-tasks .row").forEach(function (r) { r.toggleAttribute("aria-current", r.dataset.task === String(id)); });
 }
 
@@ -1509,7 +1601,7 @@ function route() {
   var parts = (location.hash || "#/home").replace(/^#\/?/, "").split("/"), name = parts[0] || "home";
   if (!$('[data-screen="' + name + '"]')) name = "home";
   if (name === "task") { lastTask = Number(parts[1]) || 0; }
-  if (name === "tasks") { filterTasks(["needs", "running", "done"].indexOf(parts[1]) >= 0 ? parts[1] : "all"); }
+  if (name === "tasks") { filterTasks(["needs", "running", "done", "archived"].indexOf(parts[1]) >= 0 ? parts[1] : taskFilter); }
   closeSheet();
   document.body.dataset.route = name;
   $$(".screen").forEach(function (s) { s.classList.toggle("on", s.dataset.screen === name); });
@@ -1674,11 +1766,11 @@ function search() {
       var screen = { signer: "connect-phone", providers: "providers", "schedule-board": "schedule" }[m[0]];
       if (screen) go(screen);
       else if (m[0] === "coordinator-chat") openChat();
-      else if (SHEETS[m[0]]) { go("menu"); setTimeout(function () { openSheet(m[0]); }, 60); }
+      else if (SHEETS[m[0]] || LIVE_SHEETS[m[0]]) { go(m[2] === "settings" ? "settings" : "menu"); setTimeout(function () { openSheet(m[0]); }, 60); }
       else go(m[2] === "task" ? "task" : "home");
     }]; })],
     ["Routines", ROUTINES.map(function (r) { return [r.name, r.when, function () { go("schedule"); setTimeout(function () { openRoutine(r); }, 60); }]; })],
-    ["Settings", SETTING_INDEX.map(function (s) { return [s[0], { appearance: "Appearance", layout: "Layout", providers: "Providers and models" }[s[1]], function () { go(s[1]); }]; })]
+    ["Settings", SETTING_INDEX.map(function (s) { return [s[0], { appearance: "Appearance", layout: "Layout", providers: "Providers and models", settings: "Settings" }[s[1]], function () { go(s[1]); if (s[2]) setTimeout(function () { openSheet(s[2]); }, 60); }]; })]
   ], any = false;
   groups.forEach(function (g) {
     var hits = g[1].map(function (r) { return [fuzzy(q, r[0]), r]; }).filter(function (x) { return x[0] >= 0; }).sort(function (a, b) { return b[0] - a[0]; }).slice(0, 5);
@@ -2046,7 +2138,7 @@ $("#copy-cmd").addEventListener("click", function () {
 /* ============================================================================================
    Live data: the daemon's API on this origin. Untrusted text only through textContent (h(..., {text})).
    ============================================================================================ */
-var LIVE = { etag: null, timer: null, ids: [] };
+var LIVE = { etag: null, timer: null, ids: [], loaded: false, offline: false };
 function showSignIn(msg) { if (msg) $("#signin-msg").textContent = msg; if (!/sign-in/.test(location.hash)) go("sign-in"); }
 function api(method, path, body, headers) {
   var opts = { method: method, credentials: "same-origin", headers: headers || {} };
@@ -2070,7 +2162,7 @@ $("#signin-btn").addEventListener("click", function () {
     .then(function () { $("#signin-btn").disabled = false; $("#signin-token").value = ""; });
 });
 var KIND_OF = { bugfix: "flask", feature: "diff", docs: "doc", refactor: "diff", deps: "pkg", test: "flask", review: "check", design: "doc" };
-var STATE_OF = { awaiting_approval: "needs", failed: "failed", in_progress: "running", queued: "running", completed: "done", cancelled: "cancelled", skipped: "cancelled" };
+var STATE_OF = { awaiting_approval: "needs", failed: "failed", in_progress: "running", queued: "running", completed: "done", cancelled: "cancelled", skipped: "cancelled", archived: "archived" };
 function ago(ts) {
   var m = Math.max(0, Math.round((Date.now() / 1000 - ts) / 60));
   if (m < 1) return "now"; if (m < 60) return m + " min"; var hrs = Math.round(m / 60); if (hrs < 24) return hrs + " h"; return Math.round(hrs / 24) + " d";
@@ -2078,7 +2170,7 @@ function ago(ts) {
 function isPendingDraft(x) { return Boolean(x && (x.status === "pending" || x.status === "awaiting_signature")); }
 function pendingDraftsOf(raw) { return (((raw && raw.metadata && raw.metadata.pending_drafts) || []).filter(isPendingDraft)); }
 function liveTask(t, i) {
-  var meta = t.metadata || {}, intent = meta.intent || {}, state = STATE_OF[t.status] || "done";
+  var meta = t.metadata || {}, intent = meta.intent || {}, state = (t.status === "archived" || meta.archived) ? "archived" : (STATE_OF[t.status] || "done");
   var title = String(intent.title || (t.text || "").split("\n")[0] || t.id).slice(0, 90);
   var project = String(intent.project || meta.project || "");
   var lane = (meta.current && meta.current.lane) || t.lane || "";
@@ -2086,7 +2178,7 @@ function liveTask(t, i) {
   var rejected = state === "failed" && /^Rejected\b/.test(String((t.result || {}).error || ""));   // your own no is not a failure
   if (rejected) state = "cancelled";
   if (state === "failed" && Date.now() / 1000 - t.created_at > 2 * 86400) state = "failed-old";
-  var metaText = state === "needs" ? (pendingDraftsOf(t).length ? "sign" : (t.brief ? "approve" : "waiting")) : state === "failed" ? "failed" : state === "running" ? (t.status === "queued" ? "queued" : ago(t.created_at)) : rejected ? "rejected" : ago(t.created_at);
+  var metaText = state === "needs" ? (pendingDraftsOf(t).length ? "sign" : (t.brief ? "approve" : "waiting")) : state === "failed" ? "failed" : state === "running" ? (t.status === "queued" ? "queued" : ago(t.created_at)) : state === "archived" ? "archived" : rejected ? "rejected" : ago(t.created_at);
   return { id: i, tid: t.id, raw: t, title: title, project: project, state: state, kind: KIND_OF[meta.category || intent.category] || "diff",
     lane: lane, pct: null, meta: metaText, seen: true, line: [project, lane, via].filter(Boolean).join(", ") };
 }
@@ -2109,11 +2201,16 @@ function clearLists() { ["#list-needs", "#list-running", "#list-recent", "#list-
 function refresh() {
   var hdr = LIVE.etag ? { "If-None-Match": LIVE.etag } : {};
   return api("GET", "/api/fleet/tasks", undefined, hdr).then(function (r) {
-    if (r.status === 304) return;
+    if (r.status === 304) { LIVE.offline = false; renderHealth(); return; }
+    if (!r.ok) throw new Error("HTTP " + r.status);
     LIVE.etag = r.headers.get("ETag");
     return r.json().then(function (list) {
-      list = list.filter(function (t) { return !(t.metadata || {}).archived; }).slice(0, 60);
+      var activeList = list.filter(function (t) { return t.status !== "archived" && !(t.metadata || {}).archived; }).slice(0, 60);
+      var archList = list.filter(function (t) { return t.status === "archived" || (t.metadata || {}).archived; }).slice(0, 60);
+      list = activeList.concat(archList);
       TASKS = list.map(liveTask); BRIEFS = {}; TASKS.forEach(function (x) { if (x.state === "needs") BRIEFS[x.id] = liveBrief(x.raw); });
+      LIVE.offline = false;
+      LIVE.loaded = true;
       clearLists(); renderLists();
       var n = TASKS.filter(function (t) { return t.state === "needs" || t.state === "failed"; }).length;
       $("#need-count").hidden = n === 0; $("#need-count").textContent = String(n); $("#need-tag").textContent = String(n);
@@ -2121,7 +2218,11 @@ function refresh() {
       if (name === "task" || name === "tasks") showTask(lastTask);
       if (name === "approval") fillBrief(Number((location.hash.split("/")[2])) || 0);
     });
-  }).catch(function () { /* offline or signed out: keep what is shown */ });
+  }).catch(function (err) {
+    if (err && err.message === "signed out") return;
+    LIVE.offline = true;
+    renderHealth();
+  });
 }
 function refreshSide() {
   api("GET", "/api/fleet/budgets").then(function (r) { return r.ok ? r.json() : null; }).then(function (b) {
@@ -2138,15 +2239,28 @@ function refreshSide() {
   }).catch(function () {});
 }
 function act(action, t) {
-  var btns = $$("#approve-btn, #reject-btn, #task-primary"); btns.forEach(function (b) { b.disabled = true; });
-  var PATH = { approve: "/approve", reject: "/reject", cancel: "/cancel", retry: "/retry" };
+  var btns = $$("#approve-btn, #reject-btn, #task-primary, #task-archive"); btns.forEach(function (b) { b.disabled = true; });
+  var PATH = { approve: "/approve", reject: "/reject", cancel: "/cancel", retry: "/retry", archive: "/archive", unarchive: "/unarchive" };
   return api("POST", "/api/fleet/tasks/" + encodeURIComponent(t.tid) + PATH[action]).then(function (r) {
     return r.json().catch(function () { return {}; }).then(function (j) {
       if (!r.ok) throw new Error(j.detail || ("HTTP " + r.status));
-      toast({ approve: "Approved", reject: "Rejected", cancel: "Cancelled", retry: "Queued again" }[action]);
-      LIVE.etag = null; return refresh().then(function () { go("home"); });
+      toast({ approve: "Approved", reject: "Rejected", cancel: "Cancelled", retry: "Queued again", archive: "Archived", unarchive: "Restored from archive" }[action]);
+      LIVE.etag = null;
+      return refresh().then(function () {
+        if (action === "archive" || action === "unarchive") showTask(lastTask);
+        else go("home");
+      });
     });
   }).catch(function (e) { toast(String(e.message || e)); }).then(function () { btns.forEach(function (b) { b.disabled = false; }); });
+}
+if ($("#archive-completed-btn")) {
+  $("#archive-completed-btn").addEventListener("click", function () {
+    var b = $("#archive-completed-btn"); b.disabled = true;
+    send("POST", "/api/fleet/tasks/archive-completed", {}).then(function (j) {
+      toast("Archived " + (j.archived_count || 0) + " finished tasks");
+      LIVE.etag = null; return refresh();
+    }).catch(fail).then(function () { b.disabled = false; });
+  });
 }
 function poll() {
   clearTimeout(LIVE.timer);
@@ -2205,7 +2319,7 @@ document.addEventListener("visibilitychange", function () {
    Live data, slices 2 and 3: schedule board, providers and models, settings sheets, access tokens,
    connect phone, new task. Every action goes to the daemon, which checks it; this page decides nothing.
    ============================================================================================ */
-var SIDE = { lanes: [], laneSummary: null, budgets: null, models: [], settings: null, tokens: null, projects: [], intake: [], privateers: [], signer: null, coordinator: null, health: null, ledger: null, plugins: null };
+var SIDE = { lanes: [], laneSummary: null, budgets: null, models: [], settings: null, tokens: null, projects: [], intake: [], privateers: [], signer: null, coordinator: null, health: null, ledger: null, plugins: null, apps: null };
 function getJSON(path) { return api("GET", path).then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }); }
 function send(method, path, body, headers) {
   return api(method, path, body, headers).then(function (r) {
@@ -2297,6 +2411,64 @@ function routineAct(r, verb) {
     return refreshRoutines();
   }).catch(fail);
 }
+function openRoutineCreate() {
+  showSheet("Propose routine", function (body) {
+    body.appendChild(h("p", { class: "muted", text: "New routines always wait for operator approval before their schedule starts." }));
+    var form = h("form", { id: "routine-create-form", class: "stack", novalidate: "" });
+    var inpId = h("input", { type: "text", id: "rc-id", name: "id", required: "", pattern: "[a-z0-9][a-z0-9_-]{0,63}", autocorrect: "off", autocapitalize: "none", spellcheck: "false", placeholder: "nightly-check" });
+    var inpTitle = h("input", { type: "text", id: "rc-title", name: "title", required: "", placeholder: "Nightly check" });
+    var selProj = h("select", { id: "rc-project", name: "project" }, h("option", { value: "", text: "No project" }));
+    (SIDE.projects || []).forEach(function (p) { selProj.appendChild(h("option", { value: p.key, text: p.key })); });
+    var inpSched = h("input", { type: "text", id: "rc-sched", name: "schedule", required: "", autocorrect: "off", autocapitalize: "none", spellcheck: "false", "aria-describedby": "rc-sched-hint", placeholder: "0 7 * * 1-5 or 3600s" });
+    var inpLate = h("input", { type: "text", id: "rc-lateness", name: "max_lateness", inputmode: "numeric", value: "3600", pattern: "[0-9]+" });
+    var inpPrompt = h("textarea", { id: "rc-prompt", name: "prompt", required: "", placeholder: "What the routine asks the agent to do" });
+    var msg = h("p", { id: "rc-msg", class: "small", "aria-live": "polite" });
+    var sub = h("button", { type: "submit", class: "btn primary block", id: "rc-submit", text: "Propose routine" });
+
+    [inpId, inpTitle, inpSched, inpLate, inpPrompt].forEach(function (el) {
+      el.addEventListener("input", function () { el.removeAttribute("aria-invalid"); msg.textContent = ""; });
+    });
+    form.appendChild(h("div", { class: "field" }, h("label", { for: "rc-id", text: "ID (lowercase letters, digits, - or _)" }), inpId));
+    form.appendChild(h("div", { class: "field" }, h("label", { for: "rc-title", text: "Title" }), inpTitle));
+    form.appendChild(h("div", { class: "field" }, h("label", { for: "rc-project", text: "Project (optional)" }), selProj));
+    form.appendChild(h("div", { class: "field" }, h("label", { for: "rc-sched", text: "Schedule" }), h("span", { id: "rc-sched-hint", class: "small muted", text: "5-field cron (0 7 * * 1-5) or interval in seconds (3600s)" }), inpSched));
+    form.appendChild(h("div", { class: "field" }, h("label", { for: "rc-lateness", text: "Max lateness (seconds)" }), inpLate));
+    form.appendChild(h("div", { class: "field" }, h("label", { for: "rc-prompt", text: "Task prompt" }), inpPrompt));
+    form.appendChild(msg);
+    form.appendChild(sub);
+
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      var id = inpId.value.trim().toLowerCase(), title = inpTitle.value.trim(), rawSched = inpSched.value.trim(), prompt = inpPrompt.value.trim();
+      var late = parseInt(inpLate.value.trim() || "3600", 10);
+      function bad(el, text) { el.setAttribute("aria-invalid", "true"); msg.textContent = text; el.focus(); }
+      if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(id)) return bad(inpId, "Use lowercase letters, digits, - or _ (1-64 chars).");
+      if (!title) return bad(inpTitle, "Enter a title.");
+      if (!rawSched) return bad(inpSched, "Enter a 5-field cron expression or interval like 3600s.");
+      if (!Number.isFinite(late) || late < 0 || late > 604800) return bad(inpLate, "Enter max lateness between 0 and 604800 seconds.");
+      if (!prompt) return bad(inpPrompt, "Enter a task prompt.");
+      var intM = /^(\d+)\s*s?$/i.exec(rawSched), schedule;
+      if (intM) {
+        var secs = parseInt(intM[1], 10);
+        if (secs < 60) return bad(inpSched, "Interval must be at least 60 seconds.");
+        schedule = { kind: "interval", every_seconds: secs };
+      } else {
+        if (rawSched.split(/\s+/).length !== 5) return bad(inpSched, "Cron schedule must have 5 space-separated fields.");
+        schedule = { kind: "cron", expr: rawSched };
+      }
+      var payload = { id: id, title: title, prompt: prompt, schedule: schedule, max_lateness_seconds: late };
+      if (selProj.value) payload.intent = { project: selProj.value };
+      sub.disabled = true; msg.textContent = "Sending proposal.";
+      send("POST", "/api/fleet/routines", payload).then(function () {
+        closeSheet(); toast("Proposed. Waiting for your approval."); return refreshRoutines();
+      }).catch(function (err) {
+        msg.textContent = (err && err.message) || String(err);
+      }).then(function () { sub.disabled = false; });
+    });
+    body.appendChild(form);
+  });
+}
+if ($("#new-routine-btn")) $("#new-routine-btn").addEventListener("click", openRoutineCreate);
 
 /* ---- Providers and models: budgets, lanes and the model catalogue ---- */
 var KIND_WORDS = { local: "Runs on this computer", subscription: "Subscription sign-in", free: "Free tier", paid: "Paid per use" };
@@ -2396,21 +2568,51 @@ openModel = function (m) {
     body.appendChild(h("details", { "data-advanced": "" }, h("summary", { text: "Which harness can run it" }), ul));
   });
 };
-renderLimit = function () {};
+renderLimit = function () {
+  var s = SIDE.settings || {};
+  var mode = s.on_limit || "switch";
+  var wait = Number(s.wait_hours) || 6;
+  $$("#limit-seg button").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.limit === mode)); });
+  var wb = $("#wait-box"); if (wb) wb.hidden = mode === "switch";
+  var chips = $("#wait-chips");
+  if (chips) {
+    chips.textContent = "";
+    [1, 6, 12, 24].forEach(function (n) {
+      var b = h("button", { type: "button", class: "chip", "aria-pressed": String(wait === n), text: n + " h" });
+      b.addEventListener("click", function () {
+        send("POST", "/api/fleet/settings", { on_limit: mode, wait_hours: n }).then(function (j) {
+          SIDE.settings = j; renderLimit(); toast("Saved");
+        }).catch(fail);
+      });
+      chips.appendChild(b);
+    });
+  }
+  var txt = $("#limit-text");
+  if (txt) txt.textContent = (LIMIT_TEXT[mode] || LIMIT_TEXT["switch"]) + (mode === "switch" ? "" : " Waiting: up to " + wait + " h.");
+};
+if ($("#limit-seg")) {
+  $("#limit-seg").addEventListener("click", function (e) {
+    var b = e.target.closest("[data-limit]"); if (!b) return;
+    var mode = b.dataset.limit, wait = Number((SIDE.settings || {}).wait_hours) || 6;
+    send("POST", "/api/fleet/settings", { on_limit: mode, wait_hours: wait }).then(function (j) {
+      SIDE.settings = j; renderLimit(); toast("Saved");
+    }).catch(fail);
+  });
+}
 
 /* ---- Settings: one fetch per source, then the meta words and the sheets ---- */
 var AUTONOMY = { manual_gate: ["Ask first", "Every task waits for your approval."], safe_auto: ["Safe work alone", "Routine work runs alone; anything risky waits for you."], full_swarm: ["All alone", "The fleet runs everything it is sure of; only signatures wait."] };
 function refreshSettings() {
   return Promise.all([getJSON("/api/fleet/lanes"), getJSON("/api/fleet/budgets"), getJSON("/api/fleet/models"), getJSON("/api/fleet/settings"),
     getJSON("/api/fleet/signer"), getJSON("/api/fleet/intake"), getJSON("/api/fleet/privateers"), getJSON("/api/fleet/coordinator"), getJSON("/api/fleet/tokens"), getJSON("/api/fleet/projects"),
-    getJSON("/api/fleet/ledger"), getJSON("/api/fleet/plugins")])
+    getJSON("/api/fleet/ledger"), getJSON("/api/fleet/plugins"), getJSON("/api/fleet/apps")])
     .then(function (a) {
       if (a[0]) { SIDE.lanes = a[0].lanes || []; SIDE.laneSummary = a[0].summary || null; }
       if (a[1]) SIDE.budgets = a[1]; if (a[2]) SIDE.models = a[2].models || []; if (a[3]) SIDE.settings = a[3];
       if (a[4]) SIDE.signer = a[4]; if (a[5]) SIDE.intake = a[5].projects || []; if (a[6]) SIDE.privateers = a[6].privateers || [];
       if (a[7]) SIDE.coordinator = a[7]; if (a[8]) SIDE.tokens = a[8].tokens || []; if (a[9]) SIDE.projects = a[9].projects || [];
-      if (a[10]) SIDE.ledger = a[10]; if (a[11]) SIDE.plugins = a[11];
-      liveProviders(); renderProviders(); renderModels(); fillNewTask(); loadTemplates($("#nt-project").value || ""); badges();
+      if (a[10]) SIDE.ledger = a[10]; if (a[11]) SIDE.plugins = a[11]; if (a[12]) SIDE.apps = a[12];
+      liveProviders(); renderProviders(); renderModels(); renderLimit(); fillNewTask(); loadTemplates($("#nt-project").value || ""); badges();
     });
 }
 function fmtTokens(n) {
@@ -2451,6 +2653,7 @@ function badges() {
   badge("issue-sources", SIDE.intake.filter(function (p) { return p.enabled; }).length || null);
   badge("privateers", SIDE.privateers.length || null);
   badge("coordinator", SIDE.coordinator ? SIDE.coordinator.current : null);
+  renderHealth();
 }
 function sheetList(body, items, empty) {
   var ul = h("ul", { class: "list" });
@@ -2584,9 +2787,127 @@ var LIVE_SHEETS = {
     });
   },
   privateers: function () {
+    function openPrivateer(p) {
+      var pname = String(p.name || p.id || "Privateer");
+      showSheet(pname, function (body) {
+        var st = String(p.commission_status || (p.commissioned ? "active" : "uncommissioned"));
+        var dot = p.commissioned ? "ok" : p.commission_error ? "err" : st === "awaiting_signature" ? "warn" : "";
+        var info = [
+          infoRow("Status", st, dot),
+          infoRow("Fingerprint", String(p.fingerprint || "none")),
+          infoRow("Capabilities", (Array.isArray(p.capabilities) && p.capabilities.length) ? p.capabilities.join(", ") : "none"),
+          infoRow("Budget", String(p.budget != null ? p.budget : 0)),
+          infoRow("Allowed domains", (Array.isArray(p.allowed_domains) && p.allowed_domains.length) ? p.allowed_domains.join(", ") : "none"),
+          infoRow("Expires", p.expires_at ? when(p.expires_at) : "not set")
+        ];
+        if (p.commission_error) info.push(infoRow("Error", String(p.commission_error), "err"));
+        sheetList(body, info);
+        var out = h("p", { class: "small", "aria-live": "polite" });
+        var recom = h("button", { type: "button", id: "pv-recommission-btn", class: "btn primary block", text: "Request / renew commission" });
+        recom.addEventListener("click", function () {
+          recom.disabled = true; out.textContent = "Sending commission prompt to Amber.";
+          send("POST", "/api/fleet/privateers/" + encodeURIComponent(pname) + "/commission", {}).then(function () {
+            out.textContent = "Commission prompt sent to Amber.";
+            toast("Approve commission on Amber");
+            return getJSON("/api/fleet/privateers").then(function (d) {
+              if (d) { SIDE.privateers = d.privateers || []; badges(); }
+            });
+          }).catch(function (e) { out.textContent = (e && e.message) || String(e); fail(e); })
+            .then(function () { recom.disabled = false; });
+        });
+        var rev = h("button", { type: "button", id: "pv-revoke-btn", class: "btn danger block", text: "Revoke Privateer" });
+        rev.addEventListener("click", function () {
+          if (rev.dataset.sure !== "1") { rev.dataset.sure = "1"; rev.textContent = "Tap again to revoke"; return; }
+          rev.disabled = true;
+          send("DELETE", "/api/fleet/privateers/" + encodeURIComponent(pname)).then(function () {
+            return getJSON("/api/fleet/privateers").then(function (d) {
+              SIDE.privateers = d ? (d.privateers || []) : (SIDE.privateers || []).filter(function (x) { return x.name !== pname; });
+              badges();
+            });
+          }).then(function () { closeSheet(); toast("Revoked"); })
+            .catch(function (e) { rev.disabled = false; fail(e); });
+        });
+        body.appendChild(out);
+        body.appendChild(recom);
+        body.appendChild(rev);
+      });
+    }
     showSheet("Privateers", function (body) {
-      body.appendChild(h("p", { class: "muted", text: "Named identities with a limited commission." }));
-      sheetList(body, SIDE.privateers.map(function (p) { return infoRow(String(p.name || p.id || "privateer"), p.expires_at ? "until " + when(p.expires_at) : "", "ok"); }), "None active");
+      body.appendChild(h("p", { class: "muted", text: "Named identities with a limited commission signed on your phone." }));
+      var listBox = h("div", null);
+      function renderPrivList() {
+        listBox.textContent = "";
+        sheetList(listBox, (SIDE.privateers || []).map(function (p) {
+          var st = String(p.commission_status || (p.commissioned ? "active" : "uncommissioned"));
+          var tone = p.commissioned ? "ok" : p.commission_error ? "err" : st === "awaiting_signature" ? "warn" : "";
+          var meta = p.expires_at ? st + ", until " + when(p.expires_at) : st;
+          var b = row(tone, String(p.name || p.id || "privateer"), meta, null, { icon: "compass" });
+          b.addEventListener("click", function () { openPrivateer(p); });
+          return b;
+        }), "None active");
+      }
+      renderPrivList();
+      body.appendChild(listBox);
+
+      var inpName = h("input", { type: "text", id: "pv-name", name: "name", required: "", autocorrect: "off", autocapitalize: "none", spellcheck: "false", placeholder: "harbor-clerk" });
+      var inpCaps = h("input", { type: "text", id: "pv-caps", name: "capabilities", required: "", autocorrect: "off", autocapitalize: "none", spellcheck: "false", placeholder: "mail, github" });
+      var inpBudget = h("input", { type: "text", id: "pv-budget", name: "budget", inputmode: "numeric", pattern: "[0-9]+", value: "50" });
+      var inpDoms = h("input", { type: "text", id: "pv-domains", name: "allowed_domains", autocorrect: "off", autocapitalize: "none", spellcheck: "false", placeholder: "api.example.com" });
+      var inpDays = h("input", { type: "text", id: "pv-days", name: "days", inputmode: "numeric", pattern: "[0-9]+", value: "7" });
+      var msg = h("p", { id: "pv-msg", class: "small", "aria-live": "polite" });
+      var sub = h("button", { type: "submit", id: "pv-submit", class: "btn primary block", text: "Create and request Amber signature" });
+      [inpName, inpCaps, inpBudget, inpDoms, inpDays].forEach(function (el) {
+        el.addEventListener("input", function () { el.removeAttribute("aria-invalid"); msg.textContent = ""; });
+      });
+      var form = h("form", { id: "priv-create-form", class: "stack", novalidate: "" },
+        h("div", { class: "field" }, h("label", { for: "pv-name", text: "Name (lowercase letters, digits, - or _)" }), inpName),
+        h("div", { class: "field" }, h("label", { for: "pv-caps", text: "Capabilities (comma-separated)" }), inpCaps),
+        h("div", { class: "field" }, h("label", { for: "pv-budget", text: "Call budget (1-10000)" }), inpBudget),
+        h("div", { class: "field" }, h("label", { for: "pv-domains", text: "Allowed domains (comma-separated)" }), inpDoms),
+        h("div", { class: "field" }, h("label", { for: "pv-days", text: "Commission validity (days, 1-365)" }), inpDays),
+        msg,
+        sub
+      );
+      form.addEventListener("submit", function (e) {
+        e.preventDefault();
+        var name = inpName.value.trim().toLowerCase();
+        var caps = inpCaps.value.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+        var rawBudget = inpBudget.value.trim();
+        var doms = inpDoms.value.split(",").map(function (s) { return s.trim(); }).filter(Boolean);
+        var rawDays = inpDays.value.trim();
+        function bad(el, text) { el.setAttribute("aria-invalid", "true"); msg.textContent = text; el.focus(); }
+        if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name)) return bad(inpName, "Use lowercase letters, digits, - or _ (1-64 chars).");
+        if (!caps.length) return bad(inpCaps, "Enter at least one capability.");
+        if (!/^\d+$/.test(rawBudget)) return bad(inpBudget, "Enter a call budget between 1 and 10000.");
+        var budget = parseInt(rawBudget, 10);
+        if (budget < 1 || budget > 10000) return bad(inpBudget, "Enter a call budget between 1 and 10000.");
+        if (!/^\d+$/.test(rawDays)) return bad(inpDays, "Enter validity between 1 and 365 days.");
+        var days = parseInt(rawDays, 10);
+        if (days < 1 || days > 365) return bad(inpDays, "Enter validity between 1 and 365 days.");
+        sub.disabled = true; msg.textContent = "Creating Privateer and requesting Amber signature.";
+        send("POST", "/api/fleet/privateers", { name: name, capabilities: caps, budget: budget, allowed_domains: doms, ttl_seconds: days * 86400 })
+          .then(function () {
+            form.reset();
+            inpBudget.value = "50";
+            inpDays.value = "7";
+            msg.textContent = "Commission prompt sent to Amber for " + name + ".";
+            toast("Approve commission on Amber");
+            return getJSON("/api/fleet/privateers").then(function (d) {
+              if (d) { SIDE.privateers = d.privateers || []; badges(); renderPrivList(); }
+            });
+          })
+          .catch(function (err) { msg.textContent = (err && err.message) || String(err); })
+          .then(function () { sub.disabled = false; });
+      });
+      body.appendChild(h("details", { "data-advanced": "" }, h("summary", { text: "New Privateer" }), form));
+
+      getJSON("/api/fleet/privateers").then(function (d) {
+        if (d) {
+          SIDE.privateers = d.privateers || [];
+          badges();
+          if ($("#sheet").dataset.open === "true" && $("#sheet-title").textContent === "Privateers") renderPrivList();
+        }
+      });
     });
   },
   coordinator: function () {
@@ -2631,7 +2952,48 @@ var LIVE_SHEETS = {
   about: function () {
     showSheet("About", function (body) {
       sheetList(body, [infoRow("Version", SIDE.health ? SIDE.health.version : ""), infoRow("Data", "live from this computer")]);
-      body.appendChild(h("a", { class: "btn block", href: "/classic", text: "Open the old dashboard" }));
+    });
+  },
+  apps: function () {
+    function safeUrl(u) { return (typeof u === "string" && /^https?:\/\/[^/\s]+/i.test(u)) ? u : ""; }
+    function fill(body, info) {
+      body.textContent = "";
+      var rows = [
+        ["See what runs, approve, give a task", "Fleet app", "The only place where anything is decided."],
+        ["Work with the AI yourself, quickly", "Pi Pocket", "Local model, own OS user, no /home or /data; proposes fleet tasks."],
+        ["Discuss work, with others or agents", "Buzz", "A message from you in the fleet channel starts the fleet."]
+      ];
+      var tbl = h("table", { class: "apps-table" },
+        h("caption", { id: "apps-table-cap", text: "Which app to use on your phone" }),
+        h("thead", null, h("tr", null,
+          h("th", { scope: "col", text: "You want to" }),
+          h("th", { scope: "col", text: "App" }),
+          h("th", { scope: "col", text: "Rule" }))),
+        h("tbody", null, rows.map(function (r) {
+          return h("tr", null,
+            h("th", { scope: "row", text: r[0] }),
+            h("td", { "data-label": "App", text: r[1] }),
+            h("td", { "data-label": "Rule", text: r[2] }));
+        })));
+      body.appendChild(h("div", { class: "apps-table-wrap", tabindex: "0", role: "region", "aria-labelledby": "apps-table-cap" }, tbl));
+      var ppUrl = safeUrl(info && info.pi_pocket_url);
+      if (ppUrl) {
+        var link = h("a", { class: "btn primary block", target: "_blank", rel: "noopener noreferrer", text: "Open Pi Pocket" });
+        link.setAttribute("href", ppUrl);
+        body.appendChild(link);
+      } else {
+        body.appendChild(h("p", { class: "small muted", text: "Set [fleet] pi_pocket_url in fleet.toml to show a direct Pi Pocket link here." }));
+      }
+      body.appendChild(h("p", { class: "small muted", text: "Alarms: Matrix, ntfy, or Nostr DM (Settings -> Notifications)." }));
+    }
+    showSheet("Your apps", function (body) {
+      fill(body, SIDE.apps);
+      if (!SIDE.apps) {
+        getJSON("/api/fleet/apps").then(function (d) {
+          if (d) SIDE.apps = d;
+          if ($("#sheet").dataset.open === "true" && $("#sheet-title").textContent === "Your apps") fill(body, SIDE.apps);
+        });
+      }
     });
   }
 };
@@ -2752,6 +3114,146 @@ LIVE_SHEETS.notify = function () {
   });
 };
 function notifyWords(n) { var on = []; if (n.ntfy && n.ntfy.enabled) on.push("ntfy"); if (n.matrix && n.matrix.enabled) on.push("Matrix"); if (n.nostr && n.nostr.enabled) on.push("Nostr DM"); return on.length ? on.join(", ") : "off"; }
+/* ---- Pi Pocket: host on/off and 3-day-delayed auto-upgrades (admin-only; OS user is the boundary) ---- */
+LIVE_SHEETS["pi-pocket"] = function () {
+  getJSON("/api/fleet/pi-pocket").then(function (p) {
+    if (!p) { toast("Pi Pocket controls need the admin sign-in"); return; }
+    showSheet("Pi Pocket", function (body) {
+      var pollTimer = null, pollLeft = 0, watchUntil = 0, prevLastAt = 0, startVer = null;
+      function sheetOpen() { return $("#sheet").dataset.open === "true" && $("#sheet-title").textContent === "Pi Pocket"; }
+      function stopPoll() { if (pollTimer) { clearTimeout(pollTimer); pollTimer = null; } }
+      function schedulePoll(cur) {
+        stopPoll();
+        var active = !!cur.upgrade_running || (watchUntil > Date.now());
+        if (!active || pollLeft <= 0) return;
+        pollTimer = setTimeout(function () {
+          pollTimer = null;
+          if (!sheetOpen()) return;
+          getJSON("/api/fleet/pi-pocket").then(function (j) {
+            if (!j || !sheetOpen()) { stopPoll(); return; }
+            setText("#m-pi-pocket", piPocketWords(j));
+            if (j.upgrade_running) {
+              watchUntil = 0;
+              pollLeft = Math.max(0, pollLeft - 1);
+              renderState(j, "Installing. Checking again in 3 seconds.");
+              return;
+            }
+            var finishedFresh = (j.last_result && Number(j.last_result.at) > prevLastAt) ||
+              (startVer && j.current_version && j.current_version !== startVer);
+            if (watchUntil > Date.now() && !finishedFresh && pollLeft > 1) {
+              pollLeft = Math.max(0, pollLeft - 1);
+              renderState(j, "Installing. Checking again in 3 seconds.");
+              return;
+            }
+            watchUntil = 0; pollLeft = 0;
+            var doneNote = (j.last_result && j.last_result.outcome === "ok" && j.current_version)
+              ? ("Updated to v" + j.current_version + ".") : "";
+            renderState(j, doneNote);
+          }).catch(function () { stopPoll(); });
+        }, 3000);
+      }
+      function renderState(cur, note) {
+        body.textContent = "";
+        body.appendChild(h("p", { class: "muted", text: "Phone web app for interactive Pi sessions. Runs as its own OS user without /home, /data, or Docker access." }));
+        if (typeof cur.url === "string" && /^https?:\/\/[^/\s]+/i.test(cur.url)) {
+          var openLink = h("a", { class: "btn block", target: "_blank", rel: "noopener noreferrer", text: "Open Pi Pocket" });
+          openLink.setAttribute("href", cur.url);
+          body.appendChild(openLink);
+        }
+        var ppRun = h("input", { type: "checkbox", id: "pp-running", switch: "", role: "switch" });
+        ppRun.checked = !!cur.active;
+        ppRun.disabled = !cur.installed;
+        var ppRunSub = cur.installed ? ("Service " + cur.service_name + " is " + (cur.service_state || "inactive")) : "Not installed on this host yet (install via ops/pi-pocket/install.sh)";
+        body.appendChild(h("label", { class: "switch", for: "pp-running" }, ppRun, h("span", null, h("span", { class: "title", text: cur.active ? "Running" : "Stopped" }), h("br"), h("small", { class: "muted", text: ppRunSub }))));
+
+        var wait = Number(cur.delay_days) || 3, age = Number(cur.newest_age_days);
+        var newestText = cur.newest_version ? "v" + cur.newest_version : "not checked yet";
+        if (cur.newest_version && cur.newest_age_days != null) newestText += ", " + (age < 1 ? "less than a day" : Math.floor(age) + (Math.floor(age) === 1 ? " day" : " days")) + " old";
+        if (cur.newer_available && cur.auto_upgrade && cur.eligible_version !== cur.newest_version && cur.newest_age_days != null) {
+          var left = Math.max(1, Math.round(wait - age));
+          newestText += "; installs by itself in about " + left + (left === 1 ? " day" : " days");
+        }
+        var rows = h("ul", { class: "list" },
+          h("li", { class: "row" }, h("span", { class: "title", text: "Installed" }), h("span", { class: "meta", text: cur.current_version ? "v" + cur.current_version : "not installed" })),
+          h("li", { class: "row" }, h("span", { class: "title", text: "Newest" }), h("span", { class: "meta", text: newestText }))
+        );
+        body.appendChild(rows);
+
+        var ppAuto = h("input", { type: "checkbox", id: "pp-auto", switch: "", role: "switch" });
+        ppAuto.checked = !!cur.auto_upgrade;
+        body.appendChild(h("label", { class: "switch", for: "pp-auto" }, ppAuto, h("span", null, h("span", { class: "title", text: "Automatic upgrades" }), h("br"), h("small", { class: "muted", text: "A new stable version installs by itself once it is " + (Number(cur.delay_days) || 3) + " days old. A broken or tampered release is usually pulled by then." }))));
+
+        var out = h("p", { class: "small", "aria-live": "polite", text: note || "" });
+        var installing = !!cur.upgrade_running || (watchUntil > Date.now());
+        var canInstall = !!(cur.newer_available || cur.upgrade_available);
+        var upBtn = h("button", { type: "button", class: "btn primary",
+          text: installing ? "Installing" : canInstall && cur.newest_version ? "Install v" + cur.newest_version + " now" : "Up to date" });
+        upBtn.disabled = !cur.installed || !canInstall || installing;
+        var rsBtn = h("button", { type: "button", class: "btn", text: "Restart" });
+        rsBtn.disabled = !cur.installed || !cur.active;
+
+        ppRun.addEventListener("change", function () {
+          var want = ppRun.checked;
+          ppRun.disabled = true; out.textContent = want ? "Starting service." : "Stopping service.";
+          send("POST", "/api/fleet/pi-pocket/power", { action: want ? "start" : "stop" })
+            .then(function (j) { setText("#m-pi-pocket", piPocketWords(j)); renderState(j, j.active ? "Service started." : "Service stopped."); })
+            .catch(function (e) { ppRun.checked = !want; ppRun.disabled = !cur.installed; out.textContent = e.message; });
+        });
+        ppAuto.addEventListener("change", function () {
+          var want = ppAuto.checked;
+          ppAuto.disabled = true; out.textContent = "Saving preference.";
+          send("POST", "/api/fleet/pi-pocket/settings", { auto_upgrade: want })
+            .then(function (j) { setText("#m-pi-pocket", piPocketWords(j)); renderState(j, "Saved."); })
+            .catch(function (e) { ppAuto.checked = !want; ppAuto.disabled = false; out.textContent = e.message; });
+        });
+        rsBtn.addEventListener("click", function () {
+          rsBtn.disabled = true; out.textContent = "Restarting service.";
+          send("POST", "/api/fleet/pi-pocket/power", { action: "restart" })
+            .then(function (j) { setText("#m-pi-pocket", piPocketWords(j)); renderState(j, "Service restarted."); })
+            .catch(function (e) { rsBtn.disabled = false; out.textContent = e.message; });
+        });
+        upBtn.addEventListener("click", function () {
+          upBtn.disabled = true; out.textContent = "Installing. This takes a minute or two.";
+          prevLastAt = Number((cur.last_result && cur.last_result.at) || 0); startVer = cur.current_version;
+          send("POST", "/api/fleet/pi-pocket/upgrade", {})
+            .then(function (j) {
+              watchUntil = Date.now() + 15000; pollLeft = 60;
+              setText("#m-pi-pocket", piPocketWords(j));
+              renderState(j, "Installing. This card updates automatically.");
+            })
+            .catch(function (e) { upBtn.disabled = false; out.textContent = e.message; });
+        });
+        body.appendChild(h("div", { class: "btns" }, upBtn, rsBtn));
+        body.appendChild(out);
+
+        if (cur.last_result) {
+          var lr = cur.last_result;
+          var sum = (lr.outcome || "unknown") + (lr.from_version && lr.to_version ? " (" + lr.from_version + " -> " + lr.to_version + ")" : "");
+          var lrList = h("ul", { class: "list" },
+            h("li", { class: "row" }, h("span", { class: "title", text: "Last upgrade" }), h("span", { class: "meta", text: sum })),
+            lr.at ? h("li", { class: "row" }, h("span", { class: "title", text: "Checked" }), h("span", { class: "meta", text: ago(lr.at) })) : null
+          );
+          if (Array.isArray(lr.new_install_scripts) && lr.new_install_scripts.length) {
+            lrList.appendChild(h("li", { class: "row" }, h("span", { class: "title", text: "Blocked scripts" }), h("span", { class: "meta", text: lr.new_install_scripts.join(", ") })));
+          }
+          body.appendChild(lrList);
+          if (lr.detail) body.appendChild(h("p", { class: "small muted", text: lr.detail }));
+        }
+        body.appendChild(h("p", { class: "small muted", text: "Install now skips the wait. Either way the fleet backs up Pi Pocket's data first, stops if a new package wants to run an install script, and goes back to the old version if the app does not answer. Pi Pocket runs as its own user and cannot reach /home or /data." }));
+        if (cur.upgrade_running && pollLeft <= 0) pollLeft = 60;
+        if (cur.upgrade_running || watchUntil > Date.now()) schedulePoll(cur);
+        else stopPoll();
+      }
+      renderState(p, "");
+    });
+  });
+};
+function piPocketWords(p) {
+  if (!p || !p.installed) return "not installed";
+  if (p.upgrade_running) return "upgrading";
+  if (p.upgrade_available && p.eligible_version) return "upgrade v" + p.eligible_version;
+  return (p.active ? "running" : (p.service_state || "stopped")) + (p.current_version ? ", v" + p.current_version : "");
+}
 /* #/t/<task id>: the link a notification carries; opens the approval card when the task waits, else the task */
 function linkRoute() {
   var m = /^#\/t\/([A-Za-z0-9_.-]{1,128})$/.exec(location.hash || ""); if (!m) return;
@@ -2856,6 +3358,68 @@ $("#send-task").addEventListener("click", function () {
     .then(function () { state.lastProject = project; save(); toast("Queued"); LIVE.etag = null; refresh(); go("tasks"); }).catch(fail)
     .then(function () { b.disabled = false; });
 });
+(function initVoiceInput() {
+  var btn = $("#voice-btn"), lbl = $("#voice-label"), status = $("#voice-status");
+  if (!btn) return;
+  var rec = null, stream = null, chunks = [], recording = false;
+  function stopStream() { if (stream) { stream.getTracks().forEach(function (tr) { tr.stop(); }); stream = null; } }
+  function applyText(txt) {
+    txt = String(txt || "").trim(); if (!txt) return;
+    var first = $("#tpl-fields input, #tpl-fields textarea");
+    if (first) {
+      first.value = first.value ? (first.value.replace(/\s+$/, "") + " " + txt) : txt;
+      preview();
+    } else {
+      var prev = $("#tpl-preview");
+      if (prev) { prev.removeAttribute("readonly"); prev.value = prev.value ? (prev.value.trim() + "\n" + txt) : txt; }
+    }
+  }
+  btn.addEventListener("click", function () {
+    if (!recording) {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === "undefined") {
+        if (status) status.textContent = "Voice input needs microphone access over HTTPS.";
+        return;
+      }
+      btn.disabled = true;
+      navigator.mediaDevices.getUserMedia({ audio: true }).then(function (s) {
+        stream = s; chunks = [];
+        rec = new MediaRecorder(s);
+        rec.ondataavailable = function (ev) { if (ev.data && ev.data.size > 0) chunks.push(ev.data); };
+        rec.onstop = function () {
+          stopStream();
+          var blob = new Blob(chunks, { type: (rec && rec.mimeType) || "audio/webm" });
+          chunks = [];
+          if (!blob.size) { btn.disabled = false; if (status) status.textContent = "Nothing recorded."; return; }
+          if (status) status.textContent = "Transcribing.";
+          fetch("/api/fleet/transcribe", { method: "POST", credentials: "same-origin", headers: { "Content-Type": blob.type || "audio/webm" }, body: blob })
+            .then(function (r) {
+              if (r.status === 401) { showSignIn("Signed out. Paste your token."); throw new Error("signed out"); }
+              return r.json().catch(function () { return {}; }).then(function (j) {
+                if (!r.ok) throw new Error(j.detail || ("HTTP " + r.status));
+                applyText(j.text || "");
+                if (status) status.textContent = "Transcribed.";
+              });
+            }).catch(function (err) {
+              if (err && err.message === "signed out") return;
+              if (status) status.textContent = (err && err.message) || "Transcription unavailable.";
+            }).then(function () { btn.disabled = false; });
+        };
+        rec.start();
+        recording = true; btn.disabled = false; btn.setAttribute("aria-pressed", "true");
+        if (lbl) lbl.textContent = "Stop";
+        if (status) status.textContent = "Listening.";
+      }).catch(function () {
+        stopStream(); btn.disabled = false;
+        if (status) status.textContent = "Microphone access was declined or is unavailable.";
+      });
+    } else {
+      recording = false; btn.setAttribute("aria-pressed", "false"); btn.disabled = true;
+      if (lbl) lbl.textContent = "Speak";
+      if (rec && rec.state !== "inactive") rec.stop();
+      else { stopStream(); btn.disabled = false; }
+    }
+  });
+})();
 
 /* ---- Task detail: the folds filled from the task's own record; drafts and the receipt on demand ---- */
 function foldPut(mod, summary, nodes) {
@@ -3009,6 +3573,9 @@ $(".spend").hidden = true; $("#chat-open").hidden = true;
 fillMinis(); bindPalettePreview(); renderLists(); renderTemplates(); drawQr(); markHere(); step(1);
 renderProviders(); renderModels(); renderLimit(); renderTabs(); renderSchedule();
 root.dataset.ready = "1";
+function renderAppsHint() { var el = $("#apps-hint"); if (el) el.hidden = !!state.appsHintDismissed; }
+if ($("#apps-hint-dismiss")) $("#apps-hint-dismiss").addEventListener("click", function () { state.appsHintDismissed = true; save(); renderAppsHint(); });
+renderAppsHint();
 $("#need-count").hidden = false; $("#need-count").textContent = String(TASKS.filter(function (t) { return t.state === "needs" || t.state === "failed"; }).length);
 $("#need-tag").textContent = String(TASKS.filter(function (t) { return t.state === "needs" || t.state === "failed"; }).length);
 applyAll(); applyLayout(); renderLayout(); route(); search();
@@ -3016,7 +3583,7 @@ applyAll(); applyLayout(); renderLayout(); route(); search();
   // the one-tap link from fleet-token: exchange #token=... once, then drop it from the address bar
   var m = /(?:^#|[#&])token=([^&]+)/.exec(location.hash || "");
   // the side loads start only once a session exists: before the cookie is set they would all get 401
-  function boot() { linkRoute(); getJSON("/api/fleet/notify").then(function (n) { if (n) setText("#m-notify", notifyWords(n)); }); refreshSide(); poll(); streamOpen(); refreshRoutines(); refreshSettings(); getJSON("/health").then(function (j) { SIDE.health = j; }); onLiveRoute(); }
+  function boot() { linkRoute(); getJSON("/api/fleet/notify").then(function (n) { if (n) setText("#m-notify", notifyWords(n)); }); getJSON("/api/fleet/pi-pocket").then(function (p) { if (p) setText("#m-pi-pocket", piPocketWords(p)); }); getJSON("/api/fleet/apps").then(function (d) { if (d) SIDE.apps = d; }); refreshSide(); poll(); streamOpen(); refreshRoutines(); refreshSettings(); getJSON("/health").then(function (j) { SIDE.health = j; }); onLiveRoute(); }
   if (m) { var tok = decodeURIComponent(m[1]); history.replaceState(null, "", location.pathname + "#/home"); signIn(tok).then(boot, function () { showSignIn("That link's token was not accepted."); }); }
   else { refresh(); boot(); }
 })();

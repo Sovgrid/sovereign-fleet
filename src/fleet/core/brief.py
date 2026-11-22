@@ -72,6 +72,12 @@ def approval_brief(task: Any, *, cfg: Any = None, autonomy: str = "", dependents
         why.append("Your autonomy setting holds every task for approval.")
     if _RISKY_WORDS.search(text):
         why.append("Its text mentions an action that can destroy data (" + _RISKY_WORDS.search(text).group(0) + ").")
+    held_calls: List[str] = []
+    if meta.get("replay_held"):
+        held_calls = [f"{c.get('capability', '?')}/{c.get('tool', '?')}"
+                      for c in (meta.get("open_tool_calls") or []) if isinstance(c, dict)][:3]
+        what = ("a tool call (" + ", ".join(held_calls) + ")") if held_calls else "a tool call"
+        why.insert(0, f"The fleet stopped while {what} was running, so whether it happened is unknown.")
     if not why:
         why.append("It waits for your approval.")
 
@@ -86,6 +92,8 @@ def approval_brief(task: Any, *, cfg: Any = None, autonomy: str = "", dependents
             level = new
         reasons.append(reason)
 
+    if meta.get("replay_held"):
+        raise_to("high", "a tool call may run a second time")
     if privateer:
         raise_to("high", "acts under a Privateer identity (signed, cannot be taken back)")
         reversible, undo_label = False, "Not reversible: signs and sends"
@@ -123,6 +131,8 @@ def approval_brief(task: Any, *, cfg: Any = None, autonomy: str = "", dependents
     files = f"up to {len(paths)} path{'s' if len(paths) != 1 else ''} ({', '.join(paths[:3])}{', ...' if len(paths) > 3 else ''})" if paths else "any file in the project"
     if_approve = [f"It changes {files} in {project_key or 'the project'} and {land_text}.",
                   f"Cost: {cost_text}."]
+    if meta.get("replay_held"):
+        if_approve.insert(0, "It runs again from the start; the interrupted tool call may happen twice.")
     if domains:
         if_approve.append("It may reach " + ", ".join(domains) + ".")
     else:

@@ -105,12 +105,25 @@ def _check_secret_file(path: Path) -> None:
         raise NostrNotifyError("fleet nostr key file must not be group/world readable")
 
 
+def _public_nostr_reason(err: str, fallback: str = "no pinned operator key") -> str:
+    """Strip local filesystem paths and OSError details from UI/API status reasons."""
+    text = (err or "").strip()
+    if not text:
+        return fallback
+    head = text.split(":", 1)[0].strip()
+    return head or fallback
+
+
 def nostr_dm_status(cfg: Optional[FleetConfig] = None) -> Dict[str, Any]:
     """Read-only availability & recipient fingerprint (never creates key material)."""
     cfg = cfg or load_config()
     ok, keys, err = verify_anchor_file(cfg.signer_anchor_path)
     if not ok or not keys:
-        return {"available": False, "recipient_fingerprint": "", "reason": err or "no pinned operator key"}
+        return {
+            "available": False,
+            "recipient_fingerprint": "",
+            "reason": _public_nostr_reason(err, "no pinned operator key"),
+        }
     fps = ", ".join(fingerprint_npub(encode_npub(k)) for k in keys)
     if not _nak_executable(cfg.nostr.nak):
         return {"available": False, "recipient_fingerprint": fps, "reason": "nak CLI not found"}
@@ -118,12 +131,20 @@ def nostr_dm_status(cfg: Optional[FleetConfig] = None) -> Dict[str, Any]:
         try:
             _check_secret_file(cfg.nostr_key_file)
         except NostrNotifyError as e:
-            return {"available": False, "recipient_fingerprint": fps, "reason": str(e)}
+            return {
+                "available": False,
+                "recipient_fingerprint": fps,
+                "reason": _public_nostr_reason(str(e), "fleet nostr key unavailable"),
+            }
     elif (cfg.secrets_dir / "signer.nsec").exists():
         try:
             _check_secret_file(cfg.secrets_dir / "signer.nsec")
         except NostrNotifyError as e:
-            return {"available": False, "recipient_fingerprint": fps, "reason": str(e)}
+            return {
+                "available": False,
+                "recipient_fingerprint": fps,
+                "reason": _public_nostr_reason(str(e), "fleet nostr key unavailable"),
+            }
     return {"available": True, "recipient_fingerprint": fps, "reason": ""}
 
 

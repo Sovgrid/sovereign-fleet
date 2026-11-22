@@ -63,6 +63,12 @@ class FleetSettings(BaseModel):
     notify_nostr: bool = False
     notify_nostr_relays: List[str] = Field(default_factory=list, max_length=5)
     notify_app_url: Optional[str] = Field(None, max_length=300)
+    # Pi Pocket host controls (core/pi_pocket.py): automated upgrades stay enabled by default with
+    # a 3-day stability delay after each stable release tag.
+    pi_pocket_auto_upgrade: bool = True
+    # Default quota-limit policy for queued/running tasks that do not specify metadata.on_limit.
+    on_limit: Literal["switch", "wait", "wait_then_switch"] = "switch"
+    wait_hours: float = Field(6.0, gt=0, le=24.0)
 
 
 def settings_file() -> Path:

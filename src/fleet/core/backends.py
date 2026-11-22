@@ -40,6 +40,7 @@ from fleet.core.sandbox import validate_task_domains
 from fleet.core.taskstore import FleetTask, TaskStore, TransitionError, is_sensitive
 from fleet.core.toolgate import (
     ToolGateError,
+    acknowledge_open_calls,
     approve_draft as gate_approve_draft,
     reject_draft as gate_reject_draft,
 )
@@ -434,6 +435,21 @@ class LocalBackend:
         updated = self._transition(task.id, "completed", ("awaiting_approval",), merged)
         return updated or task
 
+    def _acknowledge_replay_held(self, task: FleetTask, *, by: str) -> Optional[Dict[str, Any]]:
+        if not ((task.metadata or {}).get("replay_held") or (task.result or {}).get("replay_held")):
+            return None
+        try:
+            acknowledge_open_calls(task.id, by=by)
+        except ToolGateError as e:
+            raise BackendError(str(e)) from e
+        self.store.update_metadata(task.id, {"replay_held": None, "open_tool_calls": None})
+        if isinstance(task.result, dict):
+            cleaned = dict(task.result)
+            cleaned.pop("replay_held", None)
+            cleaned.pop("open_tool_calls", None)
+            return cleaned
+        return None
+
     async def approve_async(self, task_id: str, *, by: str = "operator") -> Optional[FleetTask]:
         task = self.store.get_task(task_id)
         if task is None:
@@ -442,7 +458,10 @@ class LocalBackend:
             raise BackendError(
                 f"Task {task_id} has pending drafts; drafts are approved one by one in the dashboard"
             )
-        return self._transition(task_id, "queued", ("awaiting_approval",))
+        if task.status != "awaiting_approval":
+            return self._transition(task_id, "queued", ("awaiting_approval",))
+        cleaned_result = self._acknowledge_replay_held(task, by=by)
+        return self._transition(task_id, "queued", ("awaiting_approval",), cleaned_result)
 
     def approve(self, task_id: str, *, by: str = "operator") -> Optional[FleetTask]:
         task = self.store.get_task(task_id)
@@ -452,7 +471,10 @@ class LocalBackend:
             raise BackendError(
                 f"Task {task_id} has pending drafts; drafts are approved one by one in the dashboard"
             )
-        return self._transition(task_id, "queued", ("awaiting_approval",))
+        if task.status != "awaiting_approval":
+            return self._transition(task_id, "queued", ("awaiting_approval",))
+        cleaned_result = self._acknowledge_replay_held(task, by=by)
+        return self._transition(task_id, "queued", ("awaiting_approval",), cleaned_result)
 
     def reject(self, task_id: str, *, by: str = "operator", reason: str = "Rejected by user") -> Optional[FleetTask]:
         task = self.store.get_task(task_id)

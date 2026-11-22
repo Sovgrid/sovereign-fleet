@@ -235,7 +235,7 @@ async def test_a_server_that_allocates_past_memory_max_is_killed(monkeypatch):
     assert not any(cap.scratch_root().iterdir())
     log = load_config().root / "toolcalls" / "task-mem-1.probe.jsonl"
     records = [json.loads(line) for line in log.read_text().splitlines()]
-    assert [r.get("decision") for r in records if "tool" in r] == ["allowed", "error_upstream", "error_upstream"]
+    assert [r.get("decision") for r in records if "decision" in r] == ["allowed", "error_upstream", "error_upstream"]
     assert verify_call_log(log)[0]
 
 
@@ -286,7 +286,7 @@ async def test_an_agent_reaches_its_capability_through_the_gate_and_nothing_else
     assert not any(cap.scratch_root().iterdir())                   # B3: gone after the run
     log = load_config().root / "toolcalls" / "task-run-1.probe.jsonl"
     records = [json.loads(line) for line in log.read_text().splitlines()]
-    assert [r.get("decision") for r in records if "tool" in r] == ["allowed", "denied_rule"]
+    assert [r.get("decision") for r in records if "decision" in r] == ["allowed", "denied_rule"]
     assert verify_call_log(log)[0]
 
 
@@ -760,9 +760,9 @@ async def test_g3_end_to_end_ask_draft_flow(tmp_path, monkeypatch, _needs_local_
     assert rejected_t2.status == "failed"
     assert json.loads(d2_path.read_text())["status"] == "rejected"
 
-    # Dashboard renders pending_drafts arguments
-    dash = (Path(__file__).resolve().parent.parent / "src" / "fleet" / "api" / "dashboard.html").read_text()
-    assert "pending_drafts" in dash and "JSON.stringify" in dash
+    # New shell renders pending_drafts arguments
+    dash = (Path(__file__).resolve().parent.parent / "src" / "fleet" / "api" / "static" / "app" / "index.html").read_text()
+    assert "pending_drafts" in dash
 
 
 @pytest.mark.asyncio
@@ -979,8 +979,8 @@ async def test_g11_step1_task_approve_refuses_pending_drafts(tmp_path, monkeypat
     assert "one by one in the dashboard" in r.json()["detail"]
     assert store.get_task(t.id).status == "awaiting_approval"
 
-    dash = (Path(__file__).resolve().parent.parent / "src" / "fleet" / "api" / "dashboard.html").read_text()
-    assert "approveDraft" in dash and "/drafts/" in dash
+    dash = (Path(__file__).resolve().parent.parent / "src" / "fleet" / "api" / "static" / "app" / "index.html").read_text()
+    assert '"/drafts/"' in dash and '"/approve"' in dash
 
 
 @pytest.mark.asyncio
@@ -1021,8 +1021,13 @@ async def test_g11_step3_engine_pushes_full_draft_arguments_on_awaiting_approval
     with patch.object(plugin, "post_message", side_effect=fake_post):
         await engine.run_single_task(t)
 
+    stored = store.get_task(t.id)
+    assert stored is not None and stored.status == "awaiting_approval", (
+        f"expected awaiting_approval, got status={stored.status if stored else None!r} "
+        f"result={stored.result if stored else None!r}"
+    )
     approval_msgs = [m for m in posted if "[APPROVAL REQUIRED]" in m]
-    assert len(approval_msgs) == 1
+    assert len(approval_msgs) == 1, f"expected 1 approval message, posted={posted!r}"
     msg = approval_msgs[0]
     assert "Pending draft #1" in msg
     assert "probe/echo" in msg

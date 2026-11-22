@@ -124,6 +124,56 @@ def test_fail_closed_when_anchor_is_missing_or_non_root(tmp_path):
         NN.pinned_recipient_pubkeys(cfg_user)
 
 
+def test_nostr_status_and_notify_api_never_leak_local_paths(tmp_path, monkeypatch):
+    from fleet.api import app as app_module
+
+    # 1. Missing anchor under a user path: reason must not include path or username
+    missing_anchor = tmp_path / "home" / "alice" / "signer.pub"
+    cfg_missing = FleetConfig(nostr={"signer_anchor": str(missing_anchor)})
+    st_missing = NN.nostr_dm_status(cfg_missing)
+    assert st_missing["available"] is False
+    assert st_missing["reason"] == "signer anchor missing"
+    assert "alice" not in st_missing["reason"] and "/" not in st_missing["reason"]
+
+    # 2. Non-root anchor under a user path: reason must not include path or username
+    user_dir = tmp_path / "home" / "alice"
+    user_dir.mkdir(parents=True)
+    user_anchor = user_dir / "signer.pub"
+    user_anchor.write_text(signer.encode_npub("11" * 32) + "\n", encoding="utf-8")
+    st_user = NN.nostr_dm_status(FleetConfig(nostr={"signer_anchor": str(user_anchor)}))
+    assert st_user["available"] is False
+    assert "alice" not in st_user["reason"] and "/" not in st_user["reason"]
+
+    # 3. Missing key_file with valid root anchor: reason must not include key path or username
+    valid_anchor = _root_anchor(tmp_path, "11" * 32, monkeypatch)
+    fake_nak = tmp_path / "nak"
+    fake_nak.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake_nak.chmod(0o755)
+    missing_key = user_dir / "fleet.nsec"
+    st_nokey = NN.nostr_dm_status(
+        FleetConfig(nostr={"signer_anchor": str(valid_anchor), "key_file": str(missing_key), "nak": str(fake_nak)})
+    )
+    assert st_nokey["available"] is False
+    assert st_nokey["reason"] == "fleet nostr key file missing"
+    assert "alice" not in st_nokey["reason"] and "/" not in st_nokey["reason"]
+
+    # 4. API GET and POST 400 error responses never leak local paths or tmp_path
+    cfg_api = FleetConfig(nostr={"signer_anchor": str(tmp_path / "home" / "alice" / "missing-anchor.pub")})
+    monkeypatch.setenv("FLEET_SETTINGS_FILE", str(tmp_path / "settings.json"))
+    monkeypatch.setattr(app_module, "load_config", lambda: cfg_api)
+    h = {"Authorization": f"Bearer {TEST_TOKEN}"}
+    with TestClient(app_module.app) as c:
+        r_get = c.get("/api/fleet/notify", headers=h)
+        assert r_get.status_code == 200
+        assert r_get.json()["nostr"]["reason"] == "signer anchor missing"
+        assert "alice" not in r_get.text and str(tmp_path) not in r_get.text
+
+        r_post = c.post("/api/fleet/notify", json={"nostr": True, "nostr_relays": ["wss://r.example"]}, headers=h)
+        assert r_post.status_code == 400
+        assert r_post.json()["detail"] == "signer anchor missing"
+        assert "alice" not in r_post.text and str(tmp_path) not in r_post.text
+
+
 def test_format_dm_text_strips_extra_fields_and_blocks_bad_links():
     secret = "sk-live-secret-token ~/.ssh/id_rsa prompt text"
     msg = {

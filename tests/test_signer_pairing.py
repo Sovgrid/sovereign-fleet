@@ -9,7 +9,6 @@ import shutil
 import socket
 import subprocess
 import time
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -292,10 +291,8 @@ def test_dashboard_includes_accessible_first_run_signer_card():
     from fleet.api import app as app_module
 
     with TestClient(app_module.app) as client:
-        html = client.get("/classic").text
-        assert "signer-setup-card" in html
-        assert 'id="signer-bunker-input"' in html
-        assert "Manually approve every permission" in html
+        html = client.get("/static/app/").text
+        assert 'id="bunker-uri"' in html
         assert "/api/fleet/signer/pair" in html
         assert "/api/fleet/signer/bunker" in html
 
@@ -360,13 +357,6 @@ def test_bunker_that_never_replies_names_the_signer_not_the_relay(monkeypatch):
                         json={"bunker_uri": _bunker_uri(remote_pub, "wss://relay.example.net")})
         assert r.status_code == 502
         assert "the bunker did not reply" in r.json()["detail"]
-
-
-def test_dashboard_shows_the_daemon_reason_for_a_failed_bunker_pairing():
-    from fleet.api import app as app_module
-    html = (Path(app_module.__file__).parent / "dashboard.html").read_text()
-    assert "await res.json().catch(() => ({}))" in html
-    assert "Remote bunker pairing failed (HTTP ${res.status})" in html
 
 
 def test_bunker_pairing_moves_past_a_dead_relay(monkeypatch):

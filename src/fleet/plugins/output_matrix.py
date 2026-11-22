@@ -247,6 +247,11 @@ class MatrixOutputPlugin(OutputPlugin):
                 from fleet.core.capability import list_task_drafts
                 if (t.metadata or {}).get("pending_drafts") or list_task_drafts(tid, status="pending"):
                     return f"[WARN] Task `{tid}` has pending drafts; drafts are approved one by one in the dashboard."
+                if (t.metadata or {}).get("replay_held") or (t.result or {}).get("replay_held"):
+                    # The fleet app shows that a tool call may run twice and acknowledges the open
+                    # calls on approve; a plain transition here would skip both.
+                    return (f"[WARN] Task `{tid}` stopped during a tool call; "
+                            "approve it in the fleet app, which shows what may run twice.")
                 task_store.transition(tid, "queued", allowed_from=("awaiting_approval", "blocked"))
                 resp = f"[OK] Task `{tid}` approved by {sender or 'operator'} and queued."
                 await self.post_message(resp)

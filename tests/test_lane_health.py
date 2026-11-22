@@ -507,11 +507,3 @@ async def test_the_lanes_api_shows_retired_lanes_successors_and_new_models(monke
     assert body["summary"]["retired_lanes"] == ["muse"] and body["discover"] is False
     assert [d["model"] for d in body["discovered"]] == ["opencode/bunny-free"]
     assert health["kpis"]["lane_health"] == "0 ok, 0 dead, 0 untested, 1 retired (retired: muse)"
-
-
-def test_the_dashboard_shows_active_lanes_by_default():
-    html = (Path(__file__).parents[1] / "src/fleet/api/dashboard.html").read_text(encoding="utf-8")
-    assert "let laneHealthFilter = 'active';" in html
-    assert 'data-health-filter="active"' in html.split('id="lane-health-tabs"')[1].split("</div>")[0]
-    for key in ("active", "untested", "down", "all"):
-        assert f'id="health-count-{key}"' in html

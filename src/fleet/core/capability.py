@@ -216,7 +216,7 @@ class Capability:
                 call_timeout=section.call_timeout, start_timeout=section.start_timeout,
                 max_result_bytes=section.max_result_bytes, max_parallel_calls=section.max_parallel_calls,
                 max_restarts=section.max_restarts, allowed_url_schemes=section.allowed_url_schemes,
-                hash_only_args=section.hash_only_args, parent_budget=task_budget)
+                hash_only_args=section.hash_only_args, replay=section.replay, parent_budget=task_budget)
             await self.gate.start()
         except BaseException:
             await self.stop()

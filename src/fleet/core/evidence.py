@@ -441,6 +441,8 @@ def _read_call_log(
                     state["malformed_lines"] += 1
                     continue
                 last_raw = stripped
+                if rec.get("event") == "call_started" or rec.get("decision") == "acknowledged":
+                    continue
                 tool = rec.get("tool")
                 if not isinstance(tool, str):
                     continue

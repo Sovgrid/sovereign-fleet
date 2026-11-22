@@ -16,7 +16,9 @@ import subprocess
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Set, Tuple
 
+from fleet.core.config import _expand, load_config
 from fleet.core.taskstore import FleetTask, TaskStore, TransitionError, is_deferred
+from fleet.core.toolgate import inspect_task_open_calls
 
 logger = logging.getLogger("fleet.core.executor")
 
@@ -171,21 +173,65 @@ class Executor:
                 await task
 
 
+def _task_branch_heads(store: TaskStore, cfg: Any) -> Dict[str, str]:
+    """Return ``task_id -> commit_sha`` for orphaned *in_progress* tasks whose branch exists."""
+    orphans = [t for t in store.load_tasks() if t.status == "in_progress"]
+    if not orphans:
+        return {}
+    project_repos: Dict[str, Path] = {}
+    for key, proj in (getattr(cfg, "projects", None) or {}).items():
+        if not getattr(proj, "path", ""):
+            continue
+        p = Path(_expand(proj.path))
+        project_repos[key] = p
+        for alias in getattr(proj, "aliases", ()) or ():
+            project_repos[alias] = p
+    unique_repos = list(dict.fromkeys(project_repos.values()))
+    heads: Dict[str, str] = {}
+    for t in orphans:
+        meta = t.metadata or {}
+        intent = meta.get("intent") if isinstance(meta.get("intent"), dict) else {}
+        pname = str(meta.get("project") or intent.get("project") or "").strip()
+        repo: Optional[Path] = project_repos.get(pname) if pname else (unique_repos[0] if len(unique_repos) == 1 else None)
+        if repo is None or not (repo / ".git").exists():
+            continue
+        try:
+            res = subprocess.run(
+                [
+                    "git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null",
+                    "-C", str(repo), "rev-parse", "--verify", "--quiet", f"refs/heads/fleet/{t.id}",
+                ],
+                capture_output=True, text=True, timeout=5, check=False,
+            )
+        except OSError:
+            continue
+        sha = (res.stdout or "").strip()
+        if res.returncode == 0 and sha:
+            heads[t.id] = sha
+    return heads
+
+
 async def recover(store: TaskStore) -> Tuple[List[str], List[str]]:
-    """Recover orphaned *in_progress* tasks by delegating to :meth:`~.TaskStore.requeue_orphans`.
+    """Recover orphaned *in_progress* tasks with replay safety and branch-progress tracking.
 
-    Called at daemon start, before the first tick: any task still ``"in_progress"``
-    when the daemon died has no process any more.  Each returned id is logged at
-    warning level.
-
-    Returns ``(requeued_ids, failed_ids)`` - the same pair returned by
-    :meth:`~.TaskStore.requeue_orphans`.
+    Called at daemon start, before the first tick: checks capability call logs for interrupted
+    non-safe calls (holding those tasks as ``"awaiting_approval"``) and checks whether task
+    branches advanced before incrementing the recovery counter.
     """
-    requeued, failed = await asyncio.to_thread(store.requeue_orphans)
+    cfg = load_config()
+    heads = await asyncio.to_thread(_task_branch_heads, store, cfg)
+    requeued, failed = await asyncio.to_thread(
+        store.requeue_orphans,
+        open_calls_fn=lambda t: inspect_task_open_calls(t.id, root=cfg.root, capabilities=cfg.capabilities),
+        branch_heads=heads,
+    )
     for tid in requeued:
         logger.warning("Recovered orphan %s -> queued", tid)
     for tid in failed:
         logger.warning("Failed orphan %s (too many recoveries)", tid)
+    for t in store.load_tasks():
+        if t.status == "awaiting_approval" and (t.metadata or {}).get("replay_held"):
+            logger.warning("Held orphan %s -> awaiting_approval (outcome unknown / open tool call)", t.id)
     return requeued, failed
 
 

@@ -7,7 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.2] - 2026-11-22
+
+### Added
+- **Crash durability & replay safety (`FLEET-DURABILITY` 3-5):**
+  - Per-attempt IDs and atomic per-attempt receipts (`<spool>/receipts/attempts/<task_id>/<attempt_id>.json`), aggregated into `receipt.attempts` and closed as `interrupted` across both graceful shutdown and crash recovery.
+  - Write-ahead `call_started` intent records in the hash-chained tool-call log before forwarding upstream, `replay = "safe" | "never"` per capability (`"safe"` permitted only when `effects = ["read"]`), and fail-closed `recover()` holding tasks with interrupted non-safe calls or broken hash chains at `awaiting_approval` (`outcome unknown`, including open-call warning in approval brief). Approving a held task in the fleet app appends hash-chained `decision="acknowledged"` outcomes (`core/toolgate.py`, `core/backends.py`), while Matrix `!fleet approve` refuses held tasks and points to the fleet app (`plugins/output_matrix.py`).
+  - Branch-progress recovery counter reset in `executor.recover()` / `TaskStore.requeue_orphans()` when `refs/heads/fleet/<task_id>` advanced since the previous recovery.
+- **Pi Pocket host & upgrade controls (`core/pi_pocket.py`, `contrib/pi-pocket/`, Settings -> Pi Pocket):** on/off/restart controls, 3-day first-seen delayed auto-upgrade timer/service, root polkit rule, and "Install now" skipping the delay for the latest stable release with live progress polling.
+- **Phone app parity & onboarding (`api/static/app/index.html`, `api/app.py`, `core/config.py`, `core/settings.py`):**
+  - "Your apps" companion guide sheet (`GET /api/fleet/apps`, `[fleet] pi_pocket_url` / `FLEET_PI_POCKET_URL`) and dismissible one-time Home hint.
+  - Privateer create, commission, and revoke sheet controls; routine create form (`propose`-scope aware); task archive/restore/filter actions; voice input (`/api/fleet/transcribe`); persisted `on_limit` / `wait_hours` policy across restarts.
+
+### Fixed
+- **Live Home banner & offline state (`api/static/app/index.html`):** reflects live running/held/failed/lane health cleanly and shows `"Not connected"` when the daemon is unreachable; fixed WCAG AA contrast tokens, dialog ARIA container roles, heading order, and mobile wrapping for narrow sheets and `.apps-table` captions.
+- **Routine `propose` scope & Nostr error hints (`core/routines.py`, `core/nostr_notify.py`):** enforces `propose` token restrictions on proposed routines/changes with `via_token` attribution, and redacts local paths/usernames in Nostr DM readiness hints.
+- **Pi Pocket upgrade status comparison (`core/pi_pocket.py`):** compares eligible vs current version via semver (`elig_t > cur_t`) rather than string inequality after an upgrade succeeds.
+
+### Removed
+- **Legacy `dashboard.html` (`src/fleet/api/dashboard.html`):** removed after reaching full parity in the mobile-first PWA shell at `/static/app/`. `/classic` remains as a `307` redirect to `/static/app/` for saved bookmarks.
+
 ### Docs
+- README now includes a concise **What Sovereign Fleet does not do** non-goals section, a **Phone** companion-app guide, and crash durability notes.
 - README and `llms.txt` describe MCP over HTTPS (`/api/mcp`, new in 0.13.0): how a client connects with its own token, what each scope sees, and the origin rule and limits.
 
 ## [0.13.1] - 2026-11-19

@@ -122,23 +122,13 @@ async def test_waybar_status_endpoint():
 @pytest.mark.asyncio
 async def test_dashboard_html_view():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=AUTH) as client:
-        resp = await client.get("/classic")
+        old = await client.get("/classic", follow_redirects=False)
+        assert old.status_code == 307
+        assert old.headers["location"] == "/static/app/"
+        resp = await client.get("/static/app/")
         assert resp.status_code == 200
         html = resp.text
         assert "<title>Sovereign Fleet</title>" in html
-        # Strictly ensure no omarchy branding is present
-        assert "OMARCHY" not in html.upper()
-        # Verify 3 tabs
-        assert "tab-btn-tasks" in html
-        assert "tab-btn-agents" in html
-        assert "tab-btn-settings" in html
-        assert "TASKS" in html
-        assert "AGENTS" in html
-        assert "SETTINGS" in html
-        assert 'id="harness-select"' in html   # its options come from /api/fleet/plugins
-        assert "HEALTH" in html
-        assert "kpi-card" in html
-        assert "AGENT SUCCESS RATE" in html
         # Verify no emojis
         import re
         assert not re.search(r"[\U00010000-\U0010ffff\u2600-\u27bf\u2300-\u23ff\u2b50]", html)
@@ -396,15 +386,12 @@ def test_the_access_log_never_records_a_query_string(capsys):
 
 
 def test_no_inline_handler_builds_a_js_string_from_data():
-    """Text put into onclick="f('${...}')" breaks on a quote or a line break (the help's copy
-    button and re-dispatch did, 2026-10-17). Handlers read data-* attributes instead."""
+    """The phone app uses addEventListener and DOM construction instead of inline onclick strings."""
     import re
     from pathlib import Path
-    html = (Path(__file__).parents[1] / "src/fleet/api/dashboard.html").read_text(encoding="utf-8")
+    html = (Path(__file__).parents[1] / "src/fleet/api/static/app/index.html").read_text(encoding="utf-8")
     handlers = re.findall(r'onclick="([^"]*)"', html)
-    assert handlers
-    bad = [h for h in handlers if re.search(r"'\$\{|JSON\.stringify|\$\{[^}]*text", h)]
-    assert bad == []
+    assert handlers == []
 
 
 def test_the_package_ships_no_currency_or_host_specifics():
@@ -493,6 +480,25 @@ async def test_projects_say_what_a_new_task_can_name(monkeypatch, name, dispatch
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=AUTH) as client:
         data = (await client.get("/api/fleet/projects")).json()
     assert data["dispatchable"] == dispatchable and data["project_required"] is required
+
+
+@pytest.mark.asyncio
+async def test_fleet_apps_endpoint_and_pi_pocket_url_validation(monkeypatch):
+    from pydantic import ValidationError
+    from fleet.core.config import FleetConfig
+
+    with pytest.raises(ValidationError, match="pi_pocket_url"):
+        FleetConfig(fleet={"pi_pocket_url": "javascript:alert(1)"})
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test", headers=AUTH) as client:
+        r0 = await client.get("/api/fleet/apps")
+        assert r0.status_code == 200
+        assert r0.json()["pi_pocket_url"] is None
+
+        monkeypatch.setenv("FLEET_PI_POCKET_URL", "https://pi-pocket.example:8449/")
+        r1 = await client.get("/api/fleet/apps")
+        assert r1.status_code == 200
+        assert r1.json()["pi_pocket_url"] == "https://pi-pocket.example:8449"
 
 
 

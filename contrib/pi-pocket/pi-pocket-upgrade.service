@@ -1,0 +1,25 @@
+[Unit]
+Description=Pi Pocket automated stable upgrade (3-day delay + install-script guard + rollback)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+Environment=PI_POCKET_REPO=/opt/pi-pocket
+Environment=PI_POCKET_DATA=/var/lib/pi-pocket
+Environment=PI_POCKET_BACKUP_DIR=/var/backups/pi-pocket
+Environment=PI_POCKET_STATUS_FILE=/var/lib/pi-pocket-upgrade/status.json
+Environment=PI_POCKET_CONTROL_FILE=@CONTROL_FILE@
+Environment=PI_POCKET_NODE_BIN=@NODE_BIN@
+Environment=PI_POCKET_SERVICE=pi-pocket.service
+Environment=PI_POCKET_HEALTH_BASE=http://127.0.0.1:8797
+Environment=PI_POCKET_DELAY_DAYS=3
+ExecStart=/usr/bin/python3 -I /usr/local/sbin/pi-pocket-upgrade
+UMask=0077
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictRealtime=yes

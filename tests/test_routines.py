@@ -289,11 +289,10 @@ def test_routines_rest_api_roundtrip(tmp_path: Path, monkeypatch):
     assert client.delete("/api/fleet/routines/pilot-daily", headers=hdr).status_code == 200
     assert client.get("/api/fleet/routines", headers=hdr).json()["routines"] == []
 
-    # Dashboard serves the Q11 Routines card and JS handlers
-    dash = client.get("/classic", headers=hdr)
-    assert dash.status_code == 200
-    assert 'id="routines-card"' in dash.text
-    assert "loadRoutines" in dash.text
+    # Phone app serves the Routines schedule screen and API handlers
+    app_page = client.get("/static/app/", headers=hdr)
+    assert app_page.status_code == 200
+    assert "/api/fleet/routines" in app_page.text
 
 
 def test_routine_cli_workflow_local_fallback(tmp_path: Path, monkeypatch):
