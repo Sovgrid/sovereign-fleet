@@ -8,7 +8,7 @@
       {
         "id": "submit",
         "program": "fleet",
-        "args": ["task", "submit", "--json"],
+        "args": ["task", "submit", "--json", "--source", "buzz_plugin"],
         "maxInputBytes": 65536,
         "maxOutputBytes": 65536
       },

@@ -66,6 +66,13 @@ class FleetSettings(BaseModel):
     # Pi Pocket host controls (core/pi_pocket.py): automated upgrades stay enabled by default with
     # a 3-day stability delay after each stable release tag.
     pi_pocket_auto_upgrade: bool = True
+    # Live output (core/live.py): the last lines of a running task in its view. Off: nothing is
+    # written; notes to a running task still work.
+    live_output: bool = True
+    # Ask (core/chat.py): the lane that answers, which must run on this machine, and how long a task's
+    # chat is kept after its last use (0: kept).
+    chat_lane: str = Field("local_qwen", min_length=1, max_length=128)
+    chat_keep_days: Literal[0, 30, 90] = 90
     # Default quota-limit policy for queued/running tasks that do not specify metadata.on_limit.
     on_limit: Literal["switch", "wait", "wait_then_switch"] = "switch"
     wait_hours: float = Field(6.0, gt=0, le=24.0)

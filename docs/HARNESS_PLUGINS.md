@@ -221,6 +221,10 @@ When running agent CLIs unattended in ephemeral worktrees, tools like Goose defa
 
 In unattended headless worker runs, ingesting interactive guidelines causes models to stall, prompt non-existent operators, or output markdown proposals instead of executing tool calls. To prevent this, the Goose harness enforces `CONTEXT_FILE_NAMES="[]"` in headless execution when `profile` is not set, ensuring the task prompt is the sole, unambiguous directive. Custom conventions can be provided directly in the task contract or by specifying a named profile (`profile = "my-profile"` in `fleet.toml`).
 
+### Live output and operator notes
+
+`CliHarness` handles both for every CLI, so a plugin needs no code for them. When the engine passes `task["live"]` (`{"file": ..., "note": ...}`), the harness writes the run's last 40 non-empty output lines every 2 s to `file` (colour codes stripped, secrets masked, each line cut at 240 characters; it reads only the last 256 KB of output, so a CLI that prints a tool result as one long line still shows several lines). If `note` exists, the harness stops the CLI and returns `exit_code` 130 with `steered: true`; it leaves the note file for the engine, which takes it and runs the same step again in the same worktree with the note in its prompt. Settings > Live output off removes `file` from the payload; `note` stays. Without `task["live"]` nothing changes.
+
 ---
 
 ## 5. Packaging and Entry Point Registration

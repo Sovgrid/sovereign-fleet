@@ -168,6 +168,8 @@ def build_review_task(
         "repo_gate": False,
         "gateguard_pre_action": False,
     }
+    if task.metadata.get("review_before_landing") or (task.metadata.get("intent") or {}).get("review_before_landing"):
+        metadata["review_before_landing"] = True
     if is_sensitive(task.metadata):  # the prompt above carries the task's text
         metadata["is_sensitive"] = True
 
@@ -230,6 +232,8 @@ def build_autofix_task(
         "project": project_name,
         "allowed_paths": paths,
     }
+    if review_task.metadata.get("review_before_landing") or (review_task.metadata.get("intent") or {}).get("review_before_landing"):
+        metadata["review_before_landing"] = True
     if is_sensitive(review_task.metadata):
         metadata["is_sensitive"] = True
 

@@ -206,6 +206,14 @@ def _run_nak(
     return res.stdout.strip()
 
 
+def _nip44_encrypt(plaintext: str, secret_key: str, recipient_pubkey: str) -> str:
+    from fleet.core import nip44
+    try:
+        return nip44.encrypt(plaintext, nip44.conversation_key(nip44.secret_key_hex(secret_key), recipient_pubkey))
+    except ValueError as e:
+        raise NostrNotifyError(f"NIP-44 encryption failed ({e})") from None
+
+
 def _rumor_id(rumor: Mapping[str, Any]) -> str:
     serial = json.dumps(
         [0, rumor["pubkey"], rumor["created_at"], rumor["kind"], rumor["tags"], rumor["content"]],
@@ -246,10 +254,8 @@ def build_nip17_gift_wrap(
     rumor["id"] = _rumor_id(rumor)
     rumor_json = json.dumps(rumor, separators=(",", ":"), ensure_ascii=False)
 
-    # NIP-44 v2 encrypt rumor -> recipient (never --nip04, key only in NOSTR_SECRET_KEY env)
-    rumor_ct = _run_nak(nak, ["encrypt", "-p", recipient_pubkey, rumor_json], secret_key=sender_sec)
-    if "?iv=" in rumor_ct:
-        raise NostrNotifyError("refusing NIP-04 ciphertext in seal")
+    # NIP-44 v2 in-process: `nak encrypt` took the plaintext as an argument, readable in /proc.
+    rumor_ct = _nip44_encrypt(rumor_json, sender_sec, recipient_pubkey)
 
     seal_ts = ts_now - secrets.randbelow(TIMESTAMP_JITTER_SECONDS)
     seal_in = json.dumps(
@@ -266,9 +272,7 @@ def build_nip17_gift_wrap(
     ephemeral_sec = _run_nak(nak, ["key", "generate"])
     try:
         seal_json = json.dumps(seal_obj, separators=(",", ":"), ensure_ascii=False)
-        seal_ct = _run_nak(nak, ["encrypt", "-p", recipient_pubkey, seal_json], secret_key=ephemeral_sec)
-        if "?iv=" in seal_ct:
-            raise NostrNotifyError("refusing NIP-04 ciphertext in gift wrap")
+        seal_ct = _nip44_encrypt(seal_json, ephemeral_sec, recipient_pubkey)
 
         wrap_ts = ts_now - secrets.randbelow(TIMESTAMP_JITTER_SECONDS)
         expiration = str(ts_now + EXPIRATION_SECONDS)

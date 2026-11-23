@@ -29,7 +29,8 @@ from fleet import __version__
 from fleet.api import auth, mcp_http, scopes, background
 from fleet.core import lane_health, memlimit, sandbox, risk as _risk
 from fleet.core import budget
-from fleet.core.backends import BackendError, LocalBackend, make_backend
+from fleet.core import stats
+from fleet.core.backends import AGENT_SOURCES, BackendError, LocalBackend, make_backend
 from fleet.core.capability import list_task_drafts
 from fleet.core.config import get_credential_plugin, load_config
 from fleet.core.models import compatible_harnesses_for_model
@@ -393,6 +394,36 @@ def set_pi_pocket_settings(req: PiPocketSettingsRequest):
     return view
 
 
+@app.get("/api/fleet/stats")
+def get_track_record(days: int = 14):
+    """How often tasks passed and how long they took, overall, with a test, and per lane; `previous`
+    holds the same numbers for the period of equal length just before, so the app can show the trend."""
+    from fleet.core import stats
+    days = max(1, min(int(days), 90))
+    tasks, now = backend().list_tasks(), time.time()
+    rec = stats.track_record(tasks, since=now - days * 86400)
+    before = stats.track_record(tasks, since=now - 2 * days * 86400, until=now - days * 86400)
+    return {"days": days, **rec, "previous": {"all": before["all"], "gated": before["gated"]}}
+
+
+@app.get("/api/fleet/harness/goose")
+def get_goose_update():
+    """Installed and newest stable goose (admin-only; the app's update button)."""
+    from fleet.core import harness_update
+    return harness_update.status(busy=bool(backend().metrics().get("running")))
+
+
+@app.post("/api/fleet/harness/goose/update")
+def post_goose_update():
+    """Install the newest stable goose after digest and provenance payload checks; refused while a task runs."""
+    from fleet.core import harness_update
+    is_busy = lambda: bool(backend().metrics().get("running"))  # noqa: E731
+    try:
+        return harness_update.update(busy=is_busy(), is_busy=is_busy)
+    except harness_update.HarnessUpdateError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+
+
 @app.post("/api/fleet/pi-pocket/upgrade", status_code=202)
 def trigger_pi_pocket_upgrade():
     """Trigger the root `pi-pocket-upgrade.service` oneshot asynchronously."""
@@ -501,6 +532,18 @@ def revoke_privateer_item(name: str):
 
 # JSON compresses about tenfold; the task list and the roster are the large ones.
 app.add_middleware(GZipMiddleware, minimum_size=2048)
+
+
+@app.middleware("http")
+async def revalidate_app_shell(request: Request, call_next):
+    """The app page and its service worker must never come stale out of a browser cache: without
+    Cache-Control a browser guesses a lifetime, and a phone kept showing the old app after an update
+    (2026-11-22). `no-cache` still lets it reuse the copy after a cheap ETag check."""
+    response = await call_next(request)
+    path = request.url.path
+    if path in ("/static/app/", "/static/app/index.html", "/static/sw.js"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 @app.middleware("http")
@@ -716,6 +759,7 @@ class TaskResponse(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     autopsy: Optional[Dict[str, Any]] = None
     brief: Optional[Dict[str, Any]] = None      # tasks awaiting approval: why, yes/no, risk (core/brief.py)
+    cause: Optional[str] = None                 # a failed task: not_started, infrastructure or agent (core/stats.py)
 
 
 def _brief_for(t: FleetTask, deps_map: Optional[Dict[str, List[str]]] = None) -> Optional[Dict[str, Any]]:
@@ -742,7 +786,7 @@ def _response(t: FleetTask, deps_map: Optional[Dict[str, List[str]]] = None) -> 
                         lane=t.lane, depends_on=t.depends_on, result=t.result,
                         source=source if isinstance(source, str) else None,
                         issue={k: issue.get(k) for k in ("repo", "number", "url")} if issue else None,
-                        metadata=meta, autopsy=autopsy, brief=_brief_for(t, deps_map))
+                        metadata=meta, autopsy=autopsy, brief=_brief_for(t, deps_map), cause=stats.failure_cause(t))
 
 
 # Words that make a safe_auto task wait for approval. A convenience filter on the task text,
@@ -833,13 +877,17 @@ def enqueue_task(req: EnqueueTaskRequest, background_tasks: BackgroundTasks, req
 def _limit_to_scope(req: EnqueueTaskRequest, request: Request) -> EnqueueTaskRequest:
     """A `propose` client may only ask: its task always waits for the operator, and it may not pick
     a lane or harness or widen what the run reaches (the daemon enforces what the MCP front door
-    asks for)."""
+    asks for). Any non-operator token also carries `via_token` so its tasks wait for a review."""
     scope = getattr(request.state, "fleet_scope", "admin")
+    who = getattr(request.state, "fleet_client", "")
+    meta = dict(req.metadata or {})
+    named_token = bool(who and who != "operator") or not scopes.at_least(scope, "admin")
+    if named_token:
+        meta["via_token"] = who or scope
     if scopes.at_least(scope, "operate"):
-        return req
+        return req.model_copy(update={"metadata": meta}) if named_token else req
     if req.lane:
         raise HTTPException(status_code=403, detail="a propose token may not pick a lane")
-    meta = dict(req.metadata or {})
     if meta.get("harness") not in (None, "", "auto"):
         raise HTTPException(status_code=403, detail="a propose token may not pick a harness")
     intent = meta.get("intent")
@@ -854,8 +902,8 @@ def _limit_to_scope(req: EnqueueTaskRequest, request: Request) -> EnqueueTaskReq
     for key in ("capabilities", "allowed_domains", "privateer", "escalate_to", "assigned_lane", "model"):
         meta.pop(key, None)
     meta["require_approval"] = True
-    meta.setdefault("source", "front_door")
-    meta["via_token"] = getattr(request.state, "fleet_client", "")
+    if meta.get("source") not in AGENT_SOURCES:
+        meta["source"] = "front_door"
     return req.model_copy(update={"metadata": meta})
 
 
@@ -882,8 +930,10 @@ def _enqueue(req: EnqueueTaskRequest, background_tasks: BackgroundTasks) -> Task
     # operator whatever the autonomy tier (the MCP front door sets it on every task it queues).
     if req.metadata.get("require_approval") is True:
         needs_approval = True
+    meta_src = req.metadata.get("source")
+    source = meta_src if meta_src in AGENT_SOURCES else ("front_door" if req.metadata.get("via_token") else "sovereign_fleet")
     try:
-        task = backend().enqueue(req.text, req.lane, req.depends_on, req.metadata, needs_approval)
+        task = backend().enqueue(req.text, req.lane, req.depends_on, req.metadata, needs_approval, source=source)
     except BackendError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     # Start a background risk assessment for approval-waiting tasks when [approval] is configured.
@@ -900,6 +950,106 @@ def get_task(task_id: str):
     if task is None:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
     return _response(task)
+
+
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4000)
+    task_id: Optional[str] = Field(None, max_length=128)
+
+
+@app.post("/api/fleet/chat")
+async def post_chat(req: ChatRequest):
+    """Ask: an answer from the local model about the fleet, or about one task, streamed as events
+    ({"t": text} pieces, then {"done": true}, or {"error": why}). Read-only: proposals come back as
+    blocks the app turns into cards; only the operator's tap acts. A task's chat is kept with it."""
+    from fleet.core import chat, lane_health
+    from fleet.core import live as _live
+    s, cfg = load_settings(), load_config()
+    try:
+        base = chat.endpoint(cfg, s.chat_lane)
+    except chat.ChatError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    if req.task_id:
+        task = backend().get_task(req.task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail=f"Task {req.task_id} not found")
+        facts = chat.task_facts(task, (_live.read_tail(req.task_id) or {}).get("lines") or [])
+        past = chat.history(req.task_id)
+    else:
+        ok = [n for n, r in lane_health.lane_records(cfg).items() if r.get("status") == "ok"]
+        facts, past = chat.overview(backend().list_tasks(), cfg.projects.keys(), ok), []
+    msgs = chat.messages(req.message, facts, past)
+
+    async def events():
+        out: List[str] = []
+        try:
+            async for piece in chat.answer(base, msgs):
+                out.append(piece)
+                yield f"data: {json.dumps({'t': piece})}\n\n"
+        except chat.ChatError as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            return
+        if req.task_id:
+            chat.append(req.task_id, "user", req.message)
+            chat.append(req.task_id, "assistant", "".join(out))
+            chat.cleanup(s.chat_keep_days)
+        yield 'data: {"done": true}\n\n'
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/fleet/chat/{task_id}")
+def get_chat(task_id: str):
+    """What was asked about a task and answered, oldest first."""
+    from fleet.core import chat
+    return {"task_id": task_id, "turns": chat.history(task_id)}
+
+
+class TaskNoteRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=2000)
+
+
+@app.get("/api/fleet/tasks/{task_id}/live")
+def get_task_live(task_id: str):
+    """The last output lines of a running task (secrets masked) and its current step."""
+    from fleet.core import live
+    task = backend().get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    enabled = load_settings().live_output
+    tail = live.read_tail(task_id) if task.status == "in_progress" and enabled else None
+    current = (task.metadata or {}).get("current") or {}
+    return {"task_id": task_id, "status": task.status, "current": current, "enabled": enabled,
+            "notes": (task.metadata or {}).get("operator_notes") or [],
+            "updated": (tail or {}).get("updated"), "lines": (tail or {}).get("lines") or []}
+
+
+@app.post("/api/fleet/tasks/{task_id}/note")
+def post_task_note(task_id: str, req: TaskNoteRequest):
+    """A note to a local task that has not finished (admin-only, capped at MAX_STEERS)."""
+    from fleet.core import live
+    from fleet.core.engine import MAX_STEERS
+    local_task = task_store.get_task(task_id)
+    task = local_task or backend().get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    if local_task is None:
+        raise HTTPException(status_code=409, detail="Notes are only supported for tasks on the local queue")
+    existing = (local_task.metadata or {}).get("operator_notes") or []
+    live_notes = [n for n in existing if not (isinstance(n, dict) and n.get("retry"))]
+    if len(live_notes) >= MAX_STEERS:
+        raise HTTPException(status_code=409, detail=f"Note limit ({MAX_STEERS}) reached for task {task_id}")
+    if task.status == "in_progress":
+        try:
+            live.post_note(task_id, req.text)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        return {"task_id": task_id, "delivered": "restarting the current step with your note"}
+    if task.status in ("queued", "awaiting_approval"):
+        notes = [*existing, {"at": time.time(), "text": req.text.strip()}]
+        task_store.update_metadata(task_id, {"operator_notes": notes})
+        return {"task_id": task_id, "delivered": "added to the task before it starts"}
+    raise HTTPException(status_code=409, detail=f"Task {task_id} is {task.status}; a note only reaches a task that has not finished")
 
 
 @app.get("/api/fleet/tasks/{task_id}/receipt")
@@ -1000,10 +1150,62 @@ def cancel_task(task_id: str):
     return _act("cancel", task_id)
 
 
+class RetryRequest(BaseModel):
+    hint: str = Field("", max_length=2000)
+
+
+RETRYABLE = ("failed", "cancelled", "skipped", "blocked")
+
+
 @app.post("/api/fleet/tasks/{task_id}/retry", response_model=TaskResponse)
-def retry_task(task_id: str):
-    """Run a failed, cancelled or skipped task again."""
+def retry_task(task_id: str, request: Request, req: Optional[RetryRequest] = None):
+    """Run a failed, cancelled or skipped task again. A hint joins its prompt like an operator note
+    (admin-only, capped at MAX_STEERS, local queue only; the grid runner builds its own prompt)."""
+    from fleet.core.engine import MAX_STEERS
+    hint = (req.hint if req else "").strip()
+    if hint:
+        if not scopes.at_least(getattr(request.state, "fleet_scope", "admin"), "admin"):
+            raise HTTPException(status_code=403, detail="a retry hint needs an admin token")
+        local = task_store.get_task(task_id)
+        if local is None:
+            raise HTTPException(status_code=409, detail="A hint reaches only tasks on the local queue; retry without one")
+        if local.status not in RETRYABLE:   # checked first, so a refused retry leaves no stray note
+            raise HTTPException(status_code=400, detail=f"Task {task_id} is {local.status}; only a finished task runs again")
+        existing = (local.metadata or {}).get("operator_notes") or []
+        retry_notes = [n for n in existing if isinstance(n, dict) and n.get("retry")]
+        if len(retry_notes) >= MAX_STEERS:
+            raise HTTPException(status_code=409, detail=f"Retry hint limit ({MAX_STEERS}) reached for task {task_id}")
+        notes = [*existing, {"at": time.time(), "text": hint, "retry": True}]
+        task_store.update_metadata(task_id, {"operator_notes": notes})
     return _act("retry", task_id)
+
+
+@app.post("/api/fleet/tasks/{task_id}/discard", response_model=TaskResponse)
+async def discard_task(task_id: str):
+    """Put a task away that will not run again: one waiting for approval is rejected first, then it is
+    archived (it still counts in the Track record). On the local queue its work branch is deleted, so
+    dead fleet/<task> branches do not pile up; a completed task keeps its branch (it may wait for review)."""
+    b = backend()
+    task = b.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
+    under_review = ((task.result or {}).get("landing") or {}).get("status") == "pr_opened"   # its PR needs the branch
+    if task.status == "awaiting_approval":
+        _act("reject", task_id)
+    elif task.status not in RETRYABLE:
+        raise HTTPException(status_code=409, detail=f"Task {task_id} is {task.status}; only a failed, cancelled or held task is discarded")
+    done = _act("archive", task_id)
+    local = task_store.get_task(task_id)
+    if local is not None and not under_review:
+        meta = local.metadata or {}
+        found = load_config().resolve_project(str((meta.get("intent") or {}).get("project") or meta.get("project") or ""))
+        if found:
+            from fleet.core.worktree import WorktreeManager
+            wm = WorktreeManager(str(found[1]))
+            if (wm.base_dir / task_id).exists():   # git keeps a branch that a worktree still has checked out
+                await wm.remove_worktree(task_id)
+            await wm.delete_branch(task_id)
+    return done
 
 
 @app.post("/api/fleet/tasks/{task_id}/delegate-local", response_model=TaskResponse)

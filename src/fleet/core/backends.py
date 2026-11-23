@@ -105,7 +105,7 @@ class LocalBackend:
 
     def enqueue(self, text: str, lane: Optional[str], depends_on: List[str],
                 metadata: Dict[str, Any], needs_approval: bool, source: str = "sovereign_fleet") -> FleetTask:
-        metadata = {"source": source, **_with_project_privacy(metadata)}
+        metadata = {"source": source, **_with_project_privacy(mark_agent_origin(metadata, source, needs_approval))}
         intent = metadata.get("intent")
         if isinstance(intent, dict):
             for key in ("project", "allowed_paths", "category", "acceptance_criteria", "is_sensitive"):
@@ -608,7 +608,25 @@ _GRID_SUCCESS = ("success", "completed", "merged", "landed", "pr_merged")
 _INTENT_KEYS = ("title", "summary", "category", "project", "assigned_lane", "allowed_paths",
                 "gate_cmd", "acceptance_criteria", "complexity", "target_branch", "base_ref",
                 "tier", "is_sensitive", "summary_de", "harness_requested", "allowed_lanes",
-                "allowed_domains", "capabilities")
+                "allowed_domains", "capabilities", "review_before_landing")
+
+# Where a task an agent proposed comes from: Pi Pocket and other MCP front doors, the Buzz plugin.
+AGENT_SOURCES = frozenset({"front_door", "buzz_plugin"})
+
+
+def mark_agent_origin(metadata: Dict[str, Any], source: str, needs_approval: bool) -> Dict[str, Any]:
+    """An agent's task (an agent source, a scoped token, or an issue from an author the intake
+    does not trust) lands only after the operator reviewed the result: approving it lets it run,
+    not merge (2026-11-22: a Buzz agent's task was approved and merged into main)."""
+    agent = (source in AGENT_SOURCES or metadata.get("source") in AGENT_SOURCES
+             or bool(metadata.get("via_token"))
+             or (source == "issue_intake" and needs_approval))
+    if not agent:
+        return metadata
+    marked = {**metadata, "review_before_landing": True}
+    if isinstance(marked.get("intent"), dict):
+        marked["intent"] = {**marked["intent"], "review_before_landing": True}
+    return marked
 
 
 _SUBSCRIPTION_PROVIDERS = ("antigravity", "cursor", "microsoft", "copilot", "anthropic", "claude")
@@ -797,6 +815,15 @@ class GridBackend:
         for key in ("autopsy", "tried_lanes", "runtime_s", "handover"):
             if t.get(key):
                 result[key] = t[key]
+        if not result.get("runtime_s"):
+            comp = raw_result.get("completed_at") or t.get("completed_at")
+            if comp and t.get("started_at"):
+                try:
+                    dt = float(comp) - float(t["started_at"])
+                    if dt > 0:
+                        result["runtime_s"] = round(dt, 2)
+                except (TypeError, ValueError):
+                    pass
         result.update(summarize_runs(t.get("usage")))
         try:
             created = float(t.get("created_at") or 0)
@@ -848,8 +875,11 @@ class GridBackend:
                     raise BackendError(f"depends_on names an unknown task: {id}")
                 if id not in {t["id"] for t in self.d.load_tasks()}:
                     raise BackendError(f"depends_on names an unknown task: {id}")
-        metadata = _with_project_privacy(metadata)
+        metadata = _with_project_privacy(mark_agent_origin(metadata, source, needs_approval))
         intent = metadata.get("intent")
+        if metadata.get("review_before_landing") and intent is None:
+            raise BackendError("an agent's task on the grid runner needs a project (metadata.intent), so its "
+                               "work can be held for review before it lands")
         sensitive = is_sensitive(metadata)
         if sensitive and intent is None:
             raise BackendError("a sensitive task on the grid runner needs metadata.intent: triage does not "

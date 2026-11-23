@@ -83,7 +83,7 @@ def test_slice_one_screens_and_brief(html):
 def test_keeps_the_approved_look(html):
     assert ":root" in html and "prefers-color-scheme" in html
     assert "function glyph(" in html and "data-glyph" in html and "data-glance" in html   # glyphs are drawn from live data
-    assert 'class="brand" src="../icon.svg"' in html and 'class="topbar-logo"' in html
+    assert 'class="brand"' in html and 'class="topbar-logo"' in html
     assert not re.search("[\U0001F300-\U0001FAFF\U00002600-\U000027BF]", html)
     assert re.search(r'<meta\s+name="viewport"[^>]*width=device-width', html)
 
@@ -398,3 +398,245 @@ def test_privateer_create_commission_and_revoke_sheet(html):
         '"DELETE"',
     ):
         assert token in priv_src, f"missing {token} in privateers sheet"
+
+
+def test_home_shows_three_tiles_and_warns_about_lanes_only_when_none_can_run(html):
+    """Home answers: what needs me, what runs, how well work passes. A retired free lane is not news
+    when 30 others run (it kept "1 lane down" on Home for good); it is listed under Lanes and health."""
+    js = _script(html)
+    assert "all up" not in js and "g-spend" not in html
+    assert 'data-glance="lanes"' not in html and 'data-glance="next"' not in html
+    assert 'data-glance="passed" data-open="stats"' in html and 'id="g-passed"' in html
+    assert "repeat(3, minmax(0, 1fr))" in html
+    health = js[js.index("function renderHealth("):js.index("function renderHealth(") + 1600]
+    assert '"no lane can run"' in health and "!Number(sum.ok)" in health and "lane down" not in health
+    assert "TASKS.filter(isRunning)" in health
+    assert '$("#g-running").textContent = n(isRunning)' in js
+    assert 't.raw.status === "queued"' in js[js.index("function isRunning("):js.index("function isRunning(") + 200]
+    assert "<h2>Running and queued</h2>" in html
+    side = js[js.index("function refreshSide("):js.index("function refreshSide(") + 400]
+    assert '"/api/fleet/stats?days=7"' in side and "d.gated" in side and "/api/fleet/routines" not in side
+
+
+def test_no_sample_figures_on_real_screens(html):
+    """The schedule carried a hidden prototype line "Spend today: $0.31 of $1.50"; sample figures do not belong in the shell."""
+    assert 'id="spend-label"' not in html and '"#spend-label"' not in _script(html)
+
+
+def test_menu_is_one_list_where_every_entry_says_what_it_is_for(html):
+    start = html.index('id="mods-menu"')
+    menu = html[start:html.index("</ul>", start)]
+    assert 'class="list inset" id="mods-menu"' in html and "menu-tiles" not in html
+    entries = menu.count("<li data-module=")
+    assert entries == 11 and menu.count('class="sub"') == entries          # each one explained
+    assert 'data-module="tasks"' not in menu and 'data-module="routines"' not in menu   # bottom bar and Routines have them
+    js = _script(html)
+    assert '["ledger", "Usage", "menu"]' in js and 'showSheet("Usage"' in js
+    assert 'fmtTokens(lgTok) + " tokens"' in js and '" ready"' in js
+
+
+def test_cancel_is_a_confirmed_danger_action_and_queued_says_so(html):
+    js = _script(html)
+    show = js[js.index("function showTask("):js.index("function showTask(") + 2500]
+    assert 'isRunning(t) ? "Running" : "Queued"' in show
+    assert 'pr.classList.toggle("danger", t.state === "running")' in show
+    assert "Tap again to cancel" in show and 'pr.dataset.sure !== "1"' in show
+    assert 'isRunning(t) ? "at work" : "waiting for a lane"' in js
+
+
+def test_finished_tasks_show_a_check_not_an_empty_box(html):
+    js = _script(html)
+    g = js[js.index("function glyph("):js.index("function laneChip(")]
+    assert 'kind === "unseen" || kind === "seen"' in g and "M2.500 8.500L6.500 12.500L13.500 3.500" in g
+    assert 'kind === "queued"' in g
+
+
+def test_goose_can_be_updated_from_its_plugin_sheet(html):
+    js = _script(html)
+    assert 'if (p.id === "goose_harness") gooseUpdate(sub);' in js
+    fn = js[js.index("function gooseUpdate("):js.index('LIVE_SHEETS["pi-pocket"]')]
+    assert '"/api/fleet/harness/goose"' in fn and '"/api/fleet/harness/goose/update"' in fn
+    assert "j.busy" in fn and "textContent" in fn and "innerHTML" not in fn
+
+
+def test_track_record_sheet_reads_the_shared_numbers(html):
+    js = _script(html)
+    assert 'data-open="stats"' in html and '["track-record", "Track record", "menu"]' in js
+    fn = js[js.index("  stats: function ()"):js.index("  ledger: function ()")]
+    assert '"/api/fleet/stats?days="' in fn and "innerHTML" not in fn
+    assert 'class: "big"' in fn and "d.previous" in fn and "Rejected and cancelled tasks never ran" in fn
+    assert 'r.lane !== "unknown"' in fn and "infoRow(laneWords(r.lane)" in fn and "row(dot, r.lane" not in fn   # rows show, they do not act
+
+
+def test_appearance_offers_four_palettes_and_names_themes_by_their_look(html):
+    start = html.index('id="palette-grid"')
+    assert html[start:html.index("</div>", start)].count("data-palette=") == 4
+    assert 'data-palette="auto"' in html[start:html.index("</div>", start)]
+    more = html.index('id="palette-more"')
+    assert html[more:html.index("</div>", more)].count("data-palette=") == 6
+    # the click handler acts only inside a [data-setting] box; without it the six did nothing
+    assert 'id="palette-more" data-setting="colors"' in html
+    assert ">Rounded<" in html and ">Square<" in html and ">Flat<" in html and ">Ledger</button>" not in html
+    assert 'class="dots"' not in html and '$$(".choice[data-palette]")' in _script(html)
+
+
+def test_the_app_shell_is_revalidated_not_cached_blindly():
+    from fleet.api.app import app
+    with TestClient(app) as client:
+        for path in ("/static/app/", "/static/app/index.html", "/static/sw.js"):
+            r = client.get(path)
+            assert r.status_code == 200 and r.headers.get("cache-control") == "no-cache", path
+
+
+def test_running_task_shows_live_output_and_takes_a_note(html):
+    js = _script(html)
+    assert 'id="task-live"' in html and 'id="live-lines"' in html and 'id="live-note"' in html
+    fn = js[js.index("function showLive("):js.index("function send_note(")]
+    assert '"/live"' in fn and "pre.textContent" in fn and "innerHTML" not in fn
+    assert '"/note"' in js[js.index("function send_note("):js.index("function send_note(") + 200]
+    assert "showLive(t);" in js[js.index("function showTask("):js.index("function showLive(")]
+
+
+def test_live_output_can_be_switched_off_in_settings(html):
+    js = _script(html)
+    assert 'data-open="live-output"' in html and '["live-output", "Live output", "settings"]' in js
+    fn = js[js.index('"live-output": function ()'):js.index("  autonomy: function ()")]
+    assert "live_output: sw.checked" in fn
+    assert "d.enabled === false" in js[js.index("function showLive("):js.index("function send_note(")]
+
+
+def test_show_live_only_shows_tail_and_polls_while_actively_running(html):
+    js = _script(html)
+    fn = js[js.index("function showLive("):js.index("function send_note(")]
+    assert "pre.hidden = !isRunning(t);" in fn
+    assert "if (d_live() && isRunning(t)) liveTimer = setTimeout(tick, 3000);" in fn
+    assert "if (isRunning(t)) tick();" in fn
+
+
+def test_access_lists_only_tokens_that_still_open_the_fleet(html):
+    """Six revoked test tokens were listed with a green dot next to the three live ones."""
+    js = _script(html)
+    live = js[js.index("function tokenLive("):js.index("function tokenLive(") + 200]
+    assert "t.revoked_at" in live and "t.expires_at" in live
+    sheet = js[js.index("function openAccess("):js.index("function openToken(")]
+    assert "list.filter(tokenLive)" in sheet and "Revoked or expired (" in sheet
+    assert 'row(t.expired ? "" : "ok"' not in sheet          # the old one coloured every listed token green
+    assert "filter(tokenLive).length" in js                   # the Settings line counts live tokens only
+
+
+def test_failed_tasks_say_why_and_offer_retry_and_discard(html):
+    js = _script(html)
+    cause = js[js.index("function causeOf("):js.index("function causeOf(") + 600]
+    assert "root_cause" in cause and '"not_started"' in cause and "Fix the configuration, then retry." in cause
+    retry = js[js.index("function retryTask("):js.index("function discardTask(")]
+    assert "isGrid(t)" in retry and '{ hint: hint.value.trim() }' in retry and "Hint for the next try (optional)" in retry
+    discard = js[js.index("function discardTask("):js.index("function failedActions(")]
+    assert "5000" in discard and '"Undo"' in discard and '"/discard"' in discard
+    assert "!DISCARDING[t.id]" in js                                    # a refresh does not draw it back in
+    lists = js[js.index("function renderLists("):js.index("function renderLists(") + 900]
+    assert 't.state === "failed"' in lists and "failedActions(t)" in lists and "causeOf(t)" in lists
+    view = js[js.index("function showTask("):js.index("function showTask(") + 2600]
+    assert "retryTask(t)" in view and "discardTask(t)" in view and '"#task-cause"' in view
+    assert 'id="task-cause"' in html and '.toast[data-show="true"] .btn { pointer-events: auto;' in html
+
+
+def test_toast_accessibility_failed_action_labels_chat_scroll_and_no_prototype_remnants(html):
+    js = _script(html)
+    assert 'id="chat-log" role="log" aria-live="polite" tabindex="0"' in html
+    assert "visibility: hidden;" in html and '.toast[data-show="true"] { opacity: 1; transform: translate(-50%, 0); visibility: visible;' in html
+    assert ".toast[data-show=\"true\"] .btn { pointer-events: auto; margin-inline-start: .75rem; min-height: 44px; }" in html
+    discard = js[js.index("function discardTask("):js.index("function failedActions(")]
+    assert "focusin" in discard and "mouseenter" in discard and "t.textContent = \"\"" in js
+    acts = js[js.index("function failedActions("):js.index("function send_note(")]
+    assert '"Retry: " + t.title' in acts and '"Ask: " + t.title' in acts and '"Discard: " + t.title' in acts
+    assert "function drawQr(" not in js and "var SHEETS =" not in js and "var HARD =" not in js
+    assert "Now 14:20" not in html and "Fix the blog's link check" not in html and ">2</span></button>" not in html
+    assert "with no new message" in js
+
+
+def test_track_record_splits_failures_and_menu_puts_quality_and_cost_together(html):
+    js = _script(html)
+    fn = js[js.index("  stats: function ()"):js.index("  ledger: function ()")]
+    assert "g.causes" in fn and "g.not_started" in fn and "fix the configuration" in fn
+    start = html.index('id="mods-menu"')
+    menu = html[start:html.index("</ul>", start)]
+    order = [m.split('"')[0] for m in menu.split('data-module="')[1:]]
+    assert order[:3] == ["track-record", "ledger", "budgets"]
+
+
+def test_progress_is_phase_and_time_never_a_guessed_percent(html):
+    js = _script(html)
+    assert '[["waiting", "Waiting"], ["agent", "Agent"], ["tests", "Tests"], ["landing", "Landing"]]' in js
+    ph = js[js.index("function phaseOf("):js.index("function runMinutes(")]
+    assert '(raw.metadata || {}).phase' in ph and '"verifying"' in ph            # local phase, grid status
+    assert "runWords(t, lane)" in js and '", slower than usual"' in js
+    slow = js[js.index("function slowFor("):js.index("function slowFor(") + 200]
+    assert "LANE_P90[lane]" in slow and "runMinutes(raw) > p90" in slow           # only past the lane's p90
+    side = js[js.index("function refreshSide("):js.index("function refreshSide(") + 700]
+    assert '"/api/fleet/stats?days=30"' in side and "r.p90_min" in side
+    view = js[js.index("function renderPhases("):js.index("function renderPhases(") + 1200]
+    assert 'aria-current", "step"' in view and "Taking longer than usual" in view
+    assert 'id="task-phases"' in html and "60000" in js
+
+
+def test_ask_is_the_real_chat_not_the_prototype(html):
+    js = _script(html)
+    assert "chatReply(" not in js and "chatCost" not in html and 'id="chat-model"' not in html   # canned replies gone
+    send = js[js.index("function chatSend("):js.index("function openChat(")]
+    assert '"/api/fleet/chat"' in send and "getReader()" in send and "CHAT.busy" in send
+    assert "m.textContent = chatText(all)" in send and "innerHTML" not in send                 # untrusted: text only
+    cards = js[js.index("function chatCards("):js.index("function chatSend(")]
+    assert 'CHAT.task.raw.cause !== "not_started"' in cards and "(python3? -m )?pytest" in cards
+    assert "known.indexOf(p.project) < 0" in cards and '"/api/fleet/tasks"' in cards and "retryTask(t, hint)" in cards
+    opn = js[js.index("function openChat("):js.index("function closeChat(")]
+    assert "c.hidden = false" in opn and '"/api/fleet/chat/"' in opn
+    assert '$("#chat-open").hidden = true;' not in js                                        # the header button shows
+    assert 'id="task-ask"' in html and 'id="approval-ask"' in html and "openChat(t)" in js
+    assert '["task-chats", "Task chats", "settings"]' in js and "chat_keep_days" in js
+
+
+def test_logo_is_one_colour_inline_svg_with_mask_and_home_icons_match(html):
+    import struct
+    from pathlib import Path
+
+    assert '<img class="topbar-logo"' not in html and '<img class="brand"' not in html
+    assert '<svg class="brand" role="img" aria-label="Sovereign Fleet"' in html
+    assert '<svg class="topbar-logo" role="img" aria-label="Sovereign Fleet"' in html
+    assert html.count('href="#i-fleet-logo"') >= 2
+    assert '<mask id="m-fleet-logo"' in html and 'mask="url(#m-fleet-logo)"' in html
+    sym = html[html.index('<symbol id="i-fleet-logo"'):html.index('</symbol>', html.index('<symbol id="i-fleet-logo"'))]
+    assert 'currentColor' in sym
+    assert '.topbar-logo { display: block; width: 28px; height: 28px; flex: none; color: var(--text); }' in html
+    assert '.nav .brand { display: none; color: var(--text); }' in html
+
+    static_dir = Path(__file__).resolve().parents[1] / "src" / "fleet" / "api" / "static"
+    icon_svg = (static_dir / "icon.svg").read_text(encoding="utf-8")
+    assert '<mask' in icon_svg and '#0b0d12' in icon_svg and '#f2f6f9' in icon_svg
+    assert '#8fd11a' not in icon_svg and '#5f9900' not in icon_svg
+    for fname, expected in (("icon-192.png", (192, 192)), ("icon-512.png", (512, 512))):
+        raw = (static_dir / fname).read_bytes()
+        assert raw[:8] == b"\x89PNG\r\n\x1a\n" and raw[12:16] == b"IHDR"
+        assert struct.unpack(">II", raw[16:24]) == expected
+
+
+def test_icon_urls_carry_a_version_so_the_new_logo_replaces_cached_ones(html):
+    """Same file names as the old logo: without a new URL, browsers and installed shortcuts keep the old icon."""
+    import json
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1] / "src" / "fleet" / "api"
+    assert 'href="../icon.svg?v=2"' in html and 'href="../icon-192.png?v=2"' in html
+    icons = [i["src"] for i in json.loads((root / "manifest.json").read_text())["icons"]]
+    assert icons and all(src.endswith("?v=2") for src in icons)
+    sw = (root / "static" / "sw.js").read_text()
+    assert "'/static/icon.svg?v=2'" in sw and "sovereign-fleet-v6" not in sw
+
+
+def test_chat_proposal_card_hardening(html):
+    js = _script(html)
+    cards = js[js.index("function chatCards("):js.index("function chatSend(")]
+    assert "!isGrid(CHAT.task)" in cards
+    assert "require_approval: true" in cards and 'source: "front_door"' in cards
+    assert ".slice(0, 600)" in cards
+    assert "{ text: text, metadata:" in cards
+    assert "btn.disabled = true" in cards
+    assert "u202a" in cards and "test(gate)" in cards

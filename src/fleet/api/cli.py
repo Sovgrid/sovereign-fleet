@@ -377,43 +377,45 @@ def _parse_submit_gate(raw_gate: Any) -> Optional[dict]:
     raise ValueError('gate must be "pytest:<path>", "npm:<script>", or {"pytest"|"npm": "..."}')
 
 
+def _submit_error(args, message: str, code: int) -> int:
+    """stderr for people; with --json also {"error": ...} on stdout, because Buzz's plugin host hands
+    the plugin only stdout and an empty answer read as "is fleet on PATH?" (2026-11-22)."""
+    print(message, file=sys.stderr)
+    if getattr(args, "json", False):
+        print(json.dumps({"error": message.removeprefix("error: ")}))
+    return code
+
+
 def task_submit(args) -> int:
     """Queue a task for approval from one JSON object on stdin. Never skips approval."""
     from fleet.core.backends import BackendError
 
     raw = sys.stdin.read()
     if not raw.strip():
-        print("error: expected JSON object on stdin", file=sys.stderr)
-        return 2
+        return _submit_error(args, "error: expected JSON object on stdin", 2)
     try:
         payload = json.loads(raw)
     except ValueError as e:
-        print(f"error: invalid JSON on stdin: {e}", file=sys.stderr)
-        return 2
+        return _submit_error(args, f"error: invalid JSON on stdin: {e}", 2)
     if not isinstance(payload, dict):
-        print("error: stdin JSON must be an object", file=sys.stderr)
-        return 2
+        return _submit_error(args, "error: stdin JSON must be an object", 2)
 
     text = payload.get("text")
     if not isinstance(text, str) or not text.strip():
-        print("error: text must be a non-empty string", file=sys.stderr)
-        return 2
+        return _submit_error(args, "error: text must be a non-empty string", 2)
     if len(text) > 100_000:
-        print("error: text exceeds 100000 characters", file=sys.stderr)
-        return 2
+        return _submit_error(args, "error: text exceeds 100000 characters", 2)
 
     lane = payload.get("lane")
     if lane is not None and (not isinstance(lane, str) or not lane.strip() or len(lane) > 128):
-        print("error: lane must be a non-empty string (<= 128 chars)", file=sys.stderr)
-        return 2
+        return _submit_error(args, "error: lane must be a non-empty string (<= 128 chars)", 2)
     lane = lane.strip() if isinstance(lane, str) else None
 
     depends_on = payload.get("depends_on") or []
     if not isinstance(depends_on, list) or len(depends_on) > 64 or not all(
         isinstance(d, str) and d.strip() for d in depends_on
     ):
-        print("error: depends_on must be a list of non-empty strings", file=sys.stderr)
-        return 2
+        return _submit_error(args, "error: depends_on must be a list of non-empty strings", 2)
 
     raw_meta = payload.get("metadata")
     if raw_meta is None:
@@ -421,29 +423,25 @@ def task_submit(args) -> int:
     elif isinstance(raw_meta, dict):
         metadata = dict(raw_meta)
     else:
-        print("error: metadata must be a JSON object", file=sys.stderr)
-        return 2
+        return _submit_error(args, "error: metadata must be a JSON object", 2)
 
     project = payload.get("project")
     if project is not None:
         if not isinstance(project, str) or not project.strip():
-            print("error: project must be a non-empty string", file=sys.stderr)
-            return 2
+            return _submit_error(args, "error: project must be a non-empty string", 2)
         metadata.setdefault("project", project.strip())
 
     allowed_paths = payload.get("allowed_paths")
     if allowed_paths is not None:
         if not isinstance(allowed_paths, list) or not all(isinstance(p, str) and p.strip() for p in allowed_paths):
-            print("error: allowed_paths must be a list of non-empty glob strings", file=sys.stderr)
-            return 2
+            return _submit_error(args, "error: allowed_paths must be a list of non-empty glob strings", 2)
         metadata.setdefault("allowed_paths", allowed_paths)
 
     if "gate" in payload and payload["gate"] is not None:
         try:
             gate = _parse_submit_gate(payload["gate"])
         except ValueError as e:
-            print(f"error: {e}", file=sys.stderr)
-            return 2
+            return _submit_error(args, f"error: {e}", 2)
         if gate is not None:
             metadata.setdefault("gate", gate)
 
@@ -472,15 +470,15 @@ def task_submit(args) -> int:
             intent["category"] = metadata["category"]
         metadata["intent"] = intent
 
-    raw_source = payload.get("source")
+    flag_source = getattr(args, "source", None)
+    raw_source = flag_source if (isinstance(flag_source, str) and flag_source.strip()) else payload.get("source")
     source = raw_source.strip() if isinstance(raw_source, str) and raw_source.strip() else "cli"
 
     try:
         # Approval is mandatory for `fleet task submit`; payload flags cannot bypass it.
         task = _task_backend().enqueue(text, lane, depends_on, metadata, needs_approval=True, source=source)
     except BackendError as e:
-        print(f"error: {e}", file=sys.stderr)
-        return 1
+        return _submit_error(args, f"error: {e}", 1)
 
     if getattr(args, "json", False):
         print(json.dumps(_app_module()._response(task).model_dump()))
@@ -1329,6 +1327,7 @@ def main(argv: Optional[list] = None) -> None:
     task_sub = task_parser.add_subparsers(dest="task_cmd", required=True)
 
     task_submit_p = task_sub.add_parser("submit", help="Queue a task for approval (reads JSON on stdin)")
+    task_submit_p.add_argument("--source", default=None, help="Override payload source (e.g. buzz_plugin)")
     task_submit_p.add_argument("--json", action="store_true", help="Output created task as JSON")
 
     task_show_p = task_sub.add_parser("show", help="Show details of one task")

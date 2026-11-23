@@ -4,10 +4,10 @@ Gives Buzz agents read-only fleet visibility and a `fleet_submit` tool that queu
 
 ## Tools
 
-- `fleet_submit` — queue a task (`text`, optional `project`, `allowed_paths`, `gate`, `lane`) via `fleet task submit --json`. Always lands as `awaiting_approval`.
-- `fleet_task` — inspect one task by `task_id` via `fleet task show --json`.
-- `fleet_tasks` — list open/failed/completed counts and recent tasks via `fleet task list --json`.
-- `fleet_lanes` — show lane health via `fleet lanes show --json`.
+- `fleet_submit`: queue a task (`text`, optional `project`, `allowed_paths`, `gate`, `lane`) via `fleet task submit --json`. Always lands as `awaiting_approval`.
+- `fleet_task`: inspect one task by `task_id` via `fleet task show --json`.
+- `fleet_tasks`: list open/failed/completed counts and recent tasks via `fleet task list --json`.
+- `fleet_lanes`: show lane health via `fleet lanes show --json`.
 
 ## Install in Buzz
 

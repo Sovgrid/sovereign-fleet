@@ -18,6 +18,7 @@ from fleet.core.gates import kill_group
 from fleet.core.memlimit import GroupWatch, scope_prefix
 from fleet.core.models import ModelAdapterResult, ModelEndpoint
 from fleet.core.quirks import resolve_opencode_model
+from fleet.core import live as _live
 from fleet.core import usage as _usage
 from fleet.core.capability import Capability, task_capabilities
 from fleet.core.egress_proxy import EgressProxy
@@ -31,6 +32,10 @@ logger = logging.getLogger("fleet.plugins.harness")
 
 # The run homes make_run_home created during one execute_task, removed when it ends.
 _RUN_HOMES: contextvars.ContextVar[Optional[List[Path]]] = contextvars.ContextVar("fleet_run_homes", default=None)
+# core/live.py paths of the running task ({"file", "note"}), or None: tail written, note watched.
+_LIVE: contextvars.ContextVar[Optional[Dict[str, str]]] = contextvars.ContextVar("fleet_live", default=None)
+LIVE_EVERY_SECONDS = 2.0
+LIVE_WINDOW_BYTES = 262144
 
 
 class HarnessRefused(Exception):
@@ -56,6 +61,10 @@ class _Stalled(Exception):
     def __init__(self, stall_seconds: float) -> None:
         self.stall_seconds = stall_seconds
         super().__init__(f"stalled after {_fmt_seconds(stall_seconds)}s")
+
+
+class _Steered(Exception):
+    """Raised by _communicate_with_stall when the operator sent the running task a note."""
 
 
 class _Looping(Exception):
@@ -188,10 +197,13 @@ class CliHarness(HarnessPlugin):
         """Run the CLI on the task (_execute_task); the run's home is removed afterwards."""
         homes: List[Path] = []
         token = _RUN_HOMES.set(homes)
+        live = task.get("live") if isinstance(task, dict) and isinstance(task.get("live"), dict) else None
+        live_token = _LIVE.set(live)
         try:
             return await self._execute_task(task, worktree_dir, timeout=timeout, model=model, args=args,
                                             pass_env=pass_env, env=env, endpoint=endpoint)
         finally:
+            _LIVE.reset(live_token)
             _RUN_HOMES.reset(token)
             for home in homes:
                 remove_run_home(home)
@@ -387,6 +399,11 @@ class CliHarness(HarnessPlugin):
             await kill_group(process)
             return self._result(124, await killed(),
                                 f"stalled: no output and no worktree change for {_fmt_seconds(e.stall_seconds)}s")
+        except _Steered:
+            await kill_group(process)
+            res = self._result(130, await killed(), "stopped for a note from the operator")
+            res["steered"] = True
+            return res
         except _Looping as e:
             await kill_group(process)
             return self._result(124, await killed(),
@@ -432,6 +449,27 @@ class CliHarness(HarnessPlugin):
 
         stderr_buf = bytearray()
         activity = asyncio.Event()
+        live = _LIVE.get()
+        live_written = {"at": 0.0, "size": -1}
+
+        def live_tick() -> None:
+            """Write the output tail for the app; raise _Steered when a note waits."""
+            if live.get("note") and os.path.exists(live["note"]):
+                raise _Steered()
+            if not live.get("file"):
+                return
+            size = len(stdout_buf) + len(stderr_buf)
+            if size == live_written["size"] or time.monotonic() - live_written["at"] < LIVE_EVERY_SECONDS:
+                return
+            # goose prints a tool's whole result as one line, often over 16 KB: a wide window still
+            # leaves several lines to show (seen on the first real run, 2026-11-22).
+            text = (bytes(stdout_buf[-LIVE_WINDOW_BYTES:]) + b"\n" + bytes(stderr_buf[-8192:])).decode(errors="replace")
+            lines = [self._loop_line(x) for x in text.split("\n")[-4 * _live.TAIL_LINES:]]
+            try:
+                _live.write_tail(live["file"], self.name, [x for x in lines if x])
+            except OSError as e:
+                logger.debug("live tail not written: %s", e)
+            live_written.update(at=time.monotonic(), size=size)
 
         async def pump(stream, buf: bytearray) -> None:
             while True:
@@ -483,6 +521,8 @@ class CliHarness(HarnessPlugin):
                 if stall_seconds > 0:
                     deadline = min(deadline, last_activity + stall_seconds)
                 deadline = min(deadline, next_check)
+                if live:
+                    deadline = min(deadline, now + LIVE_EVERY_SECONDS)
                 # Wake on output, on the process exiting and on a pipe closing, or at the
                 # deadline; tasks already done stay out of the set so this never spins.
                 waiter = asyncio.create_task(activity.wait())
@@ -492,6 +532,8 @@ class CliHarness(HarnessPlugin):
                 activity_set = waiter.done()
                 waiter.cancel()
                 activity.clear()
+                if live:
+                    live_tick()
                 if activity_set:
                     last_activity = time.monotonic()
                 if loop_seconds > 0:

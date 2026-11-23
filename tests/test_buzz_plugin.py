@@ -28,6 +28,8 @@ def test_buzz_plugin_manifest_contract():
             assert 0 < cmd["maxInputBytes"] <= 65536
         if "maxOutputBytes" in cmd:
             assert 0 < cmd["maxOutputBytes"] <= 1048576
+    submit = next(c for c in commands if c["id"] == "submit")
+    assert "--source" in submit["args"] and "buzz_plugin" in submit["args"]
 
 
 def test_buzz_plugin_js_smoke():
@@ -64,6 +66,27 @@ assert.equal(seen[0].id, "submit");
 assert.equal(JSON.parse(seen[0].input).source, "buzz_plugin");
 assert.equal(seen[1].id, "show");
 assert.equal(seen[1].input, "task-1");
+"""
+    res = subprocess.run([node, "--input-type=module", "-e", script, str(PLUGIN_DIR / "plugin.js")],
+                         capture_output=True, text=True, check=False)
+    assert res.returncode == 0, res.stderr
+
+
+def test_buzz_plugin_passes_the_fleet_refusal_on():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not installed")
+    script = """
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+const mod = await import(pathToFileURL(process.argv[1]).href);
+const tools = new Map();
+mod.apply({
+  agents: { addTool: (t) => tools.set(t.name, t) },
+  host: { async runCommand() { return JSON.stringify({ error: "--gate takes pytest:<path> or npm:<script>" }); } },
+});
+await assert.rejects(tools.get("fleet_submit").call({}, {}, { text: "x", gate: "bogus" }),
+  /fleet task submit refused: --gate takes pytest:<path> or npm:<script>/);
 """
     res = subprocess.run([node, "--input-type=module", "-e", script, str(PLUGIN_DIR / "plugin.js")],
                          capture_output=True, text=True, check=False)

@@ -210,3 +210,19 @@ def test_task_list_filters_and_order(isolate_fleet, capsys):
         main(["task", "list", "--limit", "1", "--json"])
     assert e.value.code == 0
     assert [r["id"] for r in json.loads(capsys.readouterr().out)] == ["t-new"]
+
+
+def test_task_submit_json_errors_reach_stdout(isolate_fleet, monkeypatch, capsys):
+    """Buzz's plugin host passes only stdout: a refusal with --json must say why there, not leave it
+    empty (the plugin then guessed "is fleet on PATH?")."""
+    import io
+    import json
+    from fleet.api.cli import main
+
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"text": "ok", "gate": "bash:rm"}'))
+    with pytest.raises(SystemExit) as e:
+        main(["task", "submit", "--json"])
+    assert e.value.code == 2
+    out = capsys.readouterr().out
+    assert "pytest:<path> or npm:<script>" in json.loads(out)["error"]
+    assert isolate_fleet.load_tasks() == []

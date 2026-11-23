@@ -19,14 +19,19 @@ _MASK = "***"
 def _compiled_rules(mask: str) -> tuple[tuple[re.Pattern[str], str], ...]:
     safe_mask = mask.replace("\\", "\\\\")
     return (
-        (re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", re.DOTALL),
+        (re.compile(r"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY-----|\Z)", re.DOTALL),
          "[private key]"),
         (re.compile(r"\b([a-z][a-z0-9+.-]*://)[^\s/:@]+:[^\s/@]+@"), rf"\1{safe_mask}@"),  # user:password@
         (re.compile(r"\b(https?://)[^\s/@]+@"), rf"\1{safe_mask}@"),                        # token@
         (re.compile(r"\b(bearer)\s+\S+", re.IGNORECASE), rf"\1 {safe_mask}"),
-        (re.compile(r"\b(authorization\s*[:=]\s*)\S+(?:\s+\S+)?", re.IGNORECASE), rf"\1{safe_mask}"),
+        (re.compile(r"""\b(authorization["']?\s*[:=]\s*["']?(?:(?:bearer|basic|token|digest)\s+)?)([^\s"',}]+)""", re.IGNORECASE),
+         rf"\1{safe_mask}"),
+        (re.compile(r"\b((?:set-)?cookie[\"']?\s*[:=]\s*)(?:\"[^\"]*\"|\'[^\']*\'|[^\r\n\}]+)", re.IGNORECASE),
+         rf"\1{safe_mask}"),
+        (re.compile(r"([?&](?:api_?key|access_token|token|secret|key|sig|signature|password|auth)=)[^&\s\"'<>\\]+", re.IGNORECASE),
+         rf"\1{safe_mask}"),
         (re.compile(r"\b([\w.-]*(?:password|passwd|pwd|secret|token|api[_-]?key|private[_-]?key|access[_-]?key|credential)"
-                    r"[\w.-]*)(\s*(?:(?<![=!<>])=(?!=)|:)\s*)(\"[^\"]*\"|\'[^\']*\'|\S+)", re.IGNORECASE),
+                    r"[\w.-]*)([\"']?\s*(?:(?<![=!<>])=(?!=)|:)\s*)(\"[^\"]*\"|\'[^\']*\'|[^\s,;}\]]+)", re.IGNORECASE),
          rf"\1\2{safe_mask}"),
         (re.compile(r"\b(?:sk-[\w-]{16,}|gh[pousr]_\w{20,}|github_pat_\w{20,}|glpat-[\w-]{16,}|xox[abprs]-[\w-]{10,}"
                     r"|AKIA[0-9A-Z]{16}|gsk_\w{16,}|nvapi-[\w-]{16,}|AIza[\w-]{30,}|hf_\w{20,}|nsec1[a-z0-9]{20,}"

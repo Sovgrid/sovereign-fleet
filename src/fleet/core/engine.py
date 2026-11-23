@@ -19,7 +19,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from fleet.core import gates, landing, quirks, review
+from fleet.core import gates, landing, live as _live, quirks, review
 from fleet.core.capability import list_task_drafts
 from fleet.core.config import (LaneSpec, LaneStep, ModelEndpoint, Project, RoutingSection,
                                own_login_harnesses, active_credential_plugin, lane_key, model_key)
@@ -268,7 +268,19 @@ def _task_privateer(task: Optional[FleetTask]) -> str:
     return str(meta.get("privateer") or intent.get("privateer") or "").strip()
 
 
-def _harness_task_payload(task: Optional[FleetTask], prompt: str) -> Dict[str, Any]:
+MAX_STEERS = 5
+
+
+def _notes_text(task: Optional[FleetTask]) -> str:
+    """The operator's notes to this task (sent while it ran), for every later prompt."""
+    notes = [str(n.get("text", "")) for n in ((task.metadata or {}).get("operator_notes") or []) if isinstance(n, dict)] if task else []
+    if not notes:
+        return ""
+    return ("\n\nNotes from the operator, sent while the task ran (the newest last); they take precedence:\n"
+            + "\n".join(f"- {n}" for n in notes))
+
+
+def _harness_task_payload(task: Optional[FleetTask], prompt: str, *, allow_steer: bool = True) -> Dict[str, Any]:
     payload: Dict[str, Any] = {
         "id": task.id if task else "",
         "text": prompt,
@@ -276,6 +288,14 @@ def _harness_task_payload(task: Optional[FleetTask], prompt: str) -> Dict[str, A
         "capabilities": _task_capabilities(task),
     }
     if task is not None:
+        live_paths = _live.paths(task.id)
+        if live_paths:
+            if not load_settings().live_output:
+                live_paths.pop("file")      # notes still reach the run; no output is kept
+            if not allow_steer:
+                live_paths.pop("note", None)
+            if live_paths:
+                payload["live"] = live_paths
         budget = (task.metadata or {}).get("commission_budget")
         if isinstance(budget, int) and budget > 0:
             payload["commission_budget"] = budget
@@ -550,6 +570,11 @@ class FleetEngine:
                 result = {"error": "interrupted by a daemon shutdown; requeued on the next start",
                           "exit_code": 1}
         finally:
+            late = _live.take_note(_live.paths(task.id)["note"]) if _live.paths(task.id) else ""
+            if late:   # sent as the last step ended: kept on the task, never dropped unseen
+                self._report(task, operator_notes=[*((task.metadata or {}).get("operator_notes") or []),
+                                                   {"at": time.time(), "text": late, "late": True}])
+            _live.clear(task.id)
             # A retry keeps the task's id: the runs of its earlier attempts were spent too.
             stored = self.task_store.get_task(task.id)
             if stored and stored.status == "cancelled":
@@ -698,6 +723,8 @@ class FleetEngine:
             return
 
         eligible = ("feature",) if auto_review == "features" else ("feature", "bugfix", "refactor")
+        if (result.get("landing") or {}).get("mode") == "review":
+            return
         if category in eligible or meta.get("review") is True:
             commit = result.get("commit") or (result.get("landing") or {}).get("commit") or result.get("branch", "")
             if not commit:
@@ -794,7 +821,7 @@ class FleetEngine:
             endpoint = self.models.get(pair.model)
             model_id = endpoint.model_id if endpoint is not None else pair.model
             self._report(task, current={"harness": pair.harness, "model": pair.model,
-                                        "started_at": time.time()})
+                                        "started_at": time.time()}, phase="agent")
             t0 = time.monotonic()
             status, last = await self._execute_pair(task, str(wt), pair.harness, pair.model,
                                                     self._prompt(task, failure))
@@ -866,12 +893,12 @@ class FleetEngine:
             except (ValueError, TypeError):
                 pass
             exec_res = await harness.execute_task(
-                _harness_task_payload(task, prompt),
+                _harness_task_payload(task, prompt, allow_steer=False),
                 worktree_dir, timeout=self.timeout, **kwargs
             )
         else:
             exec_res = await harness.execute_task(
-                _harness_task_payload(task, prompt),
+                _harness_task_payload(task, prompt, allow_steer=False),
                 worktree_dir, timeout=self.timeout)
         self._note_usage(task, f"pair:{harness_name}/{model_name}" if model_name else harness_name, exec_res)
         if exec_res.get("exit_code") != 0:
@@ -897,7 +924,7 @@ class FleetEngine:
             logger.debug("could not report %s for %s: %s", list(fields), task.id, e)
 
     def _prompt(self, task: FleetTask, failure: str = "") -> str:
-        prompt = task.text
+        prompt = task.text + _notes_text(task)
         if failure:
             prompt += ("\n\nA previous attempt on this task did not pass verification:\n"
                        f"{failure[-1500:]}\n\nKeep what is right in the working tree, fix exactly this, "
@@ -963,17 +990,30 @@ class FleetEngine:
                 res = {"exit_code": 1, "stderr": f"harness {step.harness} not registered"}
                 continue
             self._report(task, current={"lane": lane, "harness": step.harness, "model": step.model,
-                                        "started_at": time.time()})
+                                        "started_at": time.time()}, phase="agent")
             step_model = step.model
             extra: Dict[str, Any] = {}
             if spec.probe_url and getattr(harness, "adapts_local_lane", False) and _accepts_kwarg(harness.execute_task, "endpoint"):
                 extra["endpoint"] = self._local_step_endpoint(spec, step)
                 step_model = ""
-            res = await harness.execute_task(
-                _harness_task_payload(task, prompt), str(wt),
-                timeout=self.timeout, model=step_model,
-                args=step.args, pass_env=[*spec.pass_env, *([spec.key_env] if spec.key_env else [])],
-                env=env, **extra)
+            steers = 0
+            while True:
+                res = await harness.execute_task(
+                    _harness_task_payload(task, prompt, allow_steer=steers < MAX_STEERS), str(wt),
+                    timeout=self.timeout, model=step_model,
+                    args=step.args, pass_env=[*spec.pass_env, *([spec.key_env] if spec.key_env else [])],
+                    env=env, **extra)
+                note = _live.take_note(_live.paths(task.id)["note"]) if task and res.get("steered") else ""
+                if not note or steers >= MAX_STEERS:
+                    break
+                # The operator's note: same step again, same worktree, the note in the prompt.
+                steers += 1
+                self._note_usage(task, lane, res)
+                notes = [*((task.metadata or {}).get("operator_notes") or []), {"at": time.time(), "text": note}]
+                self._report(task, operator_notes=notes)
+                prompt += (f"\n\nA note from the operator, sent while you worked: {note}\n"
+                           "Your changes so far are still in the working tree; continue from there.")
+                logger.info("%s: lane %s step %s restarted for an operator note (%d)", task.id, lane, step.harness, steers)
             self._note_usage(task, lane, res)
             res["step"] = {"harness": step.harness, "model": step.model}
             res["steps_tried"] = tried
@@ -1366,6 +1406,7 @@ class FleetEngine:
 
     async def _verify(self, task: FleetTask, wt: Path, exec_res: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         """Scope, syntax, repo gate, task gate, claimed files: the first failure decides."""
+        self._report(task, phase="tests")     # the app shows where a run stands: agent, tests, landing
         meta = task.metadata
         intent = meta.get("intent") if isinstance(meta.get("intent"), dict) else {}
         allowed: List[str] = list(meta.get("allowed_paths") or intent.get("allowed_paths") or [])
@@ -1617,6 +1658,12 @@ class FleetEngine:
         return result
 
     async def _land(self, task: FleetTask, worktree: Path, branch: str) -> Dict[str, Any]:
+        self._report(task, phase="landing")
+        if task.metadata.get("review_before_landing") or (task.metadata.get("intent") or {}).get("review_before_landing"):
+            # An agent proposed this task: approving it let it run, not merge (core/backends.py).
+            return {"mode": "review", "status": "kept",
+                    "detail": f"an agent proposed this task: work on {branch} for your review", "commit": "",
+                    "pr_url": "", "gates": []}
         try:
             outcome = await landing.land(Path(self.repo_path), worktree, branch, task.id,
                                          task.text.splitlines()[0] if task.text else task.id,

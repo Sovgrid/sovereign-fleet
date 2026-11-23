@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Sovereign Fleet</title>
 <meta name="description" content="Sovereign Fleet: your agents' work at a glance. ">
-<link rel="icon" href="../icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="../icon-192.png">
+<link rel="icon" href="../icon.svg?v=2" type="image/svg+xml">
+<link rel="apple-touch-icon" href="../icon-192.png?v=2">
 <!--
   Sovereign Fleet app shell (docs/rfc/UI-REDESIGN.md, "The real shell"), built on a design-token surface.
   Live data from the daemon on this origin; the daemon checks every action. Every visual decision below is a CSS variable (a token). A theme, a palette
@@ -105,7 +105,7 @@ svg.i { width: 1.25rem; height: 1.25rem; flex: none; fill: none; stroke: current
 .nav button[aria-current="page"] { color: var(--accent); }
 .nav button.new { color: var(--accent-ink); }
 .nav button.new .plus { background: var(--accent); color: var(--accent-ink); width: 2.75rem; height: 2.75rem; border-radius: var(--r-pill); display: grid; place-items: center; margin-top: -.75rem; box-shadow: var(--shadow); }
-.nav .brand { display: none; }
+.nav .brand { display: none; color: var(--text); }
 .nav .count { position: absolute; top: .125rem; right: calc(50% - 1.5rem); background: var(--warn); color: var(--accent-ink); border-radius: var(--r-pill); font-size: .625rem; min-width: 1.125rem; text-align: center; padding: 0 .25rem; }
 /* bottom bar (phone) */
 html[data-navmode="bottom"] .nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; padding: .25rem .25rem calc(.25rem + env(safe-area-inset-bottom)); }
@@ -115,8 +115,8 @@ html[data-navmode="side"] .app { grid-template-columns: var(--rail-w) minmax(0, 
 html[data-navmode="side"] .nav { flex-direction: column; justify-content: flex-start; gap: .25rem; padding: .5rem .25rem; border-top: 0; position: sticky; top: 0; height: 100dvh; align-self: start; }
 html[data-navmode="side"] .nav button { flex: none; }
 html[data-navmode="side"] .nav button.new .plus { margin-top: 0; }
-html[data-navmode="side"] .nav .brand { display: block; width: 36px; height: 36px; margin: .25rem auto .5rem; border-radius: calc(var(--r-control) + 2px); }
-.topbar-logo { width: 28px; height: 28px; flex: none; border-radius: var(--r-control); }
+html[data-navmode="side"] .nav .brand { display: block; width: 36px; height: 36px; margin: .25rem auto .5rem; }
+.topbar-logo { display: block; width: 28px; height: 28px; flex: none; color: var(--text); }
 #back:not([hidden]) + .topbar-logo { display: none; }
 html[data-navmode="side"] .topbar-logo { display: none; }
 html[data-navmode="side"] .nav .spacer { flex: 1; }
@@ -249,8 +249,16 @@ html[data-labels="mono"] .nav button, html[data-labels="mono"] .tag, html[data-l
    text overlaps), and long URLs or paths wrap instead of widening the pane */
 .sheet-body { grid-template-columns: minmax(0, 1fr); grid-auto-rows: max-content; overflow-wrap: anywhere; }
 .sheet-body .field { grid-template-columns: minmax(0, 1fr); }
-.toast { position: fixed; left: 50%; bottom: 6rem; transform: translate(-50%, 1rem); z-index: 60; max-width: min(92vw, 28rem); background: var(--raised); color: var(--text); border: var(--border) solid var(--hair-2); border-radius: var(--r-control); padding: .625rem 1rem; box-shadow: var(--pop); opacity: 0; pointer-events: none; transition: opacity var(--t-out), transform var(--t-in) var(--ease-out); }
-.toast[data-show="true"] { opacity: 1; transform: translate(-50%, 0); }
+.toast { position: fixed; left: 50%; bottom: 6rem; transform: translate(-50%, 1rem); z-index: 60; max-width: min(92vw, 28rem); background: var(--raised); color: var(--text); border: var(--border) solid var(--hair-2); border-radius: var(--r-control); padding: .625rem 1rem; box-shadow: var(--pop); opacity: 0; visibility: hidden; pointer-events: none; transition: opacity var(--t-out), transform var(--t-in) var(--ease-out), visibility 0s linear var(--t-out); }
+.toast[data-show="true"] { opacity: 1; transform: translate(-50%, 0); visibility: visible; transition: opacity var(--t-in) var(--ease-out), transform var(--t-in) var(--ease-out), visibility 0s; }
+.toast[data-show="true"] .btn { pointer-events: auto; margin-inline-start: .75rem; min-height: 44px; }
+.cause { color: var(--muted); margin: 0; overflow-wrap: anywhere; }
+#list-needs .cause { padding: 0 0 .25rem 2rem; }
+.phases { list-style: none; display: flex; gap: .25rem; margin: .5rem 0 0; padding: 0; font-size: .8125rem; color: var(--muted); }
+.phases li { flex: 1; padding-top: .375rem; border-top: 3px solid var(--hair-2); }
+.phases li.done { border-top-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.phases li[aria-current="step"] { border-top-color: var(--accent); color: var(--text); font-weight: 600; }
+.row-acts { padding: 0 0 .75rem 2rem; } .row-acts > .btn { flex: 0 1 auto; }
 
 /* ===== Approval brief ===== */
 .brief-q { font-size: 1.125rem; color: var(--text); font-weight: 600; line-height: 1.35; }
@@ -319,7 +327,6 @@ html[data-labels="mono"] .nav button, html[data-labels="mono"] .tag, html[data-l
 .legend { display: flex; flex-wrap: wrap; gap: .75rem; font-size: .75rem; color: var(--muted); }
 .legend span { display: inline-flex; align-items: center; gap: .375rem; }
 .legend .tl-mark { position: static; margin: 0 .125rem; flex: none; }
-.spend { display: grid; gap: .25rem; }
 
 /* ===== Providers and models ===== */
 .pane-tabs { display: block; }
@@ -341,8 +348,6 @@ html[data-labels="mono"] .nav button, html[data-labels="mono"] .tag, html[data-l
 .mini .w b { display: block; height: 2px; margin: 3px 3px 0; border-radius: 1px; opacity: .8; }
 .mini .w1 { left: 6%; top: 12%; width: 52%; height: 72%; }
 .mini .w2 { left: 48%; top: 28%; width: 46%; height: 58%; }
-.dots { display: flex; gap: .25rem; }
-.dots i { width: .625rem; height: .625rem; border-radius: var(--r-pill); display: block; }
 .font-preview { background: var(--code-bg); border-radius: var(--r-control); padding: .75rem; display: grid; gap: .375rem; }
 .font-preview p { color: var(--text); }
 .font-preview code { color: var(--body); font-variant-ligatures: var(--liga, contextual); }
@@ -455,6 +460,13 @@ details[open] > summary::after { transform: rotate(-135deg); }
 @keyframes qstep { 0%, 24.9% { opacity: 1; } 25%, 100% { opacity: .25; } }
 @media (prefers-reduced-motion: reduce) { .glyph .q { animation: none; } .glyph .q:nth-child(n+3) { opacity: .25; } }
 .glyph.err { color: var(--err); }
+.live { display: grid; gap: .5rem; margin: .75rem 0; }
+.live pre { max-height: 16rem; overflow: auto; font-size: .75rem; }
+.live textarea { width: 100%; font: inherit; color: var(--text); background: var(--card); border: var(--border) solid var(--hair); border-radius: var(--r-control); padding: .5rem; resize: vertical; }
+.lead { font-size: 1.125rem; font-weight: 600; line-height: 1.4; margin: .75rem 0 .25rem; }
+.sub-head { margin: 1.25rem 0 0; }
+.big { font-size: 2.5rem; font-weight: 700; line-height: 1.1; margin: 1rem 0 0; font-variant-numeric: tabular-nums; color: var(--text); }
+.glyph[data-glyph="seen"] { opacity: .55; }
 .row .ri { color: var(--muted); width: 1.125rem; height: 1.125rem; }
 .row .grow { flex: 1; min-width: 0; display: grid; gap: .25rem; }
 .row .grow .title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -465,15 +477,11 @@ details[open] > summary::after { transform: rotate(-135deg); }
 .clock-badge svg.i { width: .875rem; height: .875rem; }
 .empty { display: flex; align-items: center; gap: .5rem; min-height: 44px; color: var(--muted); font-size: .875rem; }
 
-.glance { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .5rem; margin: 0; padding: 0; }
+.glance { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .5rem; margin: 0; padding: 0; }
 .glance .tile { min-height: 0; padding: .625rem .5rem; gap: .125rem; justify-items: center; text-align: center; }
 .glance .num { font-size: 1.375rem; font-weight: 600; line-height: 1.1; color: var(--text); font-variant-numeric: tabular-nums; }
 .glance .lab2 { font-size: .75rem; color: var(--body); line-height: 1.2; }
 .glance .t-warn svg { color: var(--warn); } .glance .t-run svg { color: var(--accent); } .glance .t-ok svg { color: var(--ok); }
-.glance .ring { width: 2.125rem; height: 2.125rem; transform: rotate(-90deg); }
-.glance .ring circle { fill: none; stroke-width: 4; }
-.glance .ring .trk { stroke: var(--card-2); } .glance .ring .val { stroke: var(--accent); stroke-linecap: round; }
-@media (max-width: 359.98px) { .glance { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 .mini-tl { position: relative; height: 1.5rem; border-radius: var(--r-pill); background: var(--card-2); margin: .25rem .5rem 1rem; }
 .mini-tl .m { position: absolute; top: 50%; width: .625rem; height: .625rem; margin: -.3125rem 0 0 -.3125rem; border: 2px solid var(--accent); box-sizing: border-box; background: var(--bg); }
@@ -493,12 +501,8 @@ details > summary .ic { margin-right: .5rem; }
 details > summary { align-items: center; }
 .list.inset { background: var(--card); border: var(--border) solid var(--hair); border-radius: var(--r-card); padding: 0 .5rem; }
 .list.inset .row { padding-left: .25rem; }
-.menu-tiles { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: .625rem; }
-.menu-tiles .tile { width: 100%; min-height: 5rem; justify-items: center; text-align: center; gap: .375rem; padding: .625rem .375rem; position: relative; }
-.menu-tiles .tile .ic { width: 2.25rem; height: 2.25rem; border-radius: var(--r-control); } .menu-tiles .tile .ic svg.i { width: 1.25rem; height: 1.25rem; }
-.menu-tiles .tile .nm { font-size: .8125rem; line-height: 1.2; color: var(--text); }
-.menu-tiles .tile .badge { position: absolute; top: .375rem; right: .375rem; min-width: 1.125rem; padding: 0 .3rem; border-radius: var(--r-pill); background: var(--card-2); color: var(--muted); font-size: .6875rem; line-height: 1.125rem; text-align: center; }
-@media (min-width: 600px) { .menu-tiles { grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr)); } }
+.row .grow .sub { color: var(--muted); font-size: .8125rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#mods-menu .row { padding-block: .625rem; } #mods-menu .row .grow { gap: .125rem; }
 .brief-chip small svg.i { width: .875rem; height: .875rem; margin-right: .25rem; vertical-align: -.125rem; }
 .reco .ri2 { display: none; width: 1.125rem; height: 1.125rem; vertical-align: -.25rem; margin-right: .25rem; }
 .reco[data-level="ok"] .ri2.k-ok, .reco[data-level="warn"] .ri2.k-warn, .reco[data-level="err"] .ri2.k-warn { display: inline; }
@@ -586,9 +590,25 @@ details > summary { align-items: center; }
     <symbol id="i-info2" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 8v5M12 16v.5"/></symbol>
     <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3L5 14h6l-1 7 8-11h-6z"/></symbol>
     <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="9" r="3.500"/><path d="M5 20a7 7 0 0 1 14 0"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M4 20h16M7 16v-5M12 16V7M17 16v-8"/></symbol>
     <symbol id="i-wallet" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18M16 14h2"/></symbol>
     <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M4 13l2-7h12l2 7v5H4z"/><path d="M4 13h5l1 2h4l1-2h5"/></symbol>
     <symbol id="i-mic" viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3M9 21h6"/></symbol>
+    <mask id="m-fleet-logo" maskUnits="userSpaceOnUse" x="0" y="0" width="512" height="512">
+      <rect width="512" height="512" fill="#fff"/>
+      <path d="M192 252 L234 294 L296 214" transform="rotate(-9 256 280)" fill="none" stroke="#000" stroke-width="32" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M56 424 Q156 376 256 424 T456 424" fill="none" stroke="#000" stroke-width="64" stroke-linecap="round"/>
+      <path d="M0 424 L68 424 Q162 376 256 424 T444 424 L512 424 V512 H0 Z" fill="#000"/>
+    </mask>
+    <symbol id="i-fleet-logo" viewBox="43 53 426 426">
+      <g mask="url(#m-fleet-logo)" fill="currentColor">
+        <g transform="rotate(-9 256 280)">
+          <path d="M268 70 L124 322 L376 322 Z"/>
+          <path d="M84 350 H428 Q388 442 256 442 Q124 442 84 350 Z"/>
+        </g>
+      </g>
+      <path d="M68 424 Q162 376 256 424 T444 424" fill="none" stroke="currentColor" stroke-width="30" stroke-linecap="round"/>
+    </symbol>
   </defs>
 </svg>
 
@@ -596,8 +616,8 @@ details > summary { align-items: center; }
 
   <!-- Navigation: bottom bar on a phone, rail on a wide screen (or as the person chooses) -->
   <nav class="nav" aria-label="Main">
-    <img class="brand" src="../icon.svg" alt="Sovereign Fleet" width="36" height="36">
-    <button type="button" data-go="home"><svg class="i"><use href="#i-home"/></svg><span>Home</span><span class="count" id="need-count" hidden>2</span></button>
+    <svg class="brand" role="img" aria-label="Sovereign Fleet" width="36" height="36"><use href="#i-fleet-logo"/></svg>
+    <button type="button" data-go="home"><svg class="i"><use href="#i-home"/></svg><span>Home</span><span class="count" id="need-count" hidden></span></button>
     <button type="button" data-go="tasks"><svg class="i"><use href="#i-tasks"/></svg><span>Tasks</span></button>
     <button type="button" class="new" data-go="new-task" aria-label="New task"><span class="plus"><svg class="i"><use href="#i-plus"/></svg></span><span class="sr">New</span></button>
     <button type="button" data-go="search"><svg class="i"><use href="#i-search"/></svg><span>Search</span></button>
@@ -609,9 +629,9 @@ details > summary { align-items: center; }
   <main class="main" id="main">
     <header class="topbar">
       <button type="button" class="icon-btn back" id="back" aria-label="Back" hidden><svg class="i"><use href="#i-back"/></svg></button>
-      <img class="topbar-logo" src="../icon.svg" alt="Sovereign Fleet" width="28" height="28">
+      <svg class="topbar-logo" role="img" aria-label="Sovereign Fleet" width="28" height="28"><use href="#i-fleet-logo"/></svg>
       <h1 id="title">Home</h1>
-      <button type="button" class="icon-btn" id="chat-open" aria-label="Coordinator chat (Alt+A)" aria-controls="chat" aria-expanded="false"><svg class="i"><use href="#i-chat"/></svg></button>
+      <button type="button" class="icon-btn" id="chat-open" aria-label="Ask (Alt+A)" aria-controls="chat" aria-expanded="false"><svg class="i"><use href="#i-chat"/></svg></button>
       <button type="button" class="icon-btn" data-go="search" aria-label="Search"><svg class="i"><use href="#i-search"/></svg></button>
       <button type="button" class="icon-btn" data-go="settings" aria-label="Settings"><svg class="i"><use href="#i-settings"/></svg></button>
     </header>
@@ -633,8 +653,7 @@ details > summary { align-items: center; }
         <div class="glance" id="glance">
           <button type="button" class="tile t-warn" data-glance="needs" data-go="tasks/needs"><svg class="i" aria-hidden="true"><use href="#i-shield"/></svg><span class="num" id="g-needs"> </span><span class="lab2">need you</span></button>
           <button type="button" class="tile t-run" data-glance="running" data-go="tasks/running"><svg class="i" aria-hidden="true"><use href="#i-bolt"/></svg><span class="num" id="g-running"> </span><span class="lab2">running</span></button>
-          <button type="button" class="tile t-ok" data-glance="next" data-go="schedule"><svg class="i" aria-hidden="true"><use href="#i-clock"/></svg><span class="num" id="g-next"> </span><span class="lab2">next run</span></button>
-          <button type="button" class="tile" data-glance="spend" data-go="providers" aria-label="Providers"><svg class="ring" viewBox="0 0 36 36" aria-hidden="true"><circle class="trk" cx="18" cy="18" r="14"/><circle class="val" id="g-ring" cx="18" cy="18" r="14" pathLength="100" stroke-dasharray="0 100"/></svg><span class="lab2" id="g-spend"> </span></button>
+          <button type="button" class="tile t-ok" data-glance="passed" data-open="stats"><svg class="i" aria-hidden="true"><use href="#i-chart"/></svg><span class="num" id="g-passed">–</span><span class="lab2">passed, 7 days</span></button>
         </div>
         <aside class="card box apps-hint" id="apps-hint" aria-label="Your phone apps" hidden>
           <p class="small">Three apps on your phone: decide here in Fleet, chat with local AI in Pi Pocket, discuss work in Buzz.</p>
@@ -645,11 +664,11 @@ details > summary { align-items: center; }
         </aside>
         <div id="mods-home" class="stack">
           <article class="card" data-module="needs-you">
-            <div class="card-head"><h2>Needs you</h2><span class="tag warn" id="need-tag">3</span></div>
+            <div class="card-head"><h2>Needs you</h2><span class="tag warn" id="need-tag" hidden></span></div>
             <ul class="list" id="list-needs"></ul>
           </article>
           <article class="card" data-module="running-now">
-            <div class="card-head"><h2>Running now</h2></div>
+            <div class="card-head"><h2>Running and queued</h2></div>
             <ul class="list" id="list-running"></ul>
           </article>
           <article class="card" data-module="recent-results">
@@ -679,10 +698,22 @@ details > summary { align-items: center; }
       <section class="screen pair" data-screen="task" data-title="Task">
         <div class="task-head"><h2 id="task-title"></h2><span class="tag" id="task-status"></span></div>
         <p class="muted small" id="task-meta"></p>
+        <p class="small cause" id="task-cause" hidden></p>
+        <ol class="phases" id="task-phases" aria-label="Where the run stands" hidden></ol>
+        <p class="small cause" id="task-slow" hidden></p>
         <div class="btns" id="task-actions">
           <button type="button" class="btn primary block" id="task-primary" data-go="approval">Review</button>
+          <button type="button" class="btn" id="task-ask" hidden>Ask</button>
           <button type="button" class="btn" id="task-archive" hidden>Archive</button>
         </div>
+        <section class="live" id="task-live" hidden aria-labelledby="live-h">
+          <div class="card-head"><h3 id="live-h">Live</h3><small class="muted" id="live-meta" aria-live="polite"></small></div>
+          <pre id="live-lines" tabindex="0" aria-label="Latest output of the running task"></pre>
+          <label class="small muted" for="live-note">Note to this task</label>
+          <textarea id="live-note" rows="2" maxlength="2000" placeholder="e.g. Only touch README.md; there is no typo, stop if you find none."></textarea>
+          <div class="btns"><button type="button" class="btn" id="live-send">Send note</button></div>
+          <p class="small muted" id="live-out" aria-live="polite"></p>
+        </section>
         <div id="mods-task" class="fold-list">
           <details class="fold" data-advanced data-module="status" data-empty>
             <summary><span class="ic sm" style="--t:var(--warn)"><svg class="i" aria-hidden="true"><use href="#i-clock"/></svg></span><span class="grow">Progress</span><small class="muted" id="f-status-sum"></small></summary>
@@ -715,34 +746,35 @@ details > summary { align-items: center; }
       <section class="screen" id="screen-approval" data-screen="approval" data-title="Approve">
         <!-- The brief: facts and risk come from the daemon's rules; a model only phrases the question and the summary. -->
         <div class="card box" id="brief">
-          <p class="brief-q" data-brief="question">Fix the blog's link check and keep it on a branch?</p>
+          <p class="brief-q" data-brief="question"></p>
           <div class="brief-chips">
-            <div class="brief-chip" data-level="ok"><small><svg class="i" aria-hidden="true"><use href="#i-clock"/></svg>Matters</small><span data-brief="matters">Blocks 2 tasks</span></div>
-            <div class="brief-chip" data-level="ok"><small><svg class="i" aria-hidden="true"><use href="#i-shield"/></svg>Risk</small><span data-brief="risk">Low</span></div>
-            <div class="brief-chip" data-level="ok"><small><svg class="i" aria-hidden="true"><use href="#i-undo"/></svg>Undo</small><span data-brief="undo">Branch only</span></div>
+            <div class="brief-chip" data-level="ok"><small><svg class="i" aria-hidden="true"><use href="#i-clock"/></svg>Matters</small><span data-brief="matters"></span></div>
+            <div class="brief-chip" data-level="ok"><small><svg class="i" aria-hidden="true"><use href="#i-shield"/></svg>Risk</small><span data-brief="risk"></span></div>
+            <div class="brief-chip" data-level="ok"><small><svg class="i" aria-hidden="true"><use href="#i-undo"/></svg>Undo</small><span data-brief="undo"></span></div>
           </div>
-          <div class="reco" data-level="ok"><svg class="i ri2 k-ok" aria-hidden="true"><use href="#i-check"/></svg><svg class="i ri2 k-warn" aria-hidden="true"><use href="#i-warn"/></svg><strong id="reco-verb">Approve</strong><span data-brief="recommendation">low risk, the test proves the fix.</span></div>
+          <div class="reco" data-level="ok"><svg class="i ri2 k-ok" aria-hidden="true"><use href="#i-check"/></svg><svg class="i ri2 k-warn" aria-hidden="true"><use href="#i-warn"/></svg><strong id="reco-verb">Approve</strong><span data-brief="recommendation"></span></div>
         </div>
-        <p class="yn"><strong>Yes:</strong> <span data-brief="if-approve">2 files change, on a branch.</span></p>
-        <p class="yn"><strong>No:</strong> <span data-brief="if-reject">nothing changes, 2 tasks skipped.</span></p>
+        <p class="yn"><strong>Yes:</strong> <span data-brief="if-approve"></span></p>
+        <p class="yn"><strong>No:</strong> <span data-brief="if-reject"></span></p>
         <div class="stack" id="approval-drafts" hidden></div>
         <div class="btns">
           <button type="button" class="btn primary" id="approve-btn">Approve</button>
           <a class="btn primary" id="amber-btn" href="#/approval" hidden>Approve in Amber</a>
           <button type="button" class="btn danger" id="reject-btn">Reject</button>
+          <button type="button" class="btn" id="approval-ask">Ask</button>
           <button type="button" class="btn" id="later-btn">Later</button>
         </div>
         <details data-advanced>
           <summary>Why, and details</summary>
-          <p class="muted small" data-brief="why">It came in through OpenClaw, and tasks from there always wait for you.</p>
+          <p class="muted small" data-brief="why"></p>
           <p class="faint small" id="brief-summary">Summary written by the coordinator model. The facts come from the fleet's rules.</p>
-          <pre id="brief-details">pytest -q tests/blog</pre>
+          <pre id="brief-details"></pre>
         </details>
       </section>
 
       <!-- SCHEDULE BOARD: what is at work and what comes up, filled from routines, their next runs and their history -->
       <section class="screen" data-screen="schedule" data-title="Schedule">
-        <div class="sec-head"><h2>Needs you</h2><button type="button" class="btn" id="new-routine-btn">Propose routine</button><small class="muted" id="sched-now-label">Now 14:20</small></div>
+        <div class="sec-head"><h2>Needs you</h2><button type="button" class="btn" id="new-routine-btn">Propose routine</button><small class="muted" id="sched-now-label"></small></div>
         <ul class="list" id="sched-needs" aria-live="polite"></ul>
         <div class="mini-tl" id="mini-tl" data-mini-timeline role="img" aria-label="Next 24 hours"></div>
         <h2>Next up</h2>
@@ -758,13 +790,12 @@ details > summary { align-items: center; }
            <div class="tl-scroll" id="tl-scroll"><div class="tl-inner" id="tl-inner">
             <div class="tl-ticks" id="tl-ticks"></div>
             <div id="tl-rows"></div>
-            <div class="tl-now" id="tl-now" data-now-line data-label="Now 14:20"></div>
+            <div class="tl-now" id="tl-now" data-now-line data-label=""></div>
            </div></div>
           </div>
           <div class="legend" aria-hidden="true">
             <span><i class="tl-mark once"></i>Runs once</span><span><i class="tl-mark repeat"></i>Repeats</span><span><i class="tl-mark repeat missed"></i>Missed</span><span><i class="tl-mark repeat held"></i>Held</span><span><i class="tl-bar" style="position:static;width:1.5rem;margin:0"></i>At work</span>
           </div>
-          <div class="spend"><small class="muted" id="spend-label">Spend today: $0.31 of $1.50</small><div class="progress" aria-hidden="true"><i id="spend-bar" style="width:21%"></i></div></div>
         </details>
         <details data-advanced>
           <summary>All routines</summary>
@@ -854,19 +885,18 @@ details > summary { align-items: center; }
 
       <!-- MENU -->
       <section class="screen" data-screen="menu" data-title="Menu">
-        <ul class="menu-tiles" id="mods-menu">
-          <li data-module="tasks"><button type="button" class="tile" data-open="tasks"><span class="ic" style="--t:var(--accent)"><svg class="i" aria-hidden="true"><use href="#i-tasks"/></svg></span><span class="nm">Tasks</span><span class="badge" id="b-tasks" hidden></span></button></li>
-          <li data-module="routines"><button type="button" class="tile" data-open="routines"><span class="ic" style="--t:var(--ok)"><svg class="i" aria-hidden="true"><use href="#i-repeat"/></svg></span><span class="nm">Routines</span><span class="badge" id="b-routines" hidden></span></button></li>
-          <li data-module="schedule-board"><button type="button" class="tile" data-go="schedule"><span class="ic" style="--t:var(--warn)"><svg class="i" aria-hidden="true"><use href="#i-cal"/></svg></span><span class="nm">Schedule</span><span class="badge" id="b-schedule-board" hidden></span></button></li>
-          <li data-module="templates"><button type="button" class="tile" data-open="templates"><span class="ic" style="--t:var(--accent)"><svg class="i" aria-hidden="true"><use href="#i-doc"/></svg></span><span class="nm">Templates</span><span class="badge" id="b-templates" hidden></span></button></li>
-          <li data-module="models"><button type="button" class="tile" data-open="models"><span class="ic" style="--t:var(--ok)"><svg class="i" aria-hidden="true"><use href="#i-chip"/></svg></span><span class="nm">Models</span><span class="badge" id="b-models" hidden></span></button></li>
-          <li data-module="budgets"><button type="button" class="tile" data-open="budgets"><span class="ic" style="--t:var(--warn)"><svg class="i" aria-hidden="true"><use href="#i-coin"/></svg></span><span class="nm">Budgets and spend</span><span class="badge" id="b-budgets" hidden></span></button></li>
-          <li data-module="ledger"><button type="button" class="tile" data-open="ledger"><span class="ic" style="--t:var(--warn)"><svg class="i" aria-hidden="true"><use href="#i-wallet"/></svg></span><span class="nm">Ledger</span><span class="badge" id="b-ledger" hidden></span></button></li>
-          <li data-module="plugins"><button type="button" class="tile" data-open="plugins"><span class="ic" style="--t:var(--accent)"><svg class="i" aria-hidden="true"><use href="#i-plug"/></svg></span><span class="nm">Plugins</span><span class="badge" id="b-plugins" hidden></span></button></li>
-          <li data-module="issue-sources"><button type="button" class="tile" data-open="issue-sources"><span class="ic" style="--t:var(--accent)"><svg class="i" aria-hidden="true"><use href="#i-flag"/></svg></span><span class="nm">Issue sources</span><span class="badge" id="b-issue-sources" hidden></span></button></li>
-          <li data-module="privateers"><button type="button" class="tile" data-open="privateers"><span class="ic" style="--t:var(--err)"><svg class="i" aria-hidden="true"><use href="#i-compass"/></svg></span><span class="nm">Privateers</span><span class="badge" id="b-privateers" hidden></span></button></li>
-          <li data-module="coordinator"><button type="button" class="tile" data-open="coordinator"><span class="ic" style="--t:var(--ok)"><svg class="i" aria-hidden="true"><use href="#i-star"/></svg></span><span class="nm">Coordinator</span><span class="badge" id="b-coordinator" hidden></span></button></li>
-          <li data-module="coordinator-chat" hidden><button type="button" class="tile" id="chat-tile"><span class="ic" style="--t:var(--accent)"><svg class="i" aria-hidden="true"><use href="#i-chat"/></svg></span><span class="nm">Coordinator chat</span></button></li>
+        <ul class="list inset" id="mods-menu">
+          <li data-module="track-record"><button type="button" class="row" data-open="stats"><span class="ic" style="--t:var(--ok)"><svg class="i" aria-hidden="true"><use href="#i-chart"/></svg></span><span class="grow"><span class="title">Track record</span><span class="sub">How often tasks passed, and how fast</span></span><span class="meta" id="b-track-record" hidden></span></button></li>
+          <li data-module="ledger"><button type="button" class="row" data-open="ledger"><span class="ic" style="--t:var(--warn)"><svg class="i" aria-hidden="true"><use href="#i-wallet"/></svg></span><span class="grow"><span class="title">Usage</span><span class="sub">Tokens and cost of the last 7 days</span></span><span class="meta" id="b-ledger" hidden></span></button></li>
+          <li data-module="budgets"><button type="button" class="row" data-open="budgets"><span class="ic" style="--t:var(--warn)"><svg class="i" aria-hidden="true"><use href="#i-coin"/></svg></span><span class="grow"><span class="title">Budgets</span><span class="sub">How freely each provider may be used</span></span><span class="meta" id="b-budgets" hidden></span></button></li>
+          <li data-module="schedule-board"><button type="button" class="row" data-go="schedule"><span class="ic" style="--t:var(--warn)"><svg class="i" aria-hidden="true"><use href="#i-repeat"/></svg></span><span class="grow"><span class="title">Routines</span><span class="sub">Work that runs on a schedule</span></span><span class="meta" id="b-schedule-board" hidden></span></button></li>
+          <li data-module="templates"><button type="button" class="row" data-open="templates"><span class="ic" style="--t:var(--accent)"><svg class="i" aria-hidden="true"><use href="#i-doc"/></svg></span><span class="grow"><span class="title">Templates</span><span class="sub">Ready-made starts for new tasks</span></span><span class="meta" id="b-templates" hidden></span></button></li>
+          <li data-module="models"><button type="button" class="row" data-open="models"><span class="ic" style="--t:var(--ok)"><svg class="i" aria-hidden="true"><use href="#i-chip"/></svg></span><span class="grow"><span class="title">Models</span><span class="sub">The AI models the fleet can use</span></span><span class="meta" id="b-models" hidden></span></button></li>
+          <li data-module="plugins"><button type="button" class="row" data-open="plugins"><span class="ic" style="--t:var(--accent)"><svg class="i" aria-hidden="true"><use href="#i-plug"/></svg></span><span class="grow"><span class="title">Plugins</span><span class="sub">Agent tools and their updates</span></span><span class="meta" id="b-plugins" hidden></span></button></li>
+          <li data-module="issue-sources"><button type="button" class="row" data-open="issue-sources"><span class="ic" style="--t:var(--accent)"><svg class="i" aria-hidden="true"><use href="#i-flag"/></svg></span><span class="grow"><span class="title">Issue sources</span><span class="sub">Trackers whose issues become tasks</span></span><span class="meta" id="b-issue-sources" hidden></span></button></li>
+          <li data-module="privateers"><button type="button" class="row" data-open="privateers"><span class="ic" style="--t:var(--err)"><svg class="i" aria-hidden="true"><use href="#i-compass"/></svg></span><span class="grow"><span class="title">Privateers</span><span class="sub">Agent identities with a signed mandate</span></span><span class="meta" id="b-privateers" hidden></span></button></li>
+          <li data-module="coordinator"><button type="button" class="row" data-open="coordinator"><span class="ic" style="--t:var(--ok)"><svg class="i" aria-hidden="true"><use href="#i-star"/></svg></span><span class="grow"><span class="title">Coordinator</span><span class="sub">The AI that plans and hands out work</span></span><span class="meta" id="b-coordinator" hidden></span></button></li>
+          <li data-module="coordinator-chat" hidden><button type="button" class="row" id="chat-tile"><span class="ic" style="--t:var(--accent)"><svg class="i" aria-hidden="true"><use href="#i-chat"/></svg></span><span class="grow"><span class="title">Coordinator chat</span><span class="sub">Talk to the coordinator</span></span></button></li>
         </ul>
       </section>
 
@@ -877,6 +907,8 @@ details > summary { align-items: center; }
           <li data-module="notify"><button type="button" class="row" data-open="notify"><span class="ic" style="--t:var(--warn)"><svg class="i" aria-hidden="true"><use href="#i-bell"/></svg></span><span class="title">Notifications</span><span class="meta" id="m-notify"></span></button></li>
           <li data-module="pi-pocket"><button type="button" class="row" data-open="pi-pocket"><span class="ic" style="--t:var(--accent)"><svg class="i" aria-hidden="true"><use href="#i-phone"/></svg></span><span class="title">Pi Pocket</span><span class="meta" id="m-pi-pocket"></span></button></li>
           <li data-module="providers"><button type="button" class="row" data-go="providers"><span class="ic" style="--t:var(--accent)"><svg class="i" aria-hidden="true"><use href="#i-plug"/></svg></span><span class="title">Providers and models</span><span class="meta" id="m-providers"></span></button></li>
+          <li data-module="task-chats"><button type="button" class="row" data-open="task-chats"><span class="ic" style="--t:var(--accent)"><svg class="i" aria-hidden="true"><use href="#i-chat"/></svg></span><span class="title">Task chats</span><span class="meta" id="m-task-chats"></span></button></li>
+          <li data-module="live-output"><button type="button" class="row" data-open="live-output"><span class="ic" style="--t:var(--accent)"><svg class="i" aria-hidden="true"><use href="#i-play"/></svg></span><span class="title">Live output</span><span class="meta" id="m-live-output"></span></button></li>
           <li data-module="autonomy"><button type="button" class="row" data-open="autonomy"><span class="ic" style="--t:var(--warn)"><svg class="i" aria-hidden="true"><use href="#i-shield"/></svg></span><span class="title">Autonomy and approvals</span><span class="meta" id="m-autonomy"></span></button></li>
           <li data-module="lanes"><button type="button" class="row" data-open="lanes"><span class="ic" style="--t:var(--ok)"><svg class="i" aria-hidden="true"><use href="#i-lanes"/></svg></span><span class="title">Lanes and health</span><span class="meta" id="m-lanes"></span></button></li>
           <li data-module="capabilities" hidden><button type="button" class="row" data-open="capabilities"><span class="ic" style="--t:var(--accent)"><svg class="i" aria-hidden="true"><use href="#i-key"/></svg></span><span class="title">Capabilities</span><span class="meta" id="m-capabilities"></span></button></li>
@@ -955,30 +987,32 @@ details > summary { align-items: center; }
         <div class="setting" data-setting="theme">
           <div class="setting-head"><h3>Theme</h3></div>
           <div class="seg" id="theme-grid" role="group" aria-label="Theme">
-            <button type="button" data-theme="calm" aria-pressed="false">Calm</button>
-            <button type="button" data-theme="tiled" aria-pressed="false">Tiled</button>
-            <button type="button" data-theme="ledger" aria-pressed="false">Ledger</button>
+            <button type="button" data-theme="calm" aria-pressed="false">Rounded</button>
+            <button type="button" data-theme="tiled" aria-pressed="false">Square</button>
+            <button type="button" data-theme="ledger" aria-pressed="false">Flat</button>
           </div>
         </div>
         <div class="card">
           <div class="setting" data-setting="colors">
             <div class="setting-head"><h3>Colors</h3></div>
             <div class="choice-grid" id="palette-grid">
-              <button type="button" class="choice" data-palette="dusk" aria-pressed="false"><span class="mini" data-mini-desktop aria-hidden="true"></span><span class="name">Dusk</span><span class="dots" aria-hidden="true"></span></button>
-              <button type="button" class="choice" data-palette="paper" aria-pressed="false"><span class="mini" data-mini-desktop aria-hidden="true"></span><span class="name">Paper</span><span class="dots" aria-hidden="true"></span></button>
-              <button type="button" class="choice" data-palette="forest" aria-pressed="false"><span class="mini" data-mini-desktop aria-hidden="true"></span><span class="name">Forest</span><span class="dots" aria-hidden="true"></span></button>
-              <button type="button" class="choice" data-palette="sand" aria-pressed="false"><span class="mini" data-mini-desktop aria-hidden="true"></span><span class="name">Sand</span><span class="dots" aria-hidden="true"></span></button>
-              <button type="button" class="choice" data-palette="contrast" aria-pressed="false"><span class="mini" data-mini-desktop aria-hidden="true"></span><span class="name">Contrast</span><span class="dots" aria-hidden="true"></span></button>
-              <button type="button" class="choice" data-palette="catppuccin" aria-pressed="false"><span class="mini" data-mini-desktop aria-hidden="true"></span><span class="name">Catppuccin</span><span class="dots" aria-hidden="true"></span></button>
-              <button type="button" class="choice" data-palette="gruvbox" aria-pressed="false"><span class="mini" data-mini-desktop aria-hidden="true"></span><span class="name">Gruvbox</span><span class="dots" aria-hidden="true"></span></button>
-              <button type="button" class="choice" data-palette="everforest" aria-pressed="false"><span class="mini" data-mini-desktop aria-hidden="true"></span><span class="name">Everforest</span><span class="dots" aria-hidden="true"></span></button>
-              <button type="button" class="choice" data-palette="tokyo" aria-pressed="false"><span class="mini" data-mini-desktop aria-hidden="true"></span><span class="name">Tokyo Night</span><span class="dots" aria-hidden="true"></span></button>
-              <button type="button" class="choice" data-palette="auto" aria-pressed="false"><span class="mini" data-mini-desktop aria-hidden="true"></span><span class="name">Follow system</span><span class="dots" aria-hidden="true"></span></button>
+              <button type="button" class="choice" data-palette="auto" aria-pressed="false"><span class="mini" data-mini-desktop aria-hidden="true"></span><span class="name">Follow system</span></button>
+              <button type="button" class="choice" data-palette="dusk" aria-pressed="false"><span class="mini" data-mini-desktop aria-hidden="true"></span><span class="name">Dusk</span></button>
+              <button type="button" class="choice" data-palette="paper" aria-pressed="false"><span class="mini" data-mini-desktop aria-hidden="true"></span><span class="name">Paper</span></button>
+              <button type="button" class="choice" data-palette="contrast" aria-pressed="false"><span class="mini" data-mini-desktop aria-hidden="true"></span><span class="name">Contrast</span></button>
             </div>
           </div>
         </div>
         <details data-advanced>
           <summary>More</summary>
+          <div class="choice-grid" id="palette-more" data-setting="colors" role="group" aria-label="More colors">
+              <button type="button" class="choice" data-palette="forest" aria-pressed="false"><span class="mini" data-mini-desktop aria-hidden="true"></span><span class="name">Forest</span></button>
+              <button type="button" class="choice" data-palette="sand" aria-pressed="false"><span class="mini" data-mini-desktop aria-hidden="true"></span><span class="name">Sand</span></button>
+              <button type="button" class="choice" data-palette="catppuccin" aria-pressed="false"><span class="mini" data-mini-desktop aria-hidden="true"></span><span class="name">Catppuccin</span></button>
+              <button type="button" class="choice" data-palette="gruvbox" aria-pressed="false"><span class="mini" data-mini-desktop aria-hidden="true"></span><span class="name">Gruvbox</span></button>
+              <button type="button" class="choice" data-palette="everforest" aria-pressed="false"><span class="mini" data-mini-desktop aria-hidden="true"></span><span class="name">Everforest</span></button>
+              <button type="button" class="choice" data-palette="tokyo" aria-pressed="false"><span class="mini" data-mini-desktop aria-hidden="true"></span><span class="name">Tokyo Night</span></button>
+          </div>
           <p class="small faint">Catppuccin, Gruvbox, Everforest and Tokyo Night are colors in the style of Omarchy's themes.</p>
           <details><summary>Show as colors.toml</summary><pre id="toml"></pre></details>
           <div class="setting">
@@ -1058,20 +1092,14 @@ details > summary { align-items: center; }
 </div>
 <!-- Coordinator chat: it proposes, you tap. It holds front-door rights only, so it cannot approve, reject, cancel or spend. -->
 <div class="chat" id="chat" hidden role="dialog" aria-modal="false" aria-labelledby="chat-title" data-open="false">
-  <div class="chat-head"><svg class="i" aria-hidden="true"><use href="#i-compass"/></svg><h2 id="chat-title">Coordinator</h2><button type="button" class="icon-btn" id="chat-close" aria-label="Close the chat"><svg class="i"><use href="#i-close"/></svg></button></div>
+  <div class="chat-head"><svg class="i" aria-hidden="true"><use href="#i-compass"/></svg><h2 id="chat-title">Ask</h2><button type="button" class="icon-btn" id="chat-close" aria-label="Close the chat"><svg class="i"><use href="#i-close"/></svg></button></div>
   <div class="chat-meta">
-    <label for="chat-model" class="sr">Model for this chat</label>
-    <select id="chat-model"><option value="local">local_qwen: free, private</option><option value="cloud">claude_code: your subscription</option></select>
-    <span id="chat-context">Context 12% full</span><span id="chat-cost" class="tag ok">Cost $0.00</span>
+    <span id="chat-about" hidden><span id="chat-about-text"></span> <button type="button" class="icon-btn" id="chat-about-clear" aria-label="Ask about the whole fleet instead"><svg class="i" aria-hidden="true"><use href="#i-close"/></svg></button></span>
+    <span id="chat-where">Local model, nothing leaves this computer. It suggests; you tap to act.</span>
   </div>
-  <div class="chat-log" id="chat-log" role="log" aria-live="polite"></div>
+  <div class="chat-log" id="chat-log" role="log" aria-live="polite" tabindex="0"></div>
   <form class="chat-form" id="chat-form">
-    <div class="chips" id="chat-suggest" role="group" aria-label="Suggested questions">
-      <button type="button" class="chip small" data-ask="What needs me?">What needs me?</button>
-      <button type="button" class="chip small" data-ask="Why did the checkout test fail?">Why did a task fail?</button>
-      <button type="button" class="chip small" data-ask="What runs tonight?">What runs tonight?</button>
-      <button type="button" class="chip small" data-ask="Check immo-radar every morning">Propose a routine</button>
-    </div>
+    <div class="chips" id="chat-suggest" role="group" aria-label="Suggested questions"></div>
     <label for="chat-input" class="sr">Message to the coordinator</label>
     <input type="text" id="chat-input" autocomplete="off" placeholder="Ask, or describe work in plain words">
     <button type="submit" class="btn primary" aria-label="Send"><svg class="i"><use href="#i-send"/></svg></button>
@@ -1086,14 +1114,14 @@ details > summary { align-items: center; }
    Data. Themes and palettes are plain objects, the shape a theme folder and a colors.toml take later.
    ============================================================================================ */
 var THEMES = {
-  calm:   { name: "Calm",   surface: "cards", labels: "plain", tiling: false, gapOut: 8, leading: 1.5,
+  calm:   { name: "Rounded",   surface: "cards", labels: "plain", tiling: false, gapOut: 8, leading: 1.5,
             r: { mark: 2, tag: 4, seg: 6, row: 8, control: 10, card: 14, window: 12, sheet: 20 },
             shadow: "0 1px 2px color-mix(in srgb, var(--sh) 30%, transparent)",
             pop: "0 16px 48px color-mix(in srgb, var(--sh) 45%, transparent)" },
-  tiled:  { name: "Tiled",  surface: "cards", labels: "mono", tiling: true, gapOut: 10, leading: 1.45,
+  tiled:  { name: "Square",  surface: "cards", labels: "mono", tiling: true, gapOut: 10, leading: 1.45,
             r: { mark: 1, tag: 2, seg: 3, row: 4, control: 5, card: 6, window: 8, sheet: 10 },
             shadow: "none", pop: "0 10px 30px color-mix(in srgb, var(--sh) 55%, transparent)" },
-  ledger: { name: "Ledger", surface: "flat",  labels: "plain", tiling: false, gapOut: 0, leading: 1.4,
+  ledger: { name: "Flat", surface: "flat",  labels: "plain", tiling: false, gapOut: 0, leading: 1.4,
             r: { mark: 1, tag: 2, seg: 4, row: 6, control: 6, card: 0, window: 0, sheet: 12 },
             shadow: "none", pop: "0 8px 24px color-mix(in srgb, var(--sh) 40%, transparent)" }
 };
@@ -1152,7 +1180,6 @@ function money(usd) {
 }
 function renderMoney() {
   var c = state.currency;
-  $("#spend-label").textContent = "Spend today: " + money(0.31) + " of " + money(1.5);
   $("#o-money").textContent = money(0.31); $("#o-money2").textContent = money(1.5);
   $("#s-currency").value = c;
   if (document.activeElement !== $("#s-rate")) $("#s-rate").value = rateFor(c);   // never rewrite what is being typed
@@ -1162,10 +1189,9 @@ function renderMoney() {
 /* Modules: id, title, place. The shell shows what is registered; a plugin would add one here. */
 var MODULES = [
   ["needs-you", "Needs you", "home"], ["running-now", "Running now", "home"], ["recent-results", "Recent results", "home"],
-  ["tasks", "Tasks", "menu"], ["routines", "Routines", "menu"], ["templates", "Templates", "menu"], ["models", "Models", "menu"],
-  ["budgets", "Budgets and spend", "menu"], ["ledger", "Ledger", "menu"], ["plugins", "Plugins", "menu"], ["issue-sources", "Issue sources", "menu"], ["privateers", "Privateers", "menu"], ["coordinator", "Coordinator", "menu"],
-  ["schedule-board", "Schedule", "menu"],
-  ["signer", "Connect phone", "settings"], ["notify", "Notifications", "settings"], ["pi-pocket", "Pi Pocket", "settings"], ["providers", "Providers and models", "settings"], ["autonomy", "Autonomy and approvals", "settings"], ["lanes", "Lanes and health", "settings"], ["access", "Access (token, devices)", "settings"],
+  ["track-record", "Track record", "menu"], ["ledger", "Usage", "menu"], ["budgets", "Budgets", "menu"],
+  ["schedule-board", "Routines", "menu"], ["templates", "Templates", "menu"], ["models", "Models", "menu"], ["plugins", "Plugins", "menu"], ["issue-sources", "Issue sources", "menu"], ["privateers", "Privateers", "menu"], ["coordinator", "Coordinator", "menu"],
+  ["signer", "Connect phone", "settings"], ["notify", "Notifications", "settings"], ["pi-pocket", "Pi Pocket", "settings"], ["task-chats", "Task chats", "settings"], ["live-output", "Live output", "settings"], ["providers", "Providers and models", "settings"], ["autonomy", "Autonomy and approvals", "settings"], ["lanes", "Lanes and health", "settings"], ["access", "Access (token, devices)", "settings"],
   ["status", "Status and timeline", "task"],["drafts", "Drafts awaiting signature", "task"], ["changes", "Changes", "task"], ["gate", "Gate output", "task"], ["receipt", "Receipt", "task"], ["attempts", "Attempts", "task"]
 ];
 var PLACES = [["home", "Home", "mods-home"], ["menu", "Menu", "mods-menu"], ["settings", "Settings", "mods-settings"], ["task", "Task details", "mods-task"]];
@@ -1175,30 +1201,11 @@ var TASKS = [];   // filled from the daemon
    the question and the summary. level: ok, warn or err colours the chip. */
 var BRIEFS = [];   // filled from the daemon
 var TEMPLATES = [];   // filled from the daemon
-var SHEETS = {
-  tasks: ["Tasks", "Recent work across projects.", [["12 tasks this week", "9 done, 2 running, 1 failed"], ["Open the task list", ""]], "tasks"],
-  routines: ["Routines", "Work that runs on a schedule.", [["Nightly dependency check", "03:30 every day"], ["Weekly changelog", "Mondays, 09:00"], ["immo-radar scan", "Every 2 hours"], ["Quarterly cleanup", "Waiting for your approval"]], "schedule"],
-  templates: ["Templates", "One-tap starts for new tasks and routines.", [["Fix a bug", "Global"], ["Refactor", "Global"], ["Add tests", "Project: immo-radar"], ["Update docs", "Global"], ["Bump dependencies", "Global"]]],
-  models: ["Models", "How each model has done lately.", [["Agent success rate", "91% over 30 days"], ["local_qwen", "88%, 140 runs"], ["claude_code", "96%, 52 runs"]], "providers"],
-  budgets: ["Budgets and spend", "What this month has cost.", [["Used this month", "38% of the limit"], ["Policy", "Stop at the limit"], ["Cloud lane", "Resting until tomorrow"]]],
-  "issue-sources": ["Issue sources", "Where tasks can come from.", [["Tracker: immo-radar", "Connected, checked 4 min ago"], ["OpenClaw", "Connected, tasks from there wait for you"]]],
-  privateers: ["Privateers", "Named identities with a limited commission.", [["harbor-clerk", "Active until Friday, 12 calls left"]]],
-  coordinator: ["Coordinator", "The helper that plans and sorts work.", [["State", "Idle"], ["Last plan", "Yesterday, 4 tasks"]]],
-  autonomy: ["Autonomy and approvals", "How much the fleet may do on its own.", [["Gate commands", "Ask first"], ["Pushing branches", "Ask first"], ["Reading project files", "Allowed"]]],
-  lanes: ["Lanes and health", "Where agents run.", [
-    ["local_qwen", "Healthy"],
-    ["claude_code", "Healthy"],
-    ["agy", "Resting until 18:00"],
-    ["opencode", "Healthy"]]],
-  capabilities: ["Capabilities", "Tools an agent may use, each in its own sandbox.", [["Web fetch (read only)", "Allowed for 2 domains"], ["Issue comments", "Ask each time"]]],
-  access: ["Access (token, devices)", "Who may use this fleet.", [["Access token", "Created 12 days ago"], ["This phone", "Connected"], ["Work laptop", "Last seen today"]]],
-  about: ["About", "", []]
-};
 var SETTING_INDEX = [["Theme", "appearance"], ["Currency", "appearance"], ["Colors", "appearance"], ["Text size", "appearance"], ["Density", "appearance"], ["Corners", "appearance"], ["Tiling", "appearance"], ["Motion", "appearance"], ["Font", "appearance"], ["Ligatures", "appearance"], ["Accent", "appearance"], ["Navigation", "appearance"], ["Layout", "layout"], ["Providers and API keys", "providers"], ["Your apps", "settings", "apps"]];
 
-/* Routines for the schedule board. Times are hours from "now" (14:20 in this sample).
+/* Routines for the schedule board, refreshed from the daemon.
    kind: repeat or once. runs: upcoming slots. past: slots behind us, with what happened. */
-var NOW_MIN = 14 * 60 + 20;
+var NOW_MIN = 0;
 var ROUTINES = [];   // filled from the daemon
 function clock(offsetH) {
   var t = NOW_MIN + Math.round(offsetH * 60), day = Math.floor(t / 1440), m = ((t % 1440) + 1440) % 1440;
@@ -1210,7 +1217,6 @@ function clock(offsetH) {
 /* Providers and models. A key is never in this page: only "set" or "not set". */
 var PROVIDERS = [];   // filled from the daemon
 var MODELS = [];   // filled from the daemon
-var HARD = [["claude-opus", "Opus"], ["agy-pro", "agy pro"]];
 var LIMIT_TEXT = {
   "switch": "The task moves to the next lane right away.",
   "wait": "The task waits for the lane to come back, up to the time you chose, and then goes on by itself.",
@@ -1238,9 +1244,17 @@ function icon(id) {
   s.setAttribute("class", "i"); s.setAttribute("aria-hidden", "true"); u.setAttribute("href", "#i-" + id); s.appendChild(u); return s;
 }
 var toastTimer;
+function hideToast() {
+  var t = $("#toast");
+  clearTimeout(toastTimer);
+  t.dataset.show = "false";
+  t.textContent = "";
+}
 function toast(msg) {
-  var t = $("#toast"); t.textContent = msg; t.dataset.show = "true";
-  clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.dataset.show = "false"; }, 3200);
+  var t = $("#toast");
+  if (t.dataset.show === "true" && t.querySelector("button")) return;
+  t.textContent = msg; t.dataset.show = "true";
+  clearTimeout(toastTimer); toastTimer = setTimeout(hideToast, 3200);
 }
 function clone(o) { return JSON.parse(JSON.stringify(o)); }
 
@@ -1322,7 +1336,7 @@ function setNavMode() {
 function populateSelect(sel, map) {
   Object.keys(map).forEach(function (k) { sel.appendChild(h("option", { value: k, text: map[k][0] })); });
 }
-/* A mini desktop: two small windows drawn in the palette's own colours, and its colour dots under the name.
+/* A mini desktop: two small windows drawn in the palette's own colours.
    A "follow system" card shows the dark half on the left and the light half on the right. */
 function miniWindow(cls, c) {
   var w = h("span", { class: "w " + cls }), bar = h("i"), l1 = h("b"), l2 = h("b");
@@ -1332,18 +1346,17 @@ function miniWindow(cls, c) {
   return w;
 }
 function fillMinis() {
-  $$("#palette-grid .choice").forEach(function (b) {
-    var pal = PALETTES[b.dataset.palette], mini = $(".mini", b), dots = $(".dots", b);
+  $$(".choice[data-palette]").forEach(function (b) {
+    var pal = PALETTES[b.dataset.palette], mini = $(".mini", b);
     var a = pal.pair ? PALETTES[pal.pair[0]].c : pal.c, z = pal.pair ? PALETTES[pal.pair[1]].c : pal.c;
     mini.style.background = a.background;
     if (pal.pair) { var half = h("span"); half.style.cssText = "position:absolute;top:0;right:0;bottom:0;width:50%;background:" + z.background; mini.appendChild(half); }
     mini.appendChild(miniWindow("w1", a)); mini.appendChild(miniWindow("w2", z));
-    [a.accent, a.green, a.yellow, a.red, z.accent].forEach(function (col) { var i = h("i"); i.style.background = col; dots.appendChild(i); });
   });
 }
 /* Pointing at a card, or focusing it, shows that palette live; leaving restores the chosen one. */
 function bindPalettePreview() {
-  $$("#palette-grid .choice").forEach(function (b) {
+  $$(".choice[data-palette]").forEach(function (b) {
     function on() { previewColors = b.dataset.palette; applyAll(); }
     function off() { if (previewColors) { previewColors = null; applyAll(); } }
     b.addEventListener("mouseenter", on); b.addEventListener("mouseleave", off);
@@ -1353,6 +1366,7 @@ function bindPalettePreview() {
 function syncControls() {
   $$("[data-theme]").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.theme === state.theme)); });
   $$("[data-palette]").forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.palette === state.colors)); });
+  if ($('#palette-more [data-palette="' + state.colors + '"]')) $("#palette-more").closest("details").open = true;   // a chosen palette stays in sight
   ["density", "motion", "nav", "ligatures"].forEach(function (n) {
     $$('[data-setting="' + n + '"] [data-value]').forEach(function (b) { b.setAttribute("aria-pressed", String(b.dataset.value === state[n])); });
   });
@@ -1464,7 +1478,7 @@ $("#layout-reset").addEventListener("click", function () { state.order = {}; sta
 var PROJECT_COLOR = { blog: "var(--accent)", "immo-radar": "var(--warn)", fleet: "var(--ok)" };
 var LANE_COLOR = { local_qwen: "var(--ok)", claude_code: "var(--accent)", agy: "var(--warn)", opencode: "var(--muted)" };
 var LANE_MONO = { local_qwen: "Q", claude_code: "C", agy: "A", opencode: "O" };
-var GLYPH_LABEL = { working: "working", waiting: "waiting for you", failed: "failed", unseen: "finished, not seen", seen: "finished", once: "runs once", repeat: "repeats", paused: "paused" };
+var GLYPH_LABEL = { working: "working", waiting: "waiting for you", failed: "failed", unseen: "finished, not seen", seen: "finished", queued: "queued", once: "runs once", repeat: "repeats", paused: "paused" };
 function svgEl(name, attrs) {
   var el = document.createElementNS("http://www.w3.org/2000/svg", name);
   for (var k in attrs) el.setAttribute(k, attrs[k]);
@@ -1477,9 +1491,8 @@ function glyph(kind, color) {
   if (kind === "working") [[1, 1], [9, 1], [1, 9], [9, 9]].forEach(function (p) { s.appendChild(svgEl("rect", { "class": "q", x: p[0], y: p[1], width: 6, height: 6, rx: 1 })); });
   else if (kind === "waiting") { s.appendChild(svgEl("rect", { x: 3, y: 2, width: 3.5, height: 12, rx: 1 })); s.appendChild(svgEl("rect", { x: 9.5, y: 2, width: 3.5, height: 12, rx: 1 })); }
   else if (kind === "failed") s.appendChild(svgEl("path", { "class": "ln", d: "M3 3L13 13M13 3L3 13" }));
-  else if (kind === "unseen") s.appendChild(svgEl("rect", { x: 2, y: 2, width: 12, height: 12, rx: 2 }));
-  else if (kind === "seen") s.appendChild(svgEl("rect", { "class": "ln", x: 3, y: 3, width: 10, height: 10, rx: 2 }));
-  else if (kind === "once" || kind === "paused") s.appendChild(svgEl("circle", { "class": "ln", cx: 8, cy: 8, r: 5 }));
+  else if (kind === "unseen" || kind === "seen") s.appendChild(svgEl("path", { "class": "ln", d: "M2.500 8.500L6.500 12.500L13.500 3.500" }));
+  else if (kind === "once" || kind === "paused" || kind === "queued") s.appendChild(svgEl("circle", { "class": "ln", cx: 8, cy: 8, r: 5 }));
   else s.appendChild(svgEl("path", { d: "M8 1.500L14.500 8L8 14.500L1.500 8z" }));
   return s;
 }
@@ -1490,9 +1503,9 @@ function laneChip(lane) {
 }
 function emptyItem(text) { return h("li", { "class": "empty" }, icon("inbox"), text); }
 function taskRow(t) {
-  var kind = { needs: "waiting", failed: "failed", "failed-old": "failed", running: "working", cancelled: "seen", done: t.seen === false ? "unseen" : "seen" }[t.state];
+  var kind = { needs: "waiting", failed: "failed", "failed-old": "failed", running: isRunning(t) ? "working" : "queued", cancelled: "seen", done: t.seen === false ? "unseen" : "seen" }[t.state];
   return h("li", null, row("", t.title, t.meta, { "data-task": String(t.id) }, {
-    glyph: glyph(kind, PROJECT_COLOR[t.project]), icon: t.kind, lane: t.state === "running" ? t.lane : null, progress: t.state === "running" ? t.pct : null
+    glyph: glyph(kind, PROJECT_COLOR[t.project]), lane: t.state === "running" ? t.lane : null, progress: t.state === "running" ? t.pct : null
   }));
 }
 /* The one row every list uses: a mark (a state glyph, or a quiet dot), an icon for what it is, the title,
@@ -1513,7 +1526,9 @@ function row(dot, title, meta, attrs, x) {
 function renderLists() {
   var needs = $("#list-needs"), running = $("#list-running"), recent = $("#list-recent");
   TASKS.filter(function (t) { return t.state === "needs" || t.state === "failed"; }).forEach(function (t) {
-    var li = taskRow(t); if (BRIEFS[t.id]) $(".row", li).dataset.go = "approval/" + t.id; needs.appendChild(li);
+    var li = taskRow(t); if (BRIEFS[t.id]) $(".row", li).dataset.go = "approval/" + t.id;
+    if (t.state === "failed") { var why = causeOf(t); if (why) li.appendChild(h("p", { class: "small cause", text: why })); li.appendChild(failedActions(t)); }
+    needs.appendChild(li);
   });
   TASKS.filter(function (t) { return t.state === "running"; }).forEach(function (t) { running.appendChild(taskRow(t)); });
   TASKS.filter(function (t) { return t.state === "done"; }).slice(0, 5).forEach(function (t) { recent.appendChild(taskRow(t)); });
@@ -1527,11 +1542,11 @@ function renderLists() {
 function renderGlance() {
   var n = function (f) { return TASKS.filter(f).length; };
   $("#g-needs").textContent = n(function (t) { return t.state === "needs" || t.state === "failed"; });
-  $("#g-running").textContent = n(function (t) { return t.state === "running"; });
-  var next = ROUTINES.filter(function (r) { return r.state === "scheduled" && r.runs.length; }).map(function (r) { return r.runs[0]; }).sort(function (a, b) { return a - b; })[0];
-  $("#g-next").textContent = next === undefined ? "none" : away(next).replace("in ", "");
+  $("#g-running").textContent = n(isRunning);
   renderHealth();
 }
+/* At work right now; a queued task waits for a lane and is listed, not counted as running. */
+function isRunning(t) { return t.state === "running" && !(t.raw && t.raw.status === "queued"); }
 function renderHealth() {
   var el = $("#health"), txt = $("#health-text"), ic = $("#health-icon");
   if (!el || !txt || !LIVE) return;
@@ -1544,14 +1559,14 @@ function renderHealth() {
   if (!LIVE.loaded) return;
   var waiting = TASKS.filter(function (t) { return t.state === "needs"; }).length;
   var failed = TASKS.filter(function (t) { return t.state === "failed"; }).length;
-  var running = TASKS.filter(function (t) { return t.state === "running"; }).length;
+  var running = TASKS.filter(isRunning).length;
   var sum = (typeof SIDE === "object" && SIDE) ? SIDE.laneSummary : null;
   var dead = (sum && Number(sum.dead)) || 0;
   var resting = Array.isArray(PROVIDERS) ? PROVIDERS.filter(function (p) { return p.health === "rest"; }).length : 0;
   var parts = [];
   if (waiting) parts.push(waiting + " waiting for you");
   if (failed) parts.push(failed + " failed");
-  if (dead) parts.push(dead + (dead === 1 ? " lane down" : " lanes down"));
+  if (sum && dead && !Number(sum.ok)) parts.push("no lane can run");
   if (!parts.length && resting) parts.push(resting + (resting === 1 ? " provider resting" : " providers resting"));
   var attn = parts.length > 0;
   el.classList.toggle("attn", attn);
@@ -1570,18 +1585,32 @@ function filterTasks(f) {
   $$("#task-filter .chip").forEach(function (c) { c.setAttribute("aria-pressed", String(c.dataset.filter === taskFilter)); });
 }
 function showTask(id) {
-  var t = TASKS[id] || TASKS[0]; if (!t) { $("#task-title").textContent = "No tasks yet"; return; } var label = { needs: "Needs you", failed: "Failed", "failed-old": "Failed", cancelled: "Cancelled", running: "Running", done: "Done", archived: "Archived" }[t.state];
+  var t = TASKS[id] || TASKS[0]; if (!t) { $("#task-title").textContent = "No tasks yet"; return; } var label = { needs: "Needs you", failed: "Failed", "failed-old": "Failed", cancelled: "Cancelled", running: isRunning(t) ? "Running" : "Queued", done: "Done", archived: "Archived" }[t.state];
   $("#task-title").textContent = t.title; $("#task-status").textContent = label;
   $("#task-status").className = "tag " + ({ needs: "warn", failed: "err", "failed-old": "err", cancelled: "", running: "accent", done: "ok", archived: "" }[t.state]);
   $("#task-meta").textContent = t.line;
-  var pr = $("#task-primary"), ar = $("#task-archive"); delete pr.dataset.go; pr.hidden = false;
+  var why = (t.state === "failed" || t.state === "failed-old") ? causeOf(t) : "";
+  $("#task-cause").textContent = why; $("#task-cause").hidden = !why;
+  var ask = $("#task-ask"); ask.hidden = !(t.state === "failed" || t.state === "failed-old" || t.state === "needs");
+  ask.onclick = function () { openChat(t); };
+  var pr = $("#task-primary"), ar = $("#task-archive"); delete pr.dataset.go; delete pr.dataset.sure; pr.hidden = false;
+  // Cancelling throws work away: an outlined red button that asks once more, never the filled primary.
+  pr.classList.toggle("primary", t.state !== "running"); pr.classList.toggle("danger", t.state === "running");
   if (!t) { pr.hidden = true; if (ar) ar.hidden = true; return; }
   if (t.state === "needs") { pr.textContent = pendingDraftsOf(t.raw).length ? "Review signature" : "Review"; pr.dataset.go = "approval/" + t.id; }
-  else if (t.state === "failed" || t.state === "failed-old") { pr.textContent = "Retry"; pr.onclick = function () { act("retry", t); }; }
-  else if (t.state === "running") { pr.textContent = "Cancel"; pr.onclick = function () { act("cancel", t); }; }
+  else if (t.state === "failed" || t.state === "failed-old") { pr.textContent = "Retry"; pr.onclick = function () { retryTask(t); }; }
+  else if (t.state === "running") {
+    pr.textContent = "Cancel task";
+    pr.onclick = function () {
+      if (pr.dataset.sure !== "1") { pr.dataset.sure = "1"; pr.textContent = "Tap again to cancel"; return; }
+      act("cancel", t);
+    };
+  }
   else pr.hidden = true;
   if (ar) {
-    if (t.state === "done" || t.state === "failed" || t.state === "failed-old" || t.state === "cancelled") {
+    if (t.state === "failed" || t.state === "failed-old") {
+      ar.hidden = false; ar.textContent = "Discard"; ar.onclick = function () { discardTask(t); };
+    } else if (t.state === "done" || t.state === "cancelled") {
       ar.hidden = false; ar.textContent = "Archive"; ar.onclick = function () { act("archive", t); };
     } else if (t.state === "archived") {
       ar.hidden = false; ar.textContent = "Restore from archive"; ar.onclick = function () { act("unarchive", t); };
@@ -1590,7 +1619,140 @@ function showTask(id) {
     }
   }
   $$("#list-tasks .row").forEach(function (r) { r.toggleAttribute("aria-current", r.dataset.task === String(id)); });
+  renderPhases(t);
+  showLive(t);
 }
+function renderPhases(t) {
+  var ol = $("#task-phases"), slow = $("#task-slow"), on = t && t.state === "running";
+  ol.hidden = !on; slow.hidden = true; if (!on) return;
+  var now = PHASES.map(function (x) { return x[0]; }).indexOf(phaseOf(t.raw));
+  ol.textContent = ""; $("#task-meta").textContent = t.line + " · " + runMinutes(t.raw) + " min";
+  PHASES.forEach(function (x, i) {
+    var li = h("li", { text: x[1] });
+    if (i < now) li.className = "done"; if (i === now) li.setAttribute("aria-current", "step");
+    ol.appendChild(li);
+  });
+  var p90 = slowFor(t.raw, t.lane);
+  if (p90 != null) { slow.hidden = false; slow.textContent = "Taking longer than usual: 9 of 10 runs on " + String(t.lane).replace(/_/g, " ") + " finish within " + Math.round(p90) + " min. Send a note below, or cancel."; }
+}
+/* Running rows and the open task follow the clock, a minute at a time, without a fetch. */
+setInterval(function () {
+  if (document.visibilityState !== "visible" || !TASKS.some(isRunning)) return;
+  TASKS.forEach(function (t) { if (t.state === "running") t.meta = t.raw.status === "queued" ? "queued" : runWords(t.raw, t.lane); });
+  clearLists(); renderLists();
+  if (/^#\/?task\//.test(location.hash) && TASKS[lastTask]) renderPhases(TASKS[lastTask]);
+}, 60000);
+/* Live: what a running task does now (core/live.py), and a note to it. A note to a running task
+   restarts its current step with the note; one to a task not started yet joins its prompt. */
+var liveTimer = null;
+function showLive(t) {
+  var box = $("#task-live"); if (!box) return;
+  if (liveTimer) { clearTimeout(liveTimer); liveTimer = null; }
+  var open = t && (t.state === "running" || t.state === "needs");
+  box.hidden = !open; if (!open) return;
+  var tid = t.tid, pre = $("#live-lines"), meta = $("#live-meta"), out = $("#live-out"), send = $("#live-send"), note = $("#live-note");
+  pre.hidden = !isRunning(t); pre.textContent = ""; meta.textContent = ""; out.textContent = "";
+  function tick() {
+    if (box.hidden || !TASKS.some(function (x) { return x.tid === tid; }) || !location.hash.match(/^#\/?task/)) return;
+    getJSON("/api/fleet/tasks/" + encodeURIComponent(tid) + "/live").then(function (d) {
+      if (!d) return;
+      var c = d.current || {}, secs = c.started_at ? Math.max(0, Math.round(Date.now() / 1000 - c.started_at)) : null;
+      meta.textContent = [c.lane, c.harness, secs != null ? (secs < 120 ? secs + " s" : Math.round(secs / 60) + " min") + " in this step" : ""].filter(Boolean).join(" / ");
+      if (d.enabled === false) {
+        pre.hidden = true; meta.textContent = (meta.textContent ? meta.textContent + " / " : "") + "live output is off in Settings";
+      } else if (d.status === "in_progress") {
+        pre.hidden = false;
+        var lines = d.lines || [];
+        var atEnd = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 24;
+        pre.textContent = lines.length ? lines.join("\n") : "Waiting for the first output.";
+        if (atEnd) pre.scrollTop = pre.scrollHeight;
+      }
+    }).catch(function () {}).then(function () { if (d_live() && isRunning(t)) liveTimer = setTimeout(tick, 3000); });
+  }
+  function d_live() { return !box.hidden; }
+  send.onclick = function () {
+    var text = note.value.trim(); if (!text) { note.focus(); return; }
+    send.disabled = true; out.textContent = "Sending.";
+    send_note(tid, text).then(function (j) { note.value = ""; out.textContent = "Sent: " + j.delivered + "."; })
+      .catch(function (e) { out.textContent = e.message; }).then(function () { send.disabled = false; });
+  };
+  if (isRunning(t)) tick();
+}
+/* Why a task failed, in one line, from its autopsy or error. A task that never started says what to fix. */
+function causeOf(t) {
+  var raw = t.raw || {}, r = raw.result || {}, a = raw.autopsy || r.autopsy || {};
+  var why = String(a.root_cause || r.error || "").split("\n")[0].replace(/^\d+ lane\(s\) failed; last: /, "").slice(0, 160);
+  if (raw.cause === "not_started") return "Could not start: " + why + " Fix the configuration, then retry.";
+  return why;
+}
+function isGrid(t) { return Boolean(t.raw && t.raw.result && t.raw.result.grid_status); }
+/* Retry: the same task again through its lanes. On the local queue a hint joins what the agent is told. */
+function retryTask(t, prefill) {
+  if (isGrid(t)) { act("retry", t); return; }
+  showSheet("Retry", function (body) {
+    body.appendChild(h("p", { class: "muted", text: "The task runs again through its lanes. A hint is added to what the agent is told." }));
+    var hint = h("textarea", { id: "retry-hint", rows: "3", maxlength: "2000", placeholder: "Only change docs/INSTALL.md, not the test" });
+    if (prefill) hint.value = prefill;
+    var go = h("button", { type: "button", class: "btn primary block", text: "Retry" });
+    go.addEventListener("click", function () {
+      go.disabled = true;
+      send("POST", "/api/fleet/tasks/" + encodeURIComponent(t.tid) + "/retry", { hint: hint.value.trim() }).then(function () {
+        closeSheet(); toast("Queued again"); LIVE.etag = null; return refresh();
+      }).catch(fail).then(function () { go.disabled = false; });
+    });
+    body.appendChild(h("div", { class: "field" }, h("label", { for: "retry-hint", text: "Hint for the next try (optional)" }), hint));
+    body.appendChild(go);
+  });
+}
+/* Discard: archived (it still counts in the Track record) and its work branch deleted. The request goes
+   out after 5 s, so Undo needs nothing from the server; closing the app before that keeps the task. */
+var DISCARDING = {}, discardTimer = null;
+function discardTask(t) {
+  DISCARDING[t.tid] = "pending";
+  clearLists(); renderLists(); if (/^#\/?task/.test(location.hash)) go("home");
+  var el = $("#toast"), undo = h("button", { type: "button", class: "btn", text: "Undo" });
+  var pending = Object.keys(DISCARDING).filter(function (k) { return DISCARDING[k] === "pending"; });
+  el.textContent = "";
+  el.appendChild(document.createTextNode(pending.length > 1 ? "Discarded " + pending.length + " tasks" : "Discarded"));
+  el.appendChild(undo);
+  el.dataset.show = "true";
+  clearTimeout(toastTimer);
+  function commit() {
+    if (el.contains(document.activeElement)) return;
+    var tids = Object.keys(DISCARDING).filter(function (k) { return DISCARDING[k] === "pending"; });
+    if (!tids.length) return;
+    tids.forEach(function (tid) { DISCARDING[tid] = "sending"; });
+    hideToast();
+    Promise.all(tids.map(function (tid) {
+      return send("POST", "/api/fleet/tasks/" + encodeURIComponent(tid) + "/discard").catch(fail)
+        .then(function () { delete DISCARDING[tid]; });
+    })).then(function () { LIVE.etag = null; return refresh(); });
+  }
+  function arm() { clearTimeout(discardTimer); discardTimer = setTimeout(commit, 5000); }
+  function pause() { clearTimeout(discardTimer); discardTimer = null; }
+  function resume(e) {
+    var inside = e && e.type === "focusout" ? (e.relatedTarget && el.contains(e.relatedTarget)) : el.contains(document.activeElement);
+    if (el.dataset.show !== "true" || inside || (el.matches && el.matches(":hover"))) return;
+    arm();
+  }
+  el.onfocusin = pause; el.onfocusout = resume; el.onmouseenter = pause; el.onmouseleave = resume;
+  undo.addEventListener("click", function () {
+    pause();
+    Object.keys(DISCARDING).forEach(function (tid) { if (DISCARDING[tid] === "pending") delete DISCARDING[tid]; });
+    hideToast(); LIVE.etag = null; refresh();
+  });
+  arm();
+}
+function failedActions(t) {
+  var retry = h("button", { type: "button", class: "btn", text: "Retry", "aria-label": "Retry: " + t.title }),
+    ask = h("button", { type: "button", class: "btn", text: "Ask", "aria-label": "Ask: " + t.title }),
+    drop = h("button", { type: "button", class: "btn", text: "Discard", "aria-label": "Discard: " + t.title });
+  retry.addEventListener("click", function () { retryTask(t); });
+  ask.addEventListener("click", function () { openChat(t); });
+  drop.addEventListener("click", function () { discardTask(t); });
+  return h("div", { class: "btns row-acts" }, retry, ask, drop);
+}
+function send_note(tid, text) { return send("POST", "/api/fleet/tasks/" + encodeURIComponent(tid) + "/note", { text: text }); }
 
 /* ============================================================================================
    Routing: hash routes, one screen at a time (two on a wide screen for tasks)
@@ -1662,17 +1824,7 @@ function showSheet(title, fill) {
   syncSheetModal();
   $("#sheet-close").focus();
 }
-function openSheet(id) {
-  var s = SHEETS[id]; if (!s) return;
-  showSheet(s[0], function (body) {
-    body.appendChild(h("p", { class: "muted", text: s[1] }));
-    var ul = h("ul", { class: "list" });
-    s[2].forEach(function (r) { ul.appendChild(h("li", { class: "row" }, h("span", { class: "title", text: r[0] }), r[1] ? h("span", { class: "meta", text: r[1] }) : null)); });
-    body.appendChild(ul);
-    if (s[3]) body.appendChild(h("button", { type: "button", class: "btn block", "data-go": s[3], text: s[3] === "tasks" ? "Open the full list" : "Open the " + (SCREEN_NAMES[s[3]] || "full list") }));
-  });
-}
-var SCREEN_NAMES = { schedule: "schedule", providers: "providers and models" };
+function openSheet(id) { if (LIVE_SHEETS[id]) LIVE_SHEETS[id](); }
 function closeSheet() {
   if ($("#sheet").dataset.open !== "true") return;
   $("#sheet").dataset.open = "false"; $("#scrim").dataset.open = "false"; $("#app").dataset.sheet = "closed";
@@ -1724,6 +1876,7 @@ function preview() {
   });
   $("#tpl-preview").value = text;
 }
+$("#approval-ask").addEventListener("click", function () { var t = TASKS[Number((location.hash.split("/")[2])) || 0]; if (t) openChat(t); });
 $("#approve-btn").addEventListener("click", function () { var t = TASKS[Number((location.hash.split("/")[2])) || 0]; if (t) act("approve", t); });
 $("#reject-btn").addEventListener("click", function () { var t = TASKS[Number((location.hash.split("/")[2])) || 0]; if (t) act("reject", t); });
 $("#later-btn").addEventListener("click", function () { go("home"); });
@@ -1764,9 +1917,10 @@ function search() {
     ["Templates", TEMPLATES.map(function (t) { return [t.name, "Template", function () { tpl = t; renderTemplates(); go("new-task"); }]; })],
     ["Modules", MODULES.map(function (m) { return [m[1], "Module in " + m[2], function () {
       var screen = { signer: "connect-phone", providers: "providers", "schedule-board": "schedule" }[m[0]];
+      var sheetId = m[0] === "track-record" ? "stats" : m[0];
       if (screen) go(screen);
-      else if (m[0] === "coordinator-chat") openChat();
-      else if (SHEETS[m[0]] || LIVE_SHEETS[m[0]]) { go(m[2] === "settings" ? "settings" : "menu"); setTimeout(function () { openSheet(m[0]); }, 60); }
+      else if (m[0] === "coordinator-chat") openChat(null);
+      else if (LIVE_SHEETS[sheetId]) { go(m[2] === "settings" ? "settings" : "menu"); setTimeout(function () { openSheet(sheetId); }, 60); }
       else go(m[2] === "task" ? "task" : "home");
     }]; })],
     ["Routines", ROUTINES.map(function (r) { return [r.name, r.when, function () { go("schedule"); setTimeout(function () { openRoutine(r); }, 60); }]; })],
@@ -1792,21 +1946,6 @@ $("#q").addEventListener("input", search);
 function step(n) {
   $$("[data-step]").forEach(function (c) { c.hidden = c.dataset.step !== String(n); });
   $$("[data-dot]").forEach(function (d) { d.classList.toggle("on", Number(d.dataset.dot) <= n); });
-}
-function drawQr() {
-  var n = 21, size = 1, cells = "", seed = 7;
-  function rnd() { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; }
-  function finder(x, y) { return (x < 7 && y < 7) || (x >= n - 7 && y < 7) || (x < 7 && y >= n - 7); }
-  for (var y = 0; y < n; y++) for (var x = 0; x < n; x++) {
-    var on;
-    if (finder(x, y)) { var lx = x >= n - 7 ? x - (n - 7) : x, ly = y >= n - 7 ? y - (n - 7) : y; on = lx === 0 || lx === 6 || ly === 0 || ly === 6 || (lx > 1 && lx < 5 && ly > 1 && ly < 5); }
-    else on = rnd() > .5;
-    if (on) cells += "M" + x + " " + y + "h1v1h-1z";
-  }
-  var NS = "http://www.w3.org/2000/svg", svg = document.createElementNS(NS, "svg"), path = document.createElementNS(NS, "path");
-  svg.setAttribute("viewBox", "-1 -1 " + (n + 2) + " " + (n + 2)); svg.setAttribute("fill", "#000"); svg.setAttribute("shape-rendering", "crispEdges");
-  path.setAttribute("d", cells); svg.appendChild(path);
-  var box = $("#qr"); box.textContent = ""; box.appendChild(svg);
 }
 /* The way for this device stays open; the other one is folded away under "Using ... instead?". */
 function markHere() {
@@ -2032,7 +2171,6 @@ function renderModels() {
   });
   if (!box.firstChild) box.appendChild(h("li", { class: "row muted", text: "None" }));
   var hard = $("#hard-list"); hard.textContent = "";
-  HARD.forEach(function (x) { hard.appendChild(h("li", { class: "row" }, h("span", { class: "title", text: x[1] }), h("span", { class: "meta", text: providerName(MODELS.filter(function (m) { return m.id === x[0]; })[0].provider) }))); });
   $$("#model-filter .chip").forEach(function (c) { c.setAttribute("aria-pressed", String(c.dataset.modelFilter === modelFilter)); });
 }
 /* A model's sheet: whether it may be used, and whether it is a favorite. The row stays one line. */
@@ -2073,60 +2211,118 @@ $("#model-filter").addEventListener("click", function (e) { var b = e.target.clo
    Coordinator chat: answers, and proposes. Every change is a card the person taps; the chat itself
    cannot approve, reject, cancel, spend or sign (front-door rights only).
    ============================================================================================ */
-var chatTokens = 12, chatCost = 0;
+var CHAT = { task: null, busy: false };
 function chatAdd(text, me) { var m = h("div", { class: "msg" + (me ? " me" : ""), text: text }); $("#chat-log").appendChild(m); $("#chat-log").scrollTop = 1e6; return m; }
-function chatProposal(title, lines, label) {
-  var card = h("div", { class: "proposal", "data-confirm-card": "" }, h("h3", { text: "Proposal: " + title }));
-  lines.forEach(function (l) { card.appendChild(h("p", { class: "small", text: l })); });
-  card.appendChild(h("p", { class: "small faint", text: "Nothing happens until you tap. The task or routine still waits for your approval before it runs." }));
-  var ok = h("button", { type: "button", class: "btn primary", text: label }), no = h("button", { type: "button", class: "btn", text: "Dismiss" }), row = h("div", { class: "btns" }, ok, no);
-  ok.addEventListener("click", function () { row.textContent = ""; row.appendChild(h("span", { class: "tag ok", text: "Queued, waiting for your approval" })); toast("Queued. It waits for your approval."); });
-  no.addEventListener("click", function () { card.remove(); });
-  card.appendChild(row); $("#chat-log").appendChild(card); $("#chat-log").scrollTop = 1e6;
+/* The answer without its proposal blocks; the blocks become cards. */
+function chatText(all) { return all.replace(/```(retry|task)[\s\S]*?(```|$)/g, "").trim(); }
+function chatSuggest() {
+  var box = $("#chat-suggest"); box.textContent = "";
+  var t = CHAT.task, qs = !t ? ["What needs me?", "What failed this week, and why?", "Propose a task"]
+    : t.state === "needs" ? ["What does this task change?", "Is it safe to approve?"]
+    : ["Why did it fail?", "What would fix it?"];
+  qs.forEach(function (q) { box.appendChild(h("button", { type: "button", class: "chip small", "data-ask": q, text: q })); });
 }
-function chatReply(q) {
-  var t = q.toLowerCase();
-  if (/need|waiting|approve/.test(t)) {
-    chatAdd("Three things wait for you:\n1. Fix the broken link check in the blog (approval, low risk)\n2. Post a comment on issue 214 (needs your signature in Amber)\n3. Fix the flaky scraper test (failed twice, your call)\nI cannot approve them for you. Open Home to decide.");
-  } else if (/fail|why/.test(t)) {
-    chatAdd("The scraper test failed twice on local_qwen. The listing page changed its layout, so the selector found nothing. The receipt and the gate output agree.");
-    chatProposal("retry with a better description", ["Project: immo-radar", "Try again on claude_code, up to $0.40.", "Description: update the selector for the new listing layout, keep the old test."], "Queue the retry");
-  } else if (/tonight|run|schedule|today/.test(t)) {
-    var soon = ROUTINES.filter(function (r) { return r.runs.length && r.runs[0] < 24 && r.state !== "paused"; }).sort(function (a, b) { return a.runs[0] - b.runs[0]; });
-    chatAdd("Coming up in the next 24 hours:\n" + soon.map(function (r) { return "- " + r.name + ", " + clock(r.runs[0]); }).join("\n") + "\nThe weekly changelog is held until you approve a change.");
-  } else if (/every|routine|morning|watch|daily/.test(t)) {
-    chatAdd("I suggest a routine for that. Check it, then tap.");
-    chatProposal("a routine", ["Name: immo-radar morning check", "Runs every day at 07:00 on local_qwen, free and private.", "Gate: pytest -q tests/scraper"], "Create the routine");
-  } else {
-    chatAdd("I suggest this task. Change anything before you tap.");
-    chatProposal("a task", ["Request: " + q, "Project: immo-radar. Allowed paths: src/, tests/.", "Gate: pytest -q. Lane: local_qwen, free.", "Result lands on a branch."], "Create the task");
+function chatAbout() {
+  var t = CHAT.task; $("#chat-about").hidden = !t;
+  if (t) $("#chat-about-text").textContent = "About: " + t.title;
+  chatSuggest();
+}
+function chatCard(title, lines, label, onYes) {
+  var card = h("div", { class: "proposal" }, h("h3", { text: title }));
+  lines.forEach(function (l) { card.appendChild(h("p", { class: "small", text: l })); });
+  card.appendChild(h("p", { class: "small faint", text: "Check it before you tap. The usual approvals still apply." }));
+  var ok = h("button", { type: "button", class: "btn primary", text: label }), no = h("button", { type: "button", class: "btn", text: "Dismiss" });
+  ok.addEventListener("click", function () { onYes(card); });
+  no.addEventListener("click", function () { card.remove(); });
+  card.appendChild(h("div", { class: "btns" }, ok, no)); $("#chat-log").appendChild(card); $("#chat-log").scrollTop = 1e6;
+}
+function chatCards(all) {
+  function cleanText(s) { return String(s || "").replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u202a-\u202e\u2066-\u2069]/g, ""); }
+  var m = /```retry\s*\n([\s\S]*?)```/.exec(all);
+  // a task the configuration kept from starting needs the configuration fixed, not a hint to its agent
+  if (m && CHAT.task && (CHAT.task.state === "failed" || CHAT.task.state === "failed-old") && CHAT.task.raw.cause !== "not_started" && !isGrid(CHAT.task)) {
+    var hint = cleanText(m[1]).trim().slice(0, 600), t = CHAT.task;
+    if (hint) chatCard("Retry with this hint", [hint], "Open Retry", function () { closeChat(); retryTask(t, hint); });
   }
+  m = /```task\s*\n([\s\S]*?)```/.exec(all);
+  if (!m) return;
+  var p; try { p = JSON.parse(m[1]); } catch (e) { return; }
+  var known = (SIDE.projects || []).map(function (x) { return x.key; });
+  if (!p || known.indexOf(p.project) < 0 || !p.text) return;      // a project the fleet does not know is no proposal
+  var text = cleanText(p.text).trim().slice(0, 600); if (!text) return;
+  var title = cleanText(p.title || text).trim().slice(0, 90);
+  var gate = cleanText(p.gate || "").replace(/^(python3? -m )?pytest\s+(-q\s+)?/, "").trim();   // the field wants the path
+  if (!gate || /\s|\.\./.test(gate) || /^[/\-]/.test(gate)) gate = "";
+  var paths = Array.isArray(p.allowed_paths) ? p.allowed_paths.map(cleanText).map(function (x) { return x.trim(); }).filter(function (x) {
+    return x && !/^[/\-]/.test(x) && x.indexOf("..") < 0 && x.length <= 200;
+  }) : [];
+  chatCard("New task: " + title, ["Project: " + p.project, text,
+    "Allowed: " + (paths.join(", ") || "any file (broad)"), "Test: " + (gate || "none, so any change passes")], "Create task", function (card) {
+    var btn = $(".btn.primary", card); if (btn) btn.disabled = true;
+    var intent = { project: p.project, title: (title || text).slice(0, 120) };
+    if (paths.length) intent.allowed_paths = paths;
+    if (gate) intent.gate_cmd = { pytest: gate };
+    send("POST", "/api/fleet/tasks", { text: text, metadata: { project: p.project, require_approval: true, source: "front_door", intent: intent } }).then(function () {
+      $(".btns", card).textContent = ""; card.appendChild(h("span", { class: "tag ok", text: "Created" }));
+      toast("Task created"); LIVE.etag = null; refresh();
+    }).catch(function (e) { if (btn) btn.disabled = false; fail(e); });
+  });
 }
 function chatSend(text) {
-  text = (text || "").trim(); if (!text) return;
-  chatAdd(text, true); chatTokens = Math.min(95, chatTokens + 3);
-  var cloud = $("#chat-model").value === "cloud"; if (cloud) chatCost += 0.01;
-  $("#chat-context").textContent = "Context " + chatTokens + "% full";
-  $("#chat-cost").textContent = "Cost $" + chatCost.toFixed(2); $("#chat-cost").className = "tag " + (cloud ? "warn" : "ok");
-  setTimeout(function () { chatReply(text); }, 250);
+  text = (text || "").trim(); if (!text || CHAT.busy) return;
+  CHAT.busy = true; chatAdd(text, true);
+  var m = chatAdd("Thinking…"), all = "";
+  api("POST", "/api/fleet/chat", { message: text, task_id: CHAT.task ? CHAT.task.tid : null }).then(function (r) {
+    if (!r.ok) return r.json().catch(function () { return {}; }).then(function (j) { throw new Error(j.detail || ("HTTP " + r.status)); });
+    var reader = r.body.getReader(), dec = new TextDecoder(), buf = "";
+    function pump() {
+      return reader.read().then(function (x) {
+        if (x.done) return;
+        buf += dec.decode(x.value, { stream: true });
+        var parts = buf.split("\n\n"); buf = parts.pop();
+        parts.forEach(function (ev) {
+          if (ev.indexOf("data: ") !== 0) return;
+          var d = JSON.parse(ev.slice(6));
+          if (d.error) throw new Error(d.error);
+          if (d.t) { all += d.t; m.textContent = chatText(all) || "Thinking…"; $("#chat-log").scrollTop = 1e6; }
+        });
+        return pump();
+      });
+    }
+    return pump();
+  }).then(function () { m.textContent = chatText(all) || "No answer."; chatCards(all); })
+    .catch(function (e) { m.textContent = "No answer: " + (e.message || e); })
+    .then(function () { CHAT.busy = false; });
 }
-function openChat() {
-  var c = $("#chat"); c.dataset.open = "true"; $("#chat-open").setAttribute("aria-expanded", "true");
-  if (!$("#chat-log").firstChild) chatAdd("I answer questions and suggest work. I never start, approve, cancel or spend anything myself: you tap the card.");
+/* Open the window: about one task (Ask on it), or about the whole fleet (the header button). */
+function openChat(t) {
+  var c = $("#chat"), same = (t || null) === CHAT.task && $("#chat-log").firstChild;
+  CHAT.task = t && t.tid ? t : null;
+  c.hidden = false; c.dataset.open = "true"; $("#chat-open").setAttribute("aria-expanded", "true");
+  chatAbout();
+  if (!same) {
+    $("#chat-log").textContent = "";
+    if (!CHAT.task) chatAdd("Ask about the fleet, or describe work. I suggest; you tap to act.");
+    else getJSON("/api/fleet/chat/" + encodeURIComponent(CHAT.task.tid)).then(function (d) {
+      var turns = (d && d.turns) || [];
+      turns.forEach(function (x) { chatAdd(x.role === "user" ? x.text : chatText(x.text), x.role === "user"); });
+      if (!turns.length) chatSend(CHAT.task.state === "needs" ? "What does this task change?" : "Why did it fail?");
+    });
+  }
   setTimeout(function () { $("#chat-input").focus(); }, 30);
 }
 function closeChat() {
   if ($("#chat").dataset.open !== "true") return;
   $("#chat").dataset.open = "false"; $("#chat-open").setAttribute("aria-expanded", "false"); $("#chat-open").focus();
 }
-$("#chat-open").addEventListener("click", function () { if ($("#chat").dataset.open === "true") closeChat(); else openChat(); });
-$("#chat-tile").addEventListener("click", openChat);
+$("#chat-open").addEventListener("click", function () { if ($("#chat").dataset.open === "true") closeChat(); else openChat(null); });
+$("#chat-tile").addEventListener("click", function () { openChat(null); });
 $("#chat-close").addEventListener("click", closeChat);
+$("#chat-about-clear").addEventListener("click", function () { CHAT.task = null; $("#chat-log").textContent = ""; chatAbout(); chatAdd("Now about the whole fleet."); });
 $("#chat-form").addEventListener("submit", function (e) { e.preventDefault(); var i = $("#chat-input"); chatSend(i.value); i.value = ""; });
 $("#chat-suggest").addEventListener("click", function (e) { var b = e.target.closest("[data-ask]"); if (b) chatSend(b.dataset.ask); });
-$("#chat-model").addEventListener("change", function () { toast($("#chat-model").value === "cloud" ? "This chat now uses your subscription" : "This chat stays on this computer"); });
 document.addEventListener("keydown", function (e) {
-  if (e.altKey && e.key.toLowerCase() === "a") { e.preventDefault(); if ($("#chat").dataset.open === "true") closeChat(); else openChat(); }
+  if (e.altKey && e.key.toLowerCase() === "a") { e.preventDefault(); if ($("#chat").dataset.open === "true") closeChat(); else openChat(null); }
   if (e.key === "Escape") closeChat();
 });
 $("#copy-cmd").addEventListener("click", function () {
@@ -2169,6 +2365,24 @@ function ago(ts) {
 }
 function isPendingDraft(x) { return Boolean(x && (x.status === "pending" || x.status === "awaiting_signature")); }
 function pendingDraftsOf(raw) { return (((raw && raw.metadata && raw.metadata.pending_drafts) || []).filter(isPendingDraft)); }
+function runWords(raw, lane) {
+  var ph = phaseOf(raw), words = (PHASES.filter(function (x) { return x[0] === ph; })[0] || PHASES[1])[1] + " · " + runMinutes(raw) + " min";
+  return slowFor(raw, lane) != null ? words + ", slower than usual" : words;
+}
+/* Where a run stands. Local runs report metadata.phase (core/engine.py); grid runs their own status. */
+var PHASES = [["waiting", "Waiting"], ["agent", "Agent"], ["tests", "Tests"], ["landing", "Landing"]];
+var LANE_P90 = {};   // lane -> minutes 9 of 10 runs stayed under (30 days, at least 10 runs)
+function phaseOf(raw) {
+  if (raw.status === "queued") return "waiting";
+  var gs = raw.result && raw.result.grid_status;
+  if (gs) return gs === "verifying" || gs === "reviewing" ? "tests" : "agent";
+  return (raw.metadata || {}).phase || "agent";
+}
+function runMinutes(raw) {
+  var m = raw.metadata || {}, since = (m.active_attempt || {}).started_at || (m.current || {}).started_at || raw.created_at;
+  return Math.max(0, Math.round((Date.now() / 1000 - since) / 60));
+}
+function slowFor(raw, lane) { var p90 = LANE_P90[lane]; return p90 != null && runMinutes(raw) > p90 ? p90 : null; }
 function liveTask(t, i) {
   var meta = t.metadata || {}, intent = meta.intent || {}, state = (t.status === "archived" || meta.archived) ? "archived" : (STATE_OF[t.status] || "done");
   var title = String(intent.title || (t.text || "").split("\n")[0] || t.id).slice(0, 90);
@@ -2178,7 +2392,7 @@ function liveTask(t, i) {
   var rejected = state === "failed" && /^Rejected\b/.test(String((t.result || {}).error || ""));   // your own no is not a failure
   if (rejected) state = "cancelled";
   if (state === "failed" && Date.now() / 1000 - t.created_at > 2 * 86400) state = "failed-old";
-  var metaText = state === "needs" ? (pendingDraftsOf(t).length ? "sign" : (t.brief ? "approve" : "waiting")) : state === "failed" ? "failed" : state === "running" ? (t.status === "queued" ? "queued" : ago(t.created_at)) : state === "archived" ? "archived" : rejected ? "rejected" : ago(t.created_at);
+  var metaText = state === "needs" ? (pendingDraftsOf(t).length ? "sign" : (t.brief ? "approve" : "waiting")) : state === "failed" ? "failed" : state === "running" ? (t.status === "queued" ? "queued" : runWords(t, lane)) : state === "archived" ? "archived" : rejected ? "rejected" : ago(t.created_at);
   return { id: i, tid: t.id, raw: t, title: title, project: project, state: state, kind: KIND_OF[meta.category || intent.category] || "diff",
     lane: lane, pct: null, meta: metaText, seen: true, line: [project, lane, via].filter(Boolean).join(", ") };
 }
@@ -2207,13 +2421,13 @@ function refresh() {
     return r.json().then(function (list) {
       var activeList = list.filter(function (t) { return t.status !== "archived" && !(t.metadata || {}).archived; }).slice(0, 60);
       var archList = list.filter(function (t) { return t.status === "archived" || (t.metadata || {}).archived; }).slice(0, 60);
-      list = activeList.concat(archList);
+      list = activeList.concat(archList).filter(function (t) { return !DISCARDING[t.id]; });
       TASKS = list.map(liveTask); BRIEFS = {}; TASKS.forEach(function (x) { if (x.state === "needs") BRIEFS[x.id] = liveBrief(x.raw); });
       LIVE.offline = false;
       LIVE.loaded = true;
       clearLists(); renderLists();
       var n = TASKS.filter(function (t) { return t.state === "needs" || t.state === "failed"; }).length;
-      $("#need-count").hidden = n === 0; $("#need-count").textContent = String(n); $("#need-tag").textContent = String(n);
+      $("#need-count").hidden = n === 0; $("#need-count").textContent = String(n); $("#need-tag").textContent = String(n); $("#need-tag").hidden = n === 0;
       var name = (location.hash || "").replace(/^#\/?/, "").split("/")[0];
       if (name === "task" || name === "tasks") showTask(lastTask);
       if (name === "approval") fillBrief(Number((location.hash.split("/")[2])) || 0);
@@ -2224,19 +2438,17 @@ function refresh() {
     renderHealth();
   });
 }
+/* The Home tile "passed, 7 days": tasks with a test, the number that proves something (core/stats.py).
+   Asked once at start and when the app comes back to the front, not on every refresh. */
 function refreshSide() {
-  api("GET", "/api/fleet/budgets").then(function (r) { return r.ok ? r.json() : null; }).then(function (b) {
-    if (!b) return; var now = Date.now() / 1000, resting = (b.providers || []).filter(function (p) { return p.resting_until && p.resting_until > now; }).length;
-    $("#g-spend").textContent = resting ? resting + " resting" : "all up";
-    var total = (b.providers || []).length;
-    $("#g-ring").setAttribute("stroke-dasharray", (total ? Math.round((total - resting) / total * 100) : 0) + " 100");
-    $("[data-glance=spend]").setAttribute("aria-label", "Providers: " + $("#g-spend").textContent);
-  }).catch(function () {});
-  api("GET", "/api/fleet/routines").then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
-    if (!d) return; var now = Date.now() / 1000, next = null;
-    (d.routines || []).forEach(function (rt) { if (rt.status !== "active") return; (rt.replay_next_runs || rt.next_runs || []).forEach(function (x) { if (x && typeof x === "object") x = x.at || x.slot || x.time; var ts = typeof x === "number" ? x : Date.parse(x) / 1000; if (ts > now && (next === null || ts < next)) next = ts; }); });
-    $("#g-next").textContent = next === null ? "none" : Math.max(1, Math.round((next - now) / 3600)) + " h";
-  }).catch(function () {});
+  getJSON("/api/fleet/stats?days=7").then(function (d) {
+    var g = d && d.gated;
+    setText("#g-passed", g && g.ran ? Math.round(g.pass_rate * 100) + "%" : "–");
+  });
+  getJSON("/api/fleet/stats?days=30").then(function (d) {
+    if (!d) return; LANE_P90 = {};
+    (d.by_lane || []).forEach(function (r) { if (r.p90_min != null) LANE_P90[r.lane] = r.p90_min; });
+  });
 }
 function act(action, t) {
   var btns = $$("#approve-btn, #reject-btn, #task-primary, #task-archive"); btns.forEach(function (b) { b.disabled = true; });
@@ -2613,6 +2825,7 @@ function refreshSettings() {
       if (a[7]) SIDE.coordinator = a[7]; if (a[8]) SIDE.tokens = a[8].tokens || []; if (a[9]) SIDE.projects = a[9].projects || [];
       if (a[10]) SIDE.ledger = a[10]; if (a[11]) SIDE.plugins = a[11]; if (a[12]) SIDE.apps = a[12];
       liveProviders(); renderProviders(); renderModels(); renderLimit(); fillNewTask(); loadTemplates($("#nt-project").value || ""); badges();
+      renderHealth();
     });
 }
 function fmtTokens(n) {
@@ -2637,22 +2850,24 @@ function badges() {
   var sg = SIDE.signer, s = SIDE.settings || {}, sum = SIDE.laneSummary;
   setText("#m-signer", !sg ? "" : sg.paired && sg.pinned ? "connected" : sg.paired ? "one step left" : "not connected");
   setText("#m-providers", PROVIDERS.length ? PROVIDERS.filter(function (p) { return p.health === "ok"; }).length + " of " + PROVIDERS.length : "");
+  setText("#m-live-output", s.live_output === false ? "off" : "on");
+  setText("#m-task-chats", s.chat_keep_days === 0 ? "kept" : s.chat_keep_days ? s.chat_keep_days + " days" : "");
   setText("#m-autonomy", (AUTONOMY[s.autonomy_level] || [""])[0].toLowerCase());
   setText("#m-lanes", sum ? sum.ok + " ok" + (sum.dead ? ", " + sum.dead + " down" : "") : "");
-  setText("#m-access", SIDE.tokens ? SIDE.tokens.length + (SIDE.tokens.length === 1 ? " token" : " tokens") : "");
-  var open = TASKS.filter(function (t) { return t.state === "needs" || t.state === "running" || t.state === "failed"; }).length;
-  badge("tasks", open || null); badge("routines", ROUTINES.length || null);
-  var running = ROUTINES.filter(function (r) { return r.state === "running"; }).length; badge("schedule-board", running || null);
-  if (running) $("#b-schedule-board").setAttribute("aria-label", running + " running");
-  badge("templates", TEMPLATES.length || null); badge("models", SIDE.models.filter(function (m) { return m.available; }).length || null);
+  var liveTokens = SIDE.tokens ? SIDE.tokens.filter(tokenLive).length : 0;
+  setText("#m-access", SIDE.tokens ? liveTokens + (liveTokens === 1 ? " token" : " tokens") : "");
+  var running = ROUTINES.filter(function (r) { return r.state === "running"; }).length;
+  badge("schedule-board", running ? running + " running" : ROUTINES.length || null);
+  badge("templates", TEMPLATES.length || null);
+  var ready = SIDE.models.filter(function (m) { return m.available; }).length; badge("models", ready ? ready + " ready" : null);
   var resting = PROVIDERS.filter(function (p) { return p.health === "rest"; }).length; badge("budgets", resting ? resting + " resting" : null);
   var lg = SIDE.ledger, lgTok = (lg && lg.tokens && lg.tokens.total) || 0;
-  badge("ledger", lg ? (lgTok ? fmtTokens(lgTok) : (lg.tasks ? String(lg.tasks) : null)) : null);
+  badge("ledger", lg ? (lgTok ? fmtTokens(lgTok) + " tokens" : null) : null);
   var pl = SIDE.plugins, plList = (pl && Array.isArray(pl.plugins)) ? pl.plugins : [];
-  badge("plugins", pl ? (pl.count_enabled != null ? pl.count_enabled + "/" + (pl.count_total != null ? pl.count_total : plList.length) : (plList.length || null)) : null);
-  badge("issue-sources", SIDE.intake.filter(function (p) { return p.enabled; }).length || null);
+  badge("plugins", pl ? (pl.count_enabled != null ? pl.count_enabled + " of " + (pl.count_total != null ? pl.count_total : plList.length) + " on" : (plList.length || null)) : null);
+  var feeds = SIDE.intake.filter(function (p) { return p.enabled; }).length; badge("issue-sources", feeds ? feeds + " on" : null);
   badge("privateers", SIDE.privateers.length || null);
-  badge("coordinator", SIDE.coordinator ? SIDE.coordinator.current : null);
+  badge("coordinator", SIDE.coordinator && SIDE.coordinator.current ? String(SIDE.coordinator.current).replace(/_/g, " ") : null);
   renderHealth();
 }
 function sheetList(body, items, empty) {
@@ -2688,6 +2903,55 @@ var LIVE_SHEETS = {
         b.addEventListener("click", function () { openProvider(p); }); return b;
       }));
     });
+  },
+  /* Track record: the same numbers for everyone, from /api/fleet/stats (core/stats.py). */
+  stats: function () {
+    /* local_qwen -> local qwen; pair:agy/antigravity_gemini -> antigravity gemini (agy) */
+    function laneWords(n) { return String(n).replace(/^pair:([^/]+)\/(.+)$/, "$2 ($1)").replace(/_/g, " "); }
+    var days = 14;
+    function pct(x) { return x == null ? "" : Math.round(x * 100) + "%"; }
+    function fill(body, d) {
+      body.textContent = "";
+      var seg = h("div", { class: "btns", role: "group", "aria-label": "Period" });
+      [7, 14, 30].forEach(function (n) {
+        var b = h("button", { type: "button", class: "btn" + (n === days ? " primary" : ""), "aria-pressed": String(n === days), text: n + " days" });
+        b.addEventListener("click", function () { days = n; load(body); });
+        seg.appendChild(b);
+      });
+      body.appendChild(seg);
+      if (!d) { sheetList(body, [], "No data"); return; }
+      var g = d.gated || {}, a = d.all || {}, mins = Math.round((d.limit_s || 600) / 60), was = (d.previous || {}).gated || {};
+      if (g.ran) {
+        var diff = was.ran ? Math.round((g.pass_rate - was.pass_rate) * 100) : null;
+        body.appendChild(h("p", { class: "big", text: pct(g.pass_rate) }));
+        body.appendChild(h("p", { text: "of tasks with a test passed: " + g.passed + " of " + g.ran + ", " + g.passed_in_limit + " within " + mins + " min." }));
+        if (diff !== null) body.appendChild(h("p", { class: "muted", text: diff === 0 ? "Same as the " + d.days + " days before." : (diff > 0 ? "Up " : "Down ") + Math.abs(diff) + " points on the " + d.days + " days before (" + pct(was.pass_rate) + ")." }));
+        var c = g.causes || {}, why = [];
+        if (c.agent) why.push(c.agent + (c.agent === 1 ? " agent result did not hold" : " agent results did not hold"));
+        if (c.infrastructure) why.push(c.infrastructure + " stopped by the machine or a provider");
+        if (why.length) body.appendChild(h("p", { class: "muted", text: "Failed: " + why.join(", ") + "." }));
+        if (g.not_started) {
+          var fix = h("button", { type: "button", class: "btn", text: g.not_started + (g.not_started === 1 ? " task" : " tasks") + " could not start: fix the configuration" });
+          fix.addEventListener("click", function () { closeSheet(); go("tasks/needs"); });
+          body.appendChild(h("div", { class: "btns" }, fix));
+        }
+      } else {
+        body.appendChild(h("p", { class: "lead", text: "No task with a test ran in the last " + d.days + " days." }));
+      }
+      body.appendChild(h("p", { class: "muted", text: "All tasks: " + (a.passed || 0) + " of " + (a.ran || 0) + " passed" + (a.median_min != null ? ", median " + a.median_min + " min" : "") + "." }));
+      body.appendChild(h("h3", { class: "sub-head", text: "By lane" }));
+      sheetList(body, (d.by_lane || []).filter(function (r) { return r.lane !== "unknown"; }).map(function (r) {
+        var dot = r.pass_rate == null ? "" : r.pass_rate >= 0.7 ? "ok" : "warn";
+        return infoRow(laneWords(r.lane), r.passed + " of " + r.ran + (r.median_min != null ? ", " + r.median_min + " min" : ""), dot);
+      }), "No task ran in this period");
+      body.appendChild(h("p", { class: "small muted", text: "A task with a test proves its result. Without one, any change completes, so those numbers say less. Rejected and cancelled tasks never ran and are not counted, nor are tasks the configuration kept from starting." }));
+    }
+    function load(body) {
+      getJSON("/api/fleet/stats?days=" + days).then(function (d) {
+        if ($("#sheet").dataset.open === "true" && $("#sheet-title").textContent === "Track record") fill(body, d);
+      });
+    }
+    showSheet("Track record", function (body) { sheetList(body, [], "Loading"); load(body); });
   },
   ledger: function () {
     function fill(body, d) {
@@ -2728,12 +2992,12 @@ var LIVE_SHEETS = {
       sheetList(fold, det);
       body.appendChild(fold);
     }
-    showSheet("Ledger", function (body) {
+    showSheet("Usage", function (body) {
       if (SIDE.ledger) { fill(body, SIDE.ledger); return; }
-      sheetList(body, [], "Loading ledger");
+      sheetList(body, [], "Loading usage");
       getJSON("/api/fleet/ledger").then(function (d) {
         if (d) { SIDE.ledger = d; badges(); }
-        if ($("#sheet").dataset.open === "true" && $("#sheet-title").textContent === "Ledger") fill(body, SIDE.ledger);
+        if ($("#sheet").dataset.open === "true" && $("#sheet-title").textContent === "Usage") fill(body, SIDE.ledger);
       });
     });
   },
@@ -2763,6 +3027,7 @@ var LIVE_SHEETS = {
             if (p.version) rows.push(infoRow("Version", String(p.version)));
             sheetList(sub, rows);
             if (p.description) sub.appendChild(h("p", { class: "small muted", text: String(p.description) }));
+            if (p.id === "goose_harness") gooseUpdate(sub);
           });
         });
         return b;
@@ -2924,6 +3189,34 @@ var LIVE_SHEETS = {
       }));
     });
   },
+  "task-chats": function () {
+    var s = SIDE.settings; if (!s) return;
+    showSheet("Task chats", function (body) {
+      body.appendChild(h("p", { class: "muted", text: "What you asked about a task, and the answers, stay with the task. A chat with no new message for this long is deleted." }));
+      var out = h("p", { class: "small", "aria-live": "polite" });
+      body.appendChild(segOf("Keep task chats", [[30, "30 days"], [90, "90 days"], [0, "Forever"]], s.chat_keep_days, function (v) {
+        send("POST", "/api/fleet/settings", { chat_keep_days: v }).then(function (j) { SIDE.settings = j; badges(); closeSheet(); toast("Saved"); })
+          .catch(function (e) { out.textContent = e.message; });
+      }));
+      body.appendChild(out);
+    });
+  },
+  "live-output": function () {
+    var s = SIDE.settings; if (!s) return;
+    showSheet("Live output", function (body) {
+      var sw = h("input", { type: "checkbox", id: "s-live", switch: "", role: "switch" });
+      sw.checked = s.live_output !== false;
+      body.appendChild(h("label", { class: "switch", for: "s-live" }, sw, h("span", null, h("span", { class: "title", text: "Show what a running task does" }), h("br"),
+        h("small", { class: "muted", text: "The last lines of the running tool, with secrets masked, in the task view. Off: nothing is written or shown. Notes to a running task work either way." }))));
+      var out = h("p", { class: "small", "aria-live": "polite" });
+      body.appendChild(out);
+      sw.addEventListener("change", function () {
+        sw.disabled = true;
+        send("POST", "/api/fleet/settings", { live_output: sw.checked }).then(function (j) { SIDE.settings = j; badges(); out.textContent = "Saved."; })
+          .catch(function (e) { sw.checked = !sw.checked; out.textContent = e.message; }).then(function () { sw.disabled = false; });
+      });
+    });
+  },
   autonomy: function () {
     var s = SIDE.settings; if (!s) return;
     showSheet("Autonomy and approvals", function (body) {
@@ -3019,14 +3312,23 @@ function openIntake(p) {
 }
 /* Access: every client has its own token with a scope. A new token is shown once, here, and never again. */
 var SCOPE_WORDS = { read: "Read only", propose: "Propose (waits for you)", operate: "Operate", admin: "Admin" };
+/* A token that still opens the fleet: not revoked, not expired. */
+function tokenLive(t) { return !t.revoked_at && !t.expired && !(t.expires_at && t.expires_at * 1000 < Date.now()); }
 function openAccess() {
   showSheet("Access", function (body) {
     body.appendChild(h("p", { class: "muted", text: "Each device or tool gets its own token. Remove one and only that one loses access." }));
-    var list = SIDE.tokens || [];
-    sheetList(body, list.map(function (t) {
-      var b = row(t.expired ? "" : "ok", String(t.name), (SCOPE_WORDS[t.scope] || t.scope).split(" ")[0].toLowerCase() + (t.last_used_at ? ", used " + ago(t.last_used_at) + " ago" : ", not used yet"), null, { icon: "key" });
+    var list = SIDE.tokens || [], live = list.filter(tokenLive), gone = list.filter(function (t) { return !tokenLive(t); });
+    function used(t) { return (SCOPE_WORDS[t.scope] || t.scope).split(" ")[0].toLowerCase() + (t.last_used_at ? ", used " + ago(t.last_used_at) + " ago" : ", not used yet"); }
+    sheetList(body, live.map(function (t) {
+      var b = row("ok", String(t.name), used(t), null, { icon: "key" });
       b.addEventListener("click", function () { openToken(t); }); return b;
     }), "No extra tokens");
+    // Revoked and expired tokens no longer open anything; they stay listed for the record, out of the way.
+    if (gone.length) {
+      var old = h("details", { "data-advanced": "" }, h("summary", { text: "Revoked or expired (" + gone.length + ")" }));
+      sheetList(old, gone.map(function (t) { return infoRow(String(t.name), t.revoked_at ? "revoked " + ago(t.revoked_at) + " ago" : "expired"); }));
+      body.appendChild(old);
+    }
     var name = h("input", { type: "text", id: "tok-name", autocomplete: "off", maxlength: "64", placeholder: "my phone, home widget" });
     var scope = h("select", { id: "tok-scope" });
     ["read", "propose", "operate", "admin"].forEach(function (s) { scope.appendChild(h("option", { value: s, text: SCOPE_WORDS[s] })); });
@@ -3071,7 +3373,6 @@ function copyBtn(label, text) {
   });
   return b;
 }
-openSheet = function (id) { if (LIVE_SHEETS[id]) LIVE_SHEETS[id](); };
 
 /* ---- Notifications: ntfy, Matrix and/or NIP-17 Nostr DM; the daemon sends, this page only sets ---- */
 LIVE_SHEETS.notify = function () {
@@ -3115,6 +3416,31 @@ LIVE_SHEETS.notify = function () {
 };
 function notifyWords(n) { var on = []; if (n.ntfy && n.ntfy.enabled) on.push("ntfy"); if (n.matrix && n.matrix.enabled) on.push("Matrix"); if (n.nostr && n.nostr.enabled) on.push("Nostr DM"); return on.length ? on.join(", ") : "off"; }
 /* ---- Pi Pocket: host on/off and 3-day-delayed auto-upgrades (admin-only; OS user is the boundary) ---- */
+/* goose's own `goose update` panics in 1.60.x; the daemon installs the newest stable release after
+   checking its digest and build attestation, and never while a task runs. */
+function gooseUpdate(sub) {
+  var btn = h("button", { type: "button", class: "btn primary block", text: "Checking for a new goose" });
+  var out = h("p", { class: "small", "aria-live": "polite" });
+  btn.disabled = true; sub.appendChild(btn); sub.appendChild(out);
+  function render(j, note) {
+    if (!j) { btn.textContent = "Update needs the admin sign-in"; return; }
+    var age = j.newest_age_days != null ? (j.newest_age_days < 1 ? ", less than a day old" : ", " + Math.floor(j.newest_age_days) + (Math.floor(j.newest_age_days) === 1 ? " day old" : " days old")) : "";
+    if (j.error) { btn.textContent = "Cannot check for updates"; btn.disabled = true; out.textContent = j.error; return; }
+    if (j.update_available) {
+      btn.textContent = "Update goose to v" + j.newest; btn.disabled = !!(j.busy || j.updating);
+      out.textContent = note || (j.busy ? "A task is running. Update when the queue is idle." : "Installed v" + j.installed + "; v" + j.newest + age + ".");
+    } else {
+      btn.textContent = "goose v" + (j.installed || "?") + " is up to date"; btn.disabled = true; out.textContent = note || "";
+    }
+  }
+  getJSON("/api/fleet/harness/goose").then(function (j) { render(j); }).catch(function (e) { out.textContent = e.message; });
+  btn.addEventListener("click", function () {
+    btn.disabled = true; btn.textContent = "Updating goose"; out.textContent = "Downloading and checking the release. This takes about a minute.";
+    send("POST", "/api/fleet/harness/goose/update", {})
+      .then(function (j) { render(j, j.updated_from ? "Updated from v" + j.updated_from + " to v" + j.installed + "." : "Already up to date."); })
+      .catch(function (e) { btn.disabled = false; btn.textContent = "Try the update again"; out.textContent = e.message; });
+  });
+}
 LIVE_SHEETS["pi-pocket"] = function () {
   getJSON("/api/fleet/pi-pocket").then(function (p) {
     if (!p) { toast("Pi Pocket controls need the admin sign-in"); return; }
@@ -3444,7 +3770,7 @@ function fillTaskFolds(t) {
   if (t.state === "running") seq.appendChild(seqItem("working", raw.status === "queued" ? "Waiting for a lane" : "At work", m.current && m.current.lane ? m.current.lane : ""));
   if (r.error) seq.appendChild(seqItem("failed", "Stopped", String(r.error).slice(0, 300)));
   var notes = r.harness_output ? h("details", null, h("summary", { text: "What the agent said" }), h("pre", { text: String(r.harness_output).slice(0, 4000) })) : null;
-  foldPut("status", { needs: "waiting for you", running: "at work", done: "finished", failed: "failed", "failed-old": "failed", cancelled: "cancelled" }[t.state], [seq, notes]);
+  foldPut("status", { needs: "waiting for you", running: isRunning(t) ? "at work" : "waiting for a lane", done: "finished", failed: "failed", "failed-old": "failed", cancelled: "cancelled" }[t.state], [seq, notes]);
   var files = r.changed_files || [];
   foldPut("changes", files.length ? files.length + (files.length === 1 ? " file" : " files") : "", files.length ? [
     h("ul", { class: "list" }, files.map(function (f) { return h("li", { class: "row" }, h("span", { class: "title mono small", text: f })); })),
@@ -3569,15 +3895,15 @@ populateSelect($("#s-sans"), SANS); populateSelect($("#s-mono"), MONO);
 })();
 renderMoney();
 TASKS = []; BRIEFS = {}; ROUTINES = []; PROVIDERS = []; MODELS = [];
-$(".spend").hidden = true; $("#chat-open").hidden = true;
-fillMinis(); bindPalettePreview(); renderLists(); renderTemplates(); drawQr(); markHere(); step(1);
-renderProviders(); renderModels(); renderLimit(); renderTabs(); renderSchedule();
+
+fillMinis(); bindPalettePreview(); renderLists(); renderTemplates(); markHere(); step(1);
+renderProviders(); renderModels(); renderLimit(); renderTabs(); setNow(); renderSchedule();
 root.dataset.ready = "1";
 function renderAppsHint() { var el = $("#apps-hint"); if (el) el.hidden = !!state.appsHintDismissed; }
 if ($("#apps-hint-dismiss")) $("#apps-hint-dismiss").addEventListener("click", function () { state.appsHintDismissed = true; save(); renderAppsHint(); });
 renderAppsHint();
-$("#need-count").hidden = false; $("#need-count").textContent = String(TASKS.filter(function (t) { return t.state === "needs" || t.state === "failed"; }).length);
-$("#need-tag").textContent = String(TASKS.filter(function (t) { return t.state === "needs" || t.state === "failed"; }).length);
+var needN = TASKS.filter(function (t) { return t.state === "needs" || t.state === "failed"; }).length; $("#need-count").hidden = needN === 0; $("#need-count").textContent = String(needN);
+$("#need-tag").hidden = true;
 applyAll(); applyLayout(); renderLayout(); route(); search();
 (function () {
   // the one-tap link from fleet-token: exchange #token=... once, then drop it from the address bar

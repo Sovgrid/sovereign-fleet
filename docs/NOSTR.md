@@ -1,6 +1,6 @@
-# Nostr — operator guide
+# Nostr: operator guide
 
-The fleet can take work from Nostr through two providers: **Buzz** (channel messages as issues) and **ngit** (NIP-34 issues). Every event the fleet publishes on Nostr — replies, reactions, and issue comments — is signed with the fleet's own key.
+The fleet can take work from Nostr through two providers: **Buzz** (channel messages as issues) and **ngit** (NIP-34 issues). Every event the fleet publishes on Nostr (replies, reactions, and issue comments) is signed with the fleet's own key.
 
 The fleet can also open pull requests on Nostr for a project whose git remote is a `nostr://` URL (section 4).
 
@@ -76,7 +76,7 @@ ngit (git over Nostr, version 3) reads open NIP-34 issues from a repository anno
 cli = "ngit"   # the ngit CLI (default: "ngit")
 ```
 
-Per project — either explicitly:
+Per project, either explicitly:
 
 ```toml
 [projects.example.intake]
@@ -165,7 +165,7 @@ The fleet has no relay of its own to fall back to: Buzz intake talks only to `[b
 The intake trust policy is identical for all providers:
 
 - An issue from an author in `authors` that carries a valid ```` ```fleet ```` block runs **unattended**.
-- Everything else — no block, or an author not in `authors` — is queued for **manual approval** in the dashboard.
+- Everything else (no block, or an author not in `authors`) is queued for **manual approval** in the dashboard.
 - A block that does not parse gets one reply (per issue revision) and nothing is queued.
 - Without any `authors` nothing runs unattended, which is the right default for public repositories.
 

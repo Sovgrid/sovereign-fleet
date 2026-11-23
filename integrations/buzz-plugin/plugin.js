@@ -4,11 +4,17 @@ function parseJson(raw, label) {
   if (typeof raw !== "string" || !raw.trim()) {
     throw new Error(`fleet ${label} returned no output (is fleet on PATH and configured?)`);
   }
+  let data;
   try {
-    return JSON.parse(raw);
+    data = JSON.parse(raw);
   } catch (err) {
     throw new Error(`fleet ${label} returned invalid JSON: ${err.message}`);
   }
+  // `fleet ... --json` reports a refusal as {"error": "..."}: pass the reason on word for word.
+  if (data && !Array.isArray(data) && typeof data.error === "string") {
+    throw new Error(`fleet ${label} refused: ${data.error}`);
+  }
+  return data;
 }
 
 function formatWhen(epochSeconds) {
